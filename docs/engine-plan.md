@@ -16,7 +16,7 @@ Fatos do código que moldam o plano:
 - `src/pixel-look.js` já exporta `PixelLook.glsl` em **GLSL ES 3.00** (usa `texelFetch`). Isso indica que a página original do autor usa **WebGL2**.
 - `K.character` aceita input `{ move, mz, run, jump, dash, attack, cast, crouch }` e pede `world.height(x, z, y)` para o chão.
 - `K.play.fx / debris / eco` são os efeitos de gameplay; `st.poke(eye, dir)` faz o clique acertar a cena.
-- `package.json` está como `UNLICENSED`.
+- O ink-studio é licenciado sob **MIT** (arquivo `LICENSE` adicionado pelo autor no `upstream` e trazido para este fork).
 
 ## Como retomar em outro computador
 
@@ -78,11 +78,12 @@ Cada etapa tem um critério de "pronto". Faça uma por sessão, na ordem.
 
 Resultado:
 - Licença verificada em 2026-11-16: o repositório no GitHub é público, mas **não tem arquivo LICENSE** e o `package.json` diz `UNLICENSED`. Sem licença, vale "todos os direitos reservados": dá para estudar e desenvolver, mas publicar ou distribuir um jogo exige permissão do autor.
+- **Atualização:** o autor adicionou a licença **MIT** ao repositório original (`upstream`, PR #1, `LICENSE` + `"license": "MIT"` no `package.json`), e ela foi trazida para `main` e `engine/stage-0`. Publicar e distribuir está liberado, desde que o aviso de copyright e o texto da licença acompanhem as cópias.
 - `engine/` criado: `npm run dev` (servidor em http://127.0.0.1:5173, aceita `?scene=<id>` ou `?file=<caminho de um módulo de cena>`), `npm run build`, `npm test` (typecheck + testes em `engine/test/`).
 - O kit vai para o navegador sem alteração, por `engine/scripts/kit.mjs` (expõe `window.INK`); os tipos ficam em `engine/types/ink-studio.d.ts`.
 
 - Copiar este plano para `docs/engine-plan.md`.
-- **Confirmar a licença** do ink-studio com o autor ou no GitHub (o `package.json` diz `UNLICENSED`). Bloqueia só a publicação, não o desenvolvimento.
+- ~~**Confirmar a licença** do ink-studio com o autor ou no GitHub.~~ Resolvido: MIT.
 - Criar `engine/` com TypeScript e esbuild, um servidor de desenvolvimento em Node que serve a página e o bundle do kit, e uma página que carrega uma cena (`burn`) e imprime `world.count`.
 - Escrever `types/ink-studio.d.ts` para `World`, `Stage`, `makeBuilder`, `makeSculpt` e o que mais for usado.
 - **Pronto quando:** `npm run dev` abre a página e o console mostra a contagem de splats de `burn`; `npm test` do repositório raiz continua passando.
@@ -213,7 +214,7 @@ Decisões que definem o quanto a engine é AI-friendly; erro aqui custa caro dep
 
 ## Riscos
 
-- **Licença** não confirmada (etapa 0).
+- ~~**Licença** não confirmada (etapa 0).~~ Resolvido: o ink-studio é MIT.
 - **Paridade exata é impossível** (ponto flutuante e empates na ordenação diferem entre CPU e GPU); por isso as metas são porcentagens, com imagem de diferença para julgar o resto a olho.
 - **`RGBA16F` com blending** depende da extensão `EXT_color_buffer_float`; se faltar em algum aparelho, o plano B é empacotar profundidade em `RGBA8` (decidir na etapa 2).
 - **Determinismo** pode quebrar se algum sistema do kit usar `Math.random` internamente; a etapa 6 precisa auditar isso com `grep`.
