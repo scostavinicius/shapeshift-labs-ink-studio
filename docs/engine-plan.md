@@ -76,7 +76,15 @@ Resultado:
 - Conjunto fixo de casos: `watcher`, `burn`, `cabinet`, `idol` e `showcase/farol.js`, em 3 ângulos e 2 instantes cada.
 - **Pronto quando:** o harness roda de ponta a ponta e reporta 0% (ainda não há renderizador), com as imagens de diferença geradas.
 
-### Etapa 2 — Passo de splats · **[FABLE]**
+### Etapa 2 — Passo de splats · **[FABLE]** · ✅ concluída
+
+Resultado (`npm run parity -- --min 99`, 30 casos):
+- **Paridade de 99,98% a 100% em todos os casos**, nas 5 cenas, nos instantes 0 e 2 (a meta era 90% só no instante 0).
+- `src/render/order.ts`: profundidade e ordenação na CPU (radix sort estável sobre os bits do float32, igual à ordenação estável da referência). `src/render/shaders.ts`: o shader de splats. `src/render/splat-renderer.ts`: os três alvos com mistura pré-multiplicada.
+- Os três alvos são todos em float (32 bits quando há `EXT_float_blend`, senão 16). O vidro também: em 8 bits as somas pequenas se perdiam. O limite de 1 do vidro é aplicado na leitura.
+- A página (`npm run dev`) já mostra a cena **ao vivo**: arrastar gira, a roda dá zoom. Medido no Edge headless desta máquina: `farol` (126 mil splats) e `cabinet` a 60 fps, mesmo reenviando todos os splats a cada quadro. `stuff` fica em 7 a 29 fps, e o custo ali é a simulação MPM na CPU, não o desenho (assunto da Etapa 11).
+- Adiantado da Etapa 3: o passo final do modo padrão inteiro (refração do vidro, sombra de contato, contorno, dithering, paleta e `anim.grade`) já está portado e dentro dos 100%.
+
 A parte mais difícil do projeto. Reproduzir o laço principal de `render()` em [cli/render.js](../cli/render.js) (linhas 51 a 355):
 - Dados numa textura `RGBA32F` de 2048 texels de largura (4 texels por splat, 512 splats por linha, casando com `st.rows`).
 - Vertex shader: os movimentos por `kind` (1 a 15, mais os bits 512 "born" e 1024 "wet"), a projeção da covariância 3D para elipse 2D (as contas `j00/j02/j12`, `A/Bq/C`, o `+0.15`, o limite `limx/limy`), um quad instanciado por splat.
@@ -87,6 +95,9 @@ A parte mais difícil do projeto. Reproduzir o laço principal de `render()` em 
 - **Pronto quando:** com um passo final provisório (só "cor de paleta mais próxima"), a paridade passa de 90% em todas as cenas paradas (`t=0`).
 
 ### Etapa 3 — Passo final do estilo · Opus 5.5 (trocar para Fable se a paridade travar abaixo da meta)
+
+**O modo padrão já foi feito na Etapa 2.** Resta só o modo `colored` (abaixo), mais incluir casos `colored` no harness.
+
 - Porte direto do segundo laço de `render()` (linhas 386 a 480): refração do vidro, sombra de contato (`world.ao`), contorno por degrau de profundidade (`world.outline`), dithering Bayer 4×4, cor de paleta mais próxima com os pesos `0.30/0.55/0.15`, e `anim.grade`.
 - Modo `colored`: renderizar em 2× e usar `PixelLook.glsl` (`pixelResolve`) como está.
 - **Pronto quando:** paridade ≥ 97% no modo padrão e ≥ 95% no `colored`, nas cenas paradas.
