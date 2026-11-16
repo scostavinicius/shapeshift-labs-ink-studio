@@ -1,0 +1,20 @@
+{
+  "name": "@shapeshift-labs/ink-engine",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Real-time game engine on top of ink-studio: WebGL2 splat renderer, game loop and a headless mode for AI-driven development",
+  "scripts": {
+    "dev": "node scripts/dev.mjs",
+    "build": "node scripts/build.mjs",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run typecheck && node --test test/*.test.mjs"
+  },
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=18"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.10",
+    "typescript": "^5.9.3"
+  }
+}

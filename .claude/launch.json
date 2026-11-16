@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "engine-dev",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["engine/scripts/dev.mjs", "--port", "5173"],
+      "port": 5173
+    }
+  ]
+}
