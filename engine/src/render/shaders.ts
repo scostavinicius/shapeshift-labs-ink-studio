@@ -258,3 +258,90 @@ void main() {
   o_rgb = vec4(texelFetch(u_pal, ivec2(bi, 1), 0).rgb, 1.0);
 }
 `;
+
+// Colour rounded to bytes the way the reference does it, Math.round(clamp(v, 0, 1) * 255), and handed to an 8-bit target
+// already on a byte, so the target's own conversion has nothing left to round (it may round half-way values differently).
+const BYTE8 = `vec3 byte8(vec3 c) { return floor(clamp(c, 0.0, 1.0) * 255.0 + 0.5) / 255.0; }`;
+
+// ---- the `colored` look (cli/render.js render() with o.colored): the scene is drawn twice. The native grid is "worked"
+// (glass bends it, contact shade darkens it) and kept as 8-bit colour; a grid twice as fine is kept as raw 8-bit colour
+// and its depth; PixelLook's resolve then turns each art pixel's four samples into body colours and soft contours.
+
+/** The native picture worked as the reference's `worked` samples are: glass, then contact shade. No outline, no palette. */
+export const WORKED_FS = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+
+uniform sampler2D u_color;
+uniform sampler2D u_depth;
+uniform sampler2D u_glass;
+uniform float u_bend;
+uniform vec2 u_ao;
+
+out vec4 o_rgb;
+${BYTE8}
+
+const ivec2 AOT[8] = ivec2[8](ivec2(2, 0), ivec2(-2, 0), ivec2(0, 2), ivec2(0, -2), ivec2(1, 1), ivec2(-1, 1), ivec2(1, -1), ivec2(-1, -1));
+
+ivec2 size;
+ivec2 at(ivec2 q) { return clamp(q, ivec2(0), size - 1); }
+float D(ivec2 q) { return texelFetch(u_depth, at(q), 0).r; }
+float G(ivec2 q) { return min(1.0, texelFetch(u_glass, at(q), 0).r); }
+
+void main() {
+  size = textureSize(u_color, 0);
+  ivec2 p = ivec2(gl_FragCoord.xy), q = p;
+  float gx = G(p + ivec2(1, 0)) - G(p - ivec2(1, 0)), gy = G(p + ivec2(0, 1)) - G(p - ivec2(0, 1));
+  if (G(p) + abs(gx) + abs(gy) > 0.0) q = at(p + ivec2(int(floor(gx * u_bend + 0.5)), int(floor(gy * u_bend + 0.5))));
+  float k = 1.0;
+  if (u_ao.x > 0.0) {
+    float occ = 0.0, dc = D(p);
+    for (int i = 0; i < 8; i++) {
+      float dd = (dc - D(p + AOT[i])) / u_ao.y;
+      if (dd > 0.08 && dd < 3.0) occ += min(1.0, dd);
+    }
+    k = 1.0 - u_ao.x * min(1.0, occ / 4.0);
+  }
+  o_rgb = vec4(byte8(texelFetch(u_color, q, 0).rgb * k), 1.0);
+}
+`;
+
+/** Colour as it is, held to 0..1 and kept in 8 bits (the reference rounds its samples to bytes before resolving them). */
+export const QUANT_FS = `#version 300 es
+precision highp float;
+precision highp sampler2D;
+uniform sampler2D u_color;
+out vec4 o_rgb;
+${BYTE8}
+void main() { o_rgb = vec4(byte8(texelFetch(u_color, ivec2(gl_FragCoord.xy), 0).rgb), 1.0); }
+`;
+
+/**
+ * PixelLook's own resolve (src/pixel-look.js PixelLook.glsl), used as it stands: the declarations it expects, then the
+ * toolkit's GLSL, then a main that calls it. Palettes are limited to 48 colours by that code.
+ */
+export const COLORED_MAX = 48;
+export function coloredFS(pixelLookGlsl: string): string {
+  return `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+
+uniform vec3 u_pal[${COLORED_MAX}];
+uniform vec3 u_out[${COLORED_MAX}];
+uniform int u_n;
+uniform float u_grade;
+uniform float u_dither;
+uniform sampler2D u_scene;        // the fine samples, 8-bit
+uniform sampler2D u_depth;        // their depth
+uniform sampler2D u_crispScene;   // the native picture, worked, 8-bit
+
+const float BAYER[16] = float[16](0.0, 8.0, 2.0, 10.0, 12.0, 4.0, 14.0, 6.0, 3.0, 11.0, 1.0, 9.0, 15.0, 7.0, 13.0, 5.0);
+${pixelLookGlsl}
+
+out vec4 o_rgb;
+${BYTE8}
+void main() { o_rgb = vec4(byte8(pixelResolve(ivec2(gl_FragCoord.xy))), 1.0); }
+`;
+}

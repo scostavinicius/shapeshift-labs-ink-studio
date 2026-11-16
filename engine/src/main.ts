@@ -1,8 +1,10 @@
-// Entry point: a scene, live. Drag to turn it, wheel to zoom.
+// Entry point: a scene, live. Drag to turn it, wheel to zoom, C to switch between the default and the colored look.
 //   ?scene=burn                    a built-in demo by id
 //   ?file=showcase/farol.js        a scene module from the repository
+//   &look=colored                  start in the colored look (soft body-coloured contours)
 import { buildWorld, findScene, ink, loadSceneFile } from './kit';
 import { makeView, rendererFor } from './render/index';
+import type { Look } from './render/splat-renderer';
 import { poseAt, start as startWorld } from './shared/pose.mjs';
 
 async function start(): Promise<void> {
@@ -16,6 +18,10 @@ async function start(): Promise<void> {
   console.log('ink-engine', info);
   startWorld(world);
   const renderer = rendererFor(canvas);
+  let look: Look = q.get('look') === 'colored' ? 'colored' : 'default';
+  addEventListener('keydown', e => {
+    if (e.key === 'c' || e.key === 'C') look = look === 'colored' ? 'default' : 'colored';
+  });
 
   // the camera: the scene's own, turned and zoomed by the mouse
   const cam = { yaw: world.cam.yaw, pitch: world.cam.pitch, zoom: 1 };
@@ -55,13 +61,19 @@ async function start(): Promise<void> {
     if (t - ((world as { clock?: number }).clock || 0) > 0.5) (world as { clock?: number }).clock = t - 1 / 60;
     poseAt(world, t, ink().KIT);
     renderer.uploadAll(world);
-    renderer.draw(world, makeView(world, { t, yaw: cam.yaw, pitch: cam.pitch, zoom: cam.zoom, w: canvas.clientWidth, h: canvas.clientHeight }));
+    renderer.draw(
+      world,
+      makeView(world, { t, yaw: cam.yaw, pitch: cam.pitch, zoom: cam.zoom, w: canvas.clientWidth, h: canvas.clientHeight }),
+      { look }
+    );
     spent += performance.now() - began;
     frames++;
     if (now - since >= 500) {
       info.fps = Math.round((frames * 1000) / (now - since));
       info.frameMs = +(spent / frames).toFixed(1);
-      status.textContent = `${scene.name} (${scene.id})\n${world.count} splats · ${info.fps} fps · ${info.frameMs} ms a frame`;
+      status.textContent =
+        `${scene.name} (${scene.id})\n${world.count} splats · ${info.fps} fps · ${info.frameMs} ms a frame\n` +
+        `look: ${look} (C to switch) · drag to turn · wheel to zoom`;
       frames = 0;
       spent = 0;
       since = now;
@@ -70,7 +82,19 @@ async function start(): Promise<void> {
   };
   requestAnimationFrame(frame);
   // read by tests and by anyone driving the page from outside
-  (window as unknown as { ENGINE: unknown }).ENGINE = { scene, world, info, cam, renderer };
+  (window as unknown as { ENGINE: unknown }).ENGINE = {
+    scene,
+    world,
+    info,
+    cam,
+    renderer,
+    get look() {
+      return look;
+    },
+    set look(v: Look) {
+      look = v;
+    }
+  };
 }
 
 start().catch(err => {

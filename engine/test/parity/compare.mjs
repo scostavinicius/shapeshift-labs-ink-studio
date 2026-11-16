@@ -3,13 +3,18 @@
 /**
  * ref: { w, h, rgb } the reference; got: rgb bytes of the engine's picture (same size) or null; bg: the background colour.
  * Foreground parity is the share of matching pixels among those where either picture is not background, so an empty
- * picture scores 0% whatever the scene. Returns { all, fg, diff } (percentages, and a difference picture).
+ * picture scores 0% whatever the scene. Returns { all, fg, diff, maxDelta, deltas, fgCount }: percentages, a difference
+ * picture, the largest channel difference among differing pixels, how many differ by <=1, <=2, <=16 and more, and the
+ * number of foreground pixels.
  */
 export function compare(ref, got, bg) {
   const n = ref.w * ref.h;
   let same = 0,
     fg = 0,
-    fgSame = 0;
+    fgSame = 0,
+    maxDelta = 0;
+  // how far the differing pixels are off: per channel, the largest difference (1 or 2 is rounding; more is a real change)
+  const deltas = [0, 0, 0, 0];
   const diff = new Uint8Array(n * 3);
   for (let p = 0; p < n; p++) {
     const q = p * 3,
@@ -23,6 +28,11 @@ export function compare(ref, got, bg) {
     const refFg = !(r0 === bg[0] && g0 === bg[1] && b0 === bg[2]),
       gotFg = !!got && !(r1 === bg[0] && g1 === bg[1] && b1 === bg[2]);
     if (eq) same++;
+    else if (got) {
+      const dl = Math.max(Math.abs(r0 - r1), Math.abs(g0 - g1), Math.abs(b0 - b1));
+      if (dl > maxDelta) maxDelta = dl;
+      deltas[dl <= 1 ? 0 : dl <= 2 ? 1 : dl <= 16 ? 2 : 3]++;
+    }
     if (refFg || gotFg) {
       fg++;
       if (eq) fgSame++;
@@ -33,7 +43,7 @@ export function compare(ref, got, bg) {
     diff[q + 1] = eq ? grey : 32;
     diff[q + 2] = eq ? grey : 32;
   }
-  return { all: (100 * same) / n, fg: fg ? (100 * fgSame) / fg : 100, diff };
+  return { all: (100 * same) / n, fg: fg ? (100 * fgSame) / fg : 100, diff, maxDelta, deltas, fgCount: fg };
 }
 
 /** Pictures of w x h side by side, each scaled up 2x; a missing one (null) is drawn as a dark checker. */

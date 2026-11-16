@@ -30,7 +30,9 @@ const kit = require(path.join(REPO, 'index.js')).load();
 const W = 900,
   H = 620,
   TIMES = [0, 2],
-  YAWS = [0, 2.1, 4.2];
+  YAWS = [0, 2.1, 4.2],
+  // the default look, and the `colored` one (cli/render.js --colored)
+  LOOKS = ['default', 'colored'];
 export const CASES = [
   { name: 'watcher', scene: 'watcher' },
   { name: 'burn', scene: 'burn' },
@@ -61,7 +63,14 @@ function references(c) {
   start(world);
   for (const t of TIMES) {
     poseAt(world, t, kit.KIT);
-    for (const dy of YAWS) out.push({ t, yaw: dy, img: R.render(world, { t, yaw: world.cam.yaw + dy, w: W, h: H }) });
+    for (const look of LOOKS)
+      for (const dy of YAWS)
+        out.push({
+          t,
+          yaw: dy,
+          look,
+          img: R.render(world, { t, yaw: world.cam.yaw + dy, w: W, h: H, colored: look === 'colored' })
+        });
   }
   return out;
 }
@@ -106,7 +115,7 @@ async function main() {
       const refs = references(c);
       const shots = await page.evaluate(
         spec => window.PARITY.run(spec),
-        { scene: c.scene, file: c.file, times: TIMES, yaws: YAWS, w: W, h: H }
+        { scene: c.scene, file: c.file, times: TIMES, yaws: YAWS, looks: LOOKS, w: W, h: H }
       );
       // a fresh page per scene, so scene modules and GL state never leak from one to the next
       await page.reload();
@@ -114,8 +123,9 @@ async function main() {
       refs.forEach((ref, k) => {
         const shot = shots[k],
           img = ref.img;
-        const label = `${c.name}-t${ref.t}-y${ref.yaw}`;
+        const label = `${c.name}-t${ref.t}-y${ref.yaw}` + (ref.look === 'default' ? '' : '-' + ref.look);
         const notes = [];
+        if (shot.look !== ref.look) notes.push(`look ${shot.look} vs ${ref.look}`);
         if (shot.view.W !== img.w || shot.view.H !== img.h || shot.view.px !== img.px)
           notes.push(`grid ${shot.view.W}x${shot.view.H}/${shot.view.px} vs ${img.w}x${img.h}/${img.px}`);
         let got = null;
@@ -127,9 +137,10 @@ async function main() {
         // every scene in the set (nothing is drawn there); read it from the reference itself
         const bg = [img.rgb[0], img.rgb[1], img.rgb[2]];
         const s = compare(img, got, bg);
+        if (got && s.fg < 100) notes.push(`off by <=1/<=2/<=16/more: ${s.deltas.join('/')} of ${s.fgCount} fg px`);
         const pic = sheet(img.w, img.h, [img.rgb, got, s.diff]);
         PNG.write(path.join(OUT, label + '.png'), pic.w, pic.h, pic.rgb);
-        rows.push({ case: label, scene: c.name, fg: s.fg, all: s.all, ms: shot.ms, notes: notes.join('; ') });
+        rows.push({ case: label, scene: c.name + (ref.look === 'default' ? '' : ' ' + ref.look), fg: s.fg, all: s.all, ms: shot.ms, notes: notes.join('; ') });
       });
     }
   } finally {
@@ -141,7 +152,7 @@ async function main() {
   const pct = v => v.toFixed(1).padStart(5) + '%';
   console.log('\ncase'.padEnd(24) + 'foreground    all   engine ms  notes');
   for (const r of rows)
-    console.log(r.case.padEnd(23) + pct(r.fg) + '  ' + pct(r.all) + '  ' + r.ms.toFixed(0).padStart(8) + '   ' + r.notes);
+    console.log(r.case.padEnd(31) + pct(r.fg) + '  ' + pct(r.all) + '  ' + r.ms.toFixed(0).padStart(8) + '   ' + r.notes);
   const byScene = {};
   for (const r of rows) (byScene[r.scene] = byScene[r.scene] || []).push(r.fg);
   console.log('\nscene        worst   mean');
@@ -150,7 +161,7 @@ async function main() {
     const worst = Math.min(...v),
       mean = v.reduce((a, b) => a + b, 0) / v.length;
     if (min !== null && worst < min) failed = true;
-    console.log(s.padEnd(11) + pct(worst) + ' ' + pct(mean));
+    console.log(s.padEnd(17) + pct(worst) + ' ' + pct(mean));
   }
   if (errors.length) console.log('\npage errors:\n  ' + [...new Set(errors)].join('\n  '));
   fs.writeFileSync(path.join(OUT, 'report.json'), JSON.stringify({ when: new Date().toISOString(), caps, rows, errors }, null, 2));

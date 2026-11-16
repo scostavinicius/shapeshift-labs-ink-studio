@@ -1,11 +1,34 @@
-// The WebGL2 renderer. One instanced quad a splat, drawn back to front into three targets on the art grid (colour, depth,
-// glass), then resolved to palette colours. It follows cli/render.js step for step: see shaders.ts.
+// The WebGL2 renderer. One instanced quad a splat, drawn back to front into three float targets on the art grid (colour,
+// depth, glass), then resolved into the picture. It follows cli/render.js step for step: see shaders.ts.
+//   default look: one splat pass, then RESOLVE (glass, contact shade, outline, ordered noise, nearest palette colour)
+//   colored look: a splat pass on the art grid, WORKED into 8-bit colour; a splat pass on a grid twice as fine, QUANTized
+//                 to 8 bits; then PixelLook's own resolve (coloredFS) joins them
 import type { World } from '../../types/ink-studio';
+import { ink } from '../kit';
 import { makeScratch, sortSplats, type OrderScratch } from './order';
-import { DATA_WIDTH, RESOLVE_FS, SCREEN_VS, SPLAT_FS, SPLAT_VS, SPLATS_PER_ROW } from './shaders';
-import type { View } from './view';
+import {
+  COLORED_MAX,
+  coloredFS,
+  DATA_WIDTH,
+  QUANT_FS,
+  RESOLVE_FS,
+  SCREEN_VS,
+  SPLAT_FS,
+  SPLAT_VS,
+  SPLATS_PER_ROW,
+  WORKED_FS
+} from './shaders';
+import { finer, type View } from './view';
 
 const FLOATS_PER_ROW = DATA_WIDTH * 4;
+
+export type Look = 'default' | 'colored';
+
+export interface DrawOptions {
+  /** the ordered-noise amount, as cli/render.js takes it (0.35 when not given) */
+  dither?: number;
+  look?: Look;
+}
 
 function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader {
   const sh = gl.createShader(type)!;
@@ -30,14 +53,45 @@ function uniforms<K extends string>(gl: WebGL2RenderingContext, p: WebGLProgram,
   return out;
 }
 
+/** A program and its uniform locations. */
+interface Pass<K extends string> {
+  prog: WebGLProgram;
+  u: Record<K, WebGLUniformLocation | null>;
+}
+
+/** The three float targets one splat pass draws into, at one grid size. */
+interface SceneTargets {
+  W: number;
+  H: number;
+  fbo: WebGLFramebuffer;
+  color: WebGLTexture;
+  depth: WebGLTexture;
+  glass: WebGLTexture;
+}
+
+/** One 8-bit colour target. */
+interface Target {
+  W: number;
+  H: number;
+  fbo: WebGLFramebuffer;
+  tex: WebGLTexture;
+}
+
 export class SplatRenderer {
   readonly gl: WebGL2RenderingContext;
   /** true when colour and depth are kept in 32-bit floats (needs EXT_float_blend); otherwise 16-bit */
   readonly float32: boolean;
-  private splat: WebGLProgram;
-  private resolve: WebGLProgram;
-  private us;
-  private ur;
+  private splat: Pass<
+    'u_data' | 'u_V' | 'u_size' | 'u_lim' | 'u_t' | 'u_focal' | 'u_near' | 'u_dist' | 'u_R' | 'u_fogCol' | 'u_fog' | 'u_grow'
+  >;
+  private resolve: Pass<
+    'u_color' | 'u_depth' | 'u_glass' | 'u_pal' | 'u_n' | 'u_dith' | 'u_bend' | 'u_ao' | 'u_edge' | 'u_line'
+  >;
+  private worked: Pass<'u_color' | 'u_depth' | 'u_glass' | 'u_bend' | 'u_ao'>;
+  private quant: Pass<'u_color'>;
+  private colored: Pass<
+    'u_pal' | 'u_out' | 'u_n' | 'u_grade' | 'u_dither' | 'u_scene' | 'u_depth' | 'u_crispScene'
+  > | null = null;
   private vao: WebGLVertexArrayObject;
   private indexBuf: WebGLBuffer;
   private dataTex: WebGLTexture;
@@ -45,11 +99,15 @@ export class SplatRenderer {
   private dataRows = 0;
   private padded: Float32Array | null = null;
   private scratch: OrderScratch | null = null;
-  private W = 0;
-  private H = 0;
-  private sceneFbo: WebGLFramebuffer | null = null;
-  private outFbo: WebGLFramebuffer | null = null;
-  private targets: WebGLTexture[] = [];
+  // targets, made at the size first asked for and made again when it changes
+  private scene: SceneTargets | null = null;
+  private fine: SceneTargets | null = null;
+  private native8: Target | null = null;
+  private fine8: Target | null = null;
+  private out: Target | null = null;
+  /** the size of the last picture drawn */
+  W = 0;
+  H = 0;
   /** splats handed to the graphics card in the last draw (all of them: culling happens there) */
   drawn = 0;
 
@@ -59,14 +117,14 @@ export class SplatRenderer {
     if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('EXT_color_buffer_float is not available');
     this.gl = gl;
     this.float32 = !!gl.getExtension('EXT_float_blend');
-    this.splat = program(gl, SPLAT_VS, SPLAT_FS);
-    this.resolve = program(gl, SCREEN_VS, RESOLVE_FS);
-    this.us = uniforms(gl, this.splat, [
+    this.splat = this.pass(SPLAT_VS, SPLAT_FS, [
       'u_data', 'u_V', 'u_size', 'u_lim', 'u_t', 'u_focal', 'u_near', 'u_dist', 'u_R', 'u_fogCol', 'u_fog', 'u_grow'
     ] as const);
-    this.ur = uniforms(gl, this.resolve, [
+    this.resolve = this.pass(SCREEN_VS, RESOLVE_FS, [
       'u_color', 'u_depth', 'u_glass', 'u_pal', 'u_n', 'u_dith', 'u_bend', 'u_ao', 'u_edge', 'u_line'
     ] as const);
+    this.worked = this.pass(SCREEN_VS, WORKED_FS, ['u_color', 'u_depth', 'u_glass', 'u_bend', 'u_ao'] as const);
+    this.quant = this.pass(SCREEN_VS, QUANT_FS, ['u_color'] as const);
 
     this.vao = gl.createVertexArray()!;
     gl.bindVertexArray(this.vao);
@@ -86,6 +144,11 @@ export class SplatRenderer {
     this.palTex = this.texture();
   }
 
+  private pass<K extends string>(vs: string, fs: string, names: readonly K[]): Pass<K> {
+    const prog = program(this.gl, vs, fs);
+    return { prog, u: uniforms(this.gl, prog, names) };
+  }
+
   private texture(): WebGLTexture {
     const gl = this.gl,
       t = gl.createTexture()!;
@@ -95,6 +158,48 @@ export class SplatRenderer {
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
     gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
     return t;
+  }
+
+  private storage(W: number, H: number, internal: number): WebGLTexture {
+    const t = this.texture();
+    this.gl.texStorage2D(this.gl.TEXTURE_2D, 1, internal, W, H);
+    return t;
+  }
+
+  private framebuffer(textures: WebGLTexture[]): WebGLFramebuffer {
+    const gl = this.gl,
+      fbo = gl.createFramebuffer()!;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, fbo);
+    textures.forEach((t, i) => gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0 + i, gl.TEXTURE_2D, t, 0));
+    gl.drawBuffers(textures.map((_, i) => gl.COLOR_ATTACHMENT0 + i));
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('framebuffer is incomplete');
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    return fbo;
+  }
+
+  private sceneTargets(old: SceneTargets | null, W: number, H: number): SceneTargets {
+    if (old && old.W === W && old.H === H) return old;
+    const gl = this.gl;
+    if (old) {
+      gl.deleteFramebuffer(old.fbo);
+      for (const t of [old.color, old.depth, old.glass]) gl.deleteTexture(t);
+    }
+    const color = this.storage(W, H, this.float32 ? gl.RGBA32F : gl.RGBA16F),
+      depth = this.storage(W, H, this.float32 ? gl.R32F : gl.R16F),
+      // (glass is kept in floats too: its small additions would be lost to rounding in 8 bits)
+      glass = this.storage(W, H, this.float32 ? gl.R32F : gl.R16F);
+    return { W, H, color, depth, glass, fbo: this.framebuffer([color, depth, glass]) };
+  }
+
+  private target(old: Target | null, W: number, H: number): Target {
+    if (old && old.W === W && old.H === H) return old;
+    const gl = this.gl;
+    if (old) {
+      gl.deleteFramebuffer(old.fbo);
+      gl.deleteTexture(old.tex);
+    }
+    const tex = this.storage(W, H, gl.RGBA8);
+    return { W, H, tex, fbo: this.framebuffer([tex]) };
   }
 
   /** Send every splat to the graphics card. (Stage 4 sends only the rows the stage marks.) */
@@ -144,64 +249,20 @@ export class SplatRenderer {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, n, 2, 0, gl.RGBA, gl.UNSIGNED_BYTE, px);
   }
 
-  private resize(W: number, H: number): void {
-    if (W === this.W && H === this.H && this.sceneFbo) return;
-    const gl = this.gl;
-    for (const t of this.targets) gl.deleteTexture(t);
-    if (this.sceneFbo) gl.deleteFramebuffer(this.sceneFbo);
-    if (this.outFbo) gl.deleteFramebuffer(this.outFbo);
-    this.W = W;
-    this.H = H;
-    const make = (internal: number) => {
-      const t = this.texture();
-      gl.texStorage2D(gl.TEXTURE_2D, 1, internal, W, H);
-      return t;
-    };
-    const color = make(this.float32 ? gl.RGBA32F : gl.RGBA16F),
-      depth = make(this.float32 ? gl.R32F : gl.R16F),
-      // (glass is kept in floats too: its small additions would be lost to rounding in 8 bits)
-      glass = make(this.float32 ? gl.R32F : gl.R16F),
-      out = make(gl.RGBA8);
-    this.targets = [color, depth, glass, out];
-    this.sceneFbo = gl.createFramebuffer()!;
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneFbo);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, color, 0);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, depth, 0);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT2, gl.TEXTURE_2D, glass, 0);
-    gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1, gl.COLOR_ATTACHMENT2]);
-    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('scene framebuffer is incomplete');
-    this.outFbo = gl.createFramebuffer()!;
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.outFbo);
-    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, out, 0);
-    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) throw new Error('output framebuffer is incomplete');
-    this.canvas.width = W;
-    this.canvas.height = H;
+  private static hex(world: World, i: number): number[] {
+    const h = world.pal[i];
+    return [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
   }
 
-  /**
-   * Draw the world (as last uploaded) for this view, and show it on the canvas.
-   * o.dither is the option of the same name in cli/render.js (0.35 when not given).
-   */
-  draw(world: World, view: View, o: { dither?: number } = {}): void {
+  /** The splats, back to front (in the order already in indexBuf), into one set of colour, depth and glass targets. */
+  private splatPass(world: World, view: View, into: SceneTargets): void {
     const gl = this.gl,
-      N = world.count,
-      { W, H } = view;
-    this.resize(W, H);
-    this.uploadPalette(world);
-    if (!this.scratch || this.scratch.order.length !== N) this.scratch = makeScratch(N);
-    const order = sortSplats(world, view, this.scratch);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.indexBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, order, gl.DYNAMIC_DRAW);
-
-    // ---- the splats, back to front, into colour, depth and glass
-    const hex = (i: number) => {
-      const h = world.pal[i];
-      return [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255];
-    };
-    const bg = hex(0),
-      fog = hex(world.fog.c),
-      grow = world.grow || {};
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneFbo);
+      { W, H } = view,
+      bg = SplatRenderer.hex(world, 0),
+      fog = SplatRenderer.hex(world, world.fog.c),
+      grow = world.grow || {},
+      u = this.splat.u;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, into.fbo);
     gl.viewport(0, 0, W, H);
     gl.disable(gl.DEPTH_TEST);
     gl.disable(gl.BLEND);
@@ -210,10 +271,9 @@ export class SplatRenderer {
     gl.clearBufferfv(gl.COLOR, 2, [0, 0, 0, 0]);
     gl.enable(gl.BLEND);
     gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
-    gl.useProgram(this.splat);
+    gl.useProgram(this.splat.prog);
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.dataTex);
-    const u = this.us;
     gl.uniform1i(u.u_data, 0);
     gl.uniformMatrix4fv(u.u_V, false, view.V);
     gl.uniform2f(u.u_size, W, H);
@@ -227,44 +287,132 @@ export class SplatRenderer {
     gl.uniform2f(u.u_fog, world.fog.start, world.fog.max);
     gl.uniform3f(u.u_grow, grow.rate || 1, grow.loop && grow.loop > 0 ? grow.loop : 0, grow.fade || 0.5);
     gl.bindVertexArray(this.vao);
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, N);
-    this.drawn = N;
-
-    // ---- the palette look
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, world.count);
+    gl.bindVertexArray(null);
     gl.disable(gl.BLEND);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.outFbo);
-    gl.useProgram(this.resolve);
+  }
+
+  /** Bind textures to units 0, 1, 2 ... for a full-screen pass. */
+  private bindTextures(textures: WebGLTexture[]): void {
+    const gl = this.gl;
+    textures.forEach((t, i) => {
+      gl.activeTexture(gl.TEXTURE0 + i);
+      gl.bindTexture(gl.TEXTURE_2D, t);
+    });
     gl.activeTexture(gl.TEXTURE0);
-    gl.bindTexture(gl.TEXTURE_2D, this.targets[0]);
-    gl.activeTexture(gl.TEXTURE1);
-    gl.bindTexture(gl.TEXTURE_2D, this.palTex);
-    gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, this.targets[1]);
-    gl.activeTexture(gl.TEXTURE3);
-    gl.bindTexture(gl.TEXTURE_2D, this.targets[2]);
-    const r = this.ur,
+  }
+
+  private screen(into: Target): void {
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, into.fbo);
+    gl.viewport(0, 0, into.W, into.H);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+  }
+
+  /** Draw the world (as last uploaded) for this view, and show it on the canvas. */
+  draw(world: World, view: View, o: DrawOptions = {}): void {
+    const gl = this.gl,
+      N = world.count,
+      { W, H } = view,
       R2 = 2 * world.radius,
       ao = world.ao,
-      line = hex(world.outline ? world.outline.c : 0);
-    gl.uniform1i(r.u_color, 0);
-    gl.uniform1i(r.u_pal, 1);
-    gl.uniform1i(r.u_depth, 2);
-    gl.uniform1i(r.u_glass, 3);
-    gl.uniform1i(r.u_n, world.pal.length);
-    gl.uniform1f(r.u_dith, (o.dither === undefined ? 0.35 : o.dither) * 0.3 * world.dither);
-    gl.uniform1f(r.u_bend, world.refract === undefined ? 6 : world.refract);
-    gl.uniform2f(r.u_ao, ao ? (ao.k === undefined ? 0.5 : ao.k) : 0, ao ? (ao.range || 0.6) / R2 : 1);
-    gl.uniform1f(r.u_edge, world.outline && world.outline.edge ? world.outline.edge / R2 : 0);
-    gl.uniform3f(r.u_line, line[0], line[1], line[2]);
-    gl.drawArrays(gl.TRIANGLES, 0, 3);
-    gl.activeTexture(gl.TEXTURE0);
-    gl.bindVertexArray(null);
+      aoK = ao ? (ao.k === undefined ? 0.5 : ao.k) : 0,
+      aoR = ao ? (ao.range || 0.6) / R2 : 1,
+      bend = world.refract === undefined ? 6 : world.refract,
+      dith = (o.dither === undefined ? 0.35 : o.dither) * 0.3 * world.dither;
+    this.W = W;
+    this.H = H;
+    this.out = this.target(this.out, W, H);
+    this.scene = this.sceneTargets(this.scene, W, H);
+    if (!this.scratch || this.scratch.order.length !== N) this.scratch = makeScratch(N);
+    // (one order serves both grids of the colored look: depth depends only on the camera, which they share)
+    const order = sortSplats(world, view, this.scratch);
+    gl.bindBuffer(gl.ARRAY_BUFFER, this.indexBuf);
+    gl.bufferData(gl.ARRAY_BUFFER, order, gl.DYNAMIC_DRAW);
+    this.drawn = N;
+    this.splatPass(world, view, this.scene);
+
+    if (o.look === 'colored') {
+      // the native picture, worked, in 8 bits
+      this.native8 = this.target(this.native8, W, H);
+      gl.useProgram(this.worked.prog);
+      this.bindTextures([this.scene.color, this.scene.depth, this.scene.glass]);
+      const w = this.worked.u;
+      gl.uniform1i(w.u_color, 0);
+      gl.uniform1i(w.u_depth, 1);
+      gl.uniform1i(w.u_glass, 2);
+      gl.uniform1f(w.u_bend, bend);
+      gl.uniform2f(w.u_ao, aoK, aoR);
+      this.screen(this.native8);
+      // the samples: the same view on a grid twice as fine, in 8 bits, with their depth kept as it is
+      const fv = finer(view);
+      this.fine = this.sceneTargets(this.fine, fv.W, fv.H);
+      this.fine8 = this.target(this.fine8, fv.W, fv.H);
+      this.splatPass(world, fv, this.fine);
+      gl.useProgram(this.quant.prog);
+      this.bindTextures([this.fine.color]);
+      gl.uniform1i(this.quant.u.u_color, 0);
+      this.screen(this.fine8);
+      // PixelLook's resolve
+      const c = this.coloredPass(),
+        n = world.pal.length;
+      if (n > COLORED_MAX) throw new Error(`the colored look takes at most ${COLORED_MAX} palette colours (this world has ${n})`);
+      const pal = new Float32Array(COLORED_MAX * 3),
+        outPal = new Float32Array(COLORED_MAX * 3),
+        grade = world.anim && world.anim.grade;
+      for (let i = 0; i < n; i++) {
+        pal.set(SplatRenderer.hex(world, i), i * 3);
+        outPal.set(grade ? Array.from(grade).slice(i * 3, i * 3 + 3) : SplatRenderer.hex(world, i), i * 3);
+      }
+      gl.useProgram(c.prog);
+      this.bindTextures([this.fine8.tex, this.fine.depth, this.native8.tex]);
+      gl.uniform1i(c.u.u_scene, 0);
+      gl.uniform1i(c.u.u_depth, 1);
+      gl.uniform1i(c.u.u_crispScene, 2);
+      gl.uniform3fv(c.u.u_pal, pal);
+      gl.uniform3fv(c.u.u_out, outPal);
+      gl.uniform1i(c.u.u_n, n);
+      gl.uniform1f(c.u.u_grade, grade ? 1 : 0);
+      gl.uniform1f(c.u.u_dither, dith);
+      this.screen(this.out);
+    } else {
+      // the palette look
+      this.uploadPalette(world);
+      const line = SplatRenderer.hex(world, world.outline ? world.outline.c : 0),
+        r = this.resolve.u;
+      gl.useProgram(this.resolve.prog);
+      this.bindTextures([this.scene.color, this.palTex, this.scene.depth, this.scene.glass]);
+      gl.uniform1i(r.u_color, 0);
+      gl.uniform1i(r.u_pal, 1);
+      gl.uniform1i(r.u_depth, 2);
+      gl.uniform1i(r.u_glass, 3);
+      gl.uniform1i(r.u_n, world.pal.length);
+      gl.uniform1f(r.u_dith, dith);
+      gl.uniform1f(r.u_bend, bend);
+      gl.uniform2f(r.u_ao, aoK, aoR);
+      gl.uniform1f(r.u_edge, world.outline && world.outline.edge ? world.outline.edge / R2 : 0);
+      gl.uniform3f(r.u_line, line[0], line[1], line[2]);
+      this.screen(this.out);
+    }
 
     // ---- onto the canvas (one canvas pixel an art pixel: the page scales it up)
-    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.outFbo);
+    if (this.canvas.width !== W || this.canvas.height !== H) {
+      this.canvas.width = W;
+      this.canvas.height = H;
+    }
+    gl.bindFramebuffer(gl.READ_FRAMEBUFFER, this.out.fbo);
     gl.bindFramebuffer(gl.DRAW_FRAMEBUFFER, null);
     gl.blitFramebuffer(0, 0, W, H, 0, 0, W, H, gl.COLOR_BUFFER_BIT, gl.NEAREST);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  }
+
+  /** PixelLook's resolve, compiled the first time the colored look is asked for (it needs the toolkit's GLSL). */
+  private coloredPass() {
+    if (!this.colored)
+      this.colored = this.pass(SCREEN_VS, coloredFS(ink().PixelLook.glsl), [
+        'u_pal', 'u_out', 'u_n', 'u_grade', 'u_dither', 'u_scene', 'u_depth', 'u_crispScene'
+      ] as const);
+    return this.colored;
   }
 
   /** The last picture drawn: rgb bytes, top row first. */
@@ -273,7 +421,7 @@ export class SplatRenderer {
       { W, H } = this,
       px = new Uint8Array(W * H * 4),
       rgb = new Uint8Array(W * H * 3);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.outFbo);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, this.out!.fbo);
     gl.readPixels(0, 0, W, H, gl.RGBA, gl.UNSIGNED_BYTE, px);
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);
     for (let y = 0; y < H; y++)
@@ -285,18 +433,5 @@ export class SplatRenderer {
         rgb[d + 2] = px[s + 2];
       }
     return { w: W, h: H, rgb };
-  }
-
-  /** One of the scene targets as floats, bottom row first: 0 colour (rgba), 1 depth, 2 glass. For looking into differences. */
-  readTarget(which: 0 | 1 | 2): Float32Array {
-    const gl = this.gl,
-      { W, H } = this,
-      out = new Float32Array(W * H * 4);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, this.sceneFbo);
-    gl.readBuffer(gl.COLOR_ATTACHMENT0 + which);
-    gl.readPixels(0, 0, W, H, gl.RGBA, gl.FLOAT, out);
-    gl.readBuffer(gl.COLOR_ATTACHMENT0);
-    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
-    return out;
   }
 }

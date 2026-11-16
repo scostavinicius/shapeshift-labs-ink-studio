@@ -20,7 +20,7 @@ Fatos do código que moldam o plano:
 
 ## Como retomar em outro computador
 
-**Estado (2026-11-16):** etapas 0, 1 e 2 concluídas. **Próximo passo: o modo `colored` da Etapa 3** (o modo padrão do passo final já foi feito na Etapa 2), depois a Etapa 4. Os resultados medidos de cada etapa estão nas seções abaixo.
+**Estado (2026-11-16):** etapas 0 a 3 concluídas. **Próximo passo: a Etapa 4** (Opus 5.5, com o trecho de ordenação e ossos no Fable 5.2). Os resultados medidos de cada etapa estão nas seções abaixo.
 
 **Preparar a máquina** (Node 18 ou mais novo, Git, e o Microsoft Edge ou o Chrome para o teste de paridade):
 ```bash
@@ -33,9 +33,9 @@ npm install
 O aviso de `allow-scripts` do esbuild no `npm install` pode ser ignorado: tudo funciona sem ele. Não há download de navegador (o harness usa o Edge/Chrome que já existe; `--browser chrome` troca o navegador).
 
 **Comandos** (na pasta `engine/`):
-- `npm run dev`: servidor em http://127.0.0.1:5173. Abra `/?file=showcase/farol.js` ou `/?scene=cabinet` (também `burn`, `idol`, `watcher`). Arrastar gira, a roda dá zoom.
+- `npm run dev`: servidor em http://127.0.0.1:5173. Abra `/?file=showcase/farol.js` ou `/?scene=cabinet` (também `burn`, `idol`, `watcher`). Arrastar gira, a roda dá zoom, a tecla **C** alterna entre o estilo padrão e o `colored` (`&look=colored` já abre nele).
 - `npm test`: typecheck e testes.
-- `npm run parity -- --min 99`: compara o renderizador da engine com o do terminal em 30 casos e falha se algum cair abaixo de 99%. As imagens ficam em `engine/test/parity/out/` (não vão para o git).
+- `npm run parity -- --min 99`: compara o renderizador da engine com o do terminal em 60 casos (os dois estilos) e falha se algum cair abaixo de 99%. As imagens ficam em `engine/test/parity/out/` (não vão para o git).
 - `npm test` na **raiz** do repositório roda os 171 testes do ink-studio; a engine não altera `src/`, `cli/`, nem `demos/`.
 
 **O que não está no repositório** (é gerado de novo): `node_modules/`, `studio/out/`, `engine/test/parity/out/`.
@@ -120,13 +120,15 @@ A parte mais difícil do projeto. Reproduzir o laço principal de `render()` em 
 - Resolução baixa: mesmo cálculo de `px`, `W`, `H` do terminal (o tamanho do pixel de arte não muda com o zoom da cena).
 - **Pronto quando:** com um passo final provisório (só "cor de paleta mais próxima"), a paridade passa de 90% em todas as cenas paradas (`t=0`).
 
-### Etapa 3 — Passo final do estilo · Opus 5.5 (trocar para Fable se a paridade travar abaixo da meta)
+### Etapa 3 — Passo final do estilo · Opus 5.5 · ✅ concluída
 
-**O modo padrão já foi feito na Etapa 2.** Resta só o modo `colored` (abaixo), mais incluir casos `colored` no harness.
-
-- Porte direto do segundo laço de `render()` (linhas 386 a 480): refração do vidro, sombra de contato (`world.ao`), contorno por degrau de profundidade (`world.outline`), dithering Bayer 4×4, cor de paleta mais próxima com os pesos `0.30/0.55/0.15`, e `anim.grade`.
-- Modo `colored`: renderizar em 2× e usar `PixelLook.glsl` (`pixelResolve`) como está.
-- **Pronto quando:** paridade ≥ 97% no modo padrão e ≥ 95% no `colored`, nas cenas paradas.
+Resultado (`npm run parity -- --min 99`, agora 60 casos: os 30 de antes em cada um dos dois estilos):
+- O modo padrão foi feito na Etapa 2. Aqui entrou o **modo `colored`**: a cena é desenhada na grade normal e numa grade 2× mais fina; a normal passa por vidro e sombra de contato, as duas são guardadas em 8 bits, e o `PixelLook.glsl` do próprio kit é usado **como está** para juntar as duas. `src/render/shaders.ts` (`WORKED_FS`, `QUANT_FS`, `coloredFS`) e `src/render/splat-renderer.ts`.
+- **Paridade de 99,98% a 100% nos 60 casos.** O que sobra são no máximo 3 pixels por imagem.
+- O ajuste que levou de 86–99% para 100%: arredondar a cor para bytes no próprio shader (`floor(c * 255 + 0.5) / 255`, como o `Math.round` da referência) antes de gravar em alvos de 8 bits. A conversão automática da GPU arredondava diferente nos tons misturados dos contornos.
+- O harness agora diz **quanto** os pixels diferentes se afastam (até 1, até 2, até 16, mais), o que separa erro de arredondamento de erro de desenho.
+- Limite herdado do `PixelLook.glsl`: no máximo 48 cores na paleta no modo `colored` (o renderizador dá um erro claro se passar).
+- Desempenho medido no Edge headless: `cabinet` a 56 fps no `colored` (60 no padrão); `farol` cai para 30 fps no `colored` (126 mil splats desenhados duas vezes, a segunda numa grade com 4× mais pixels). Fica para as etapas 4 e 11.
 
 ### Etapa 4 — Mundo vivo na GPU · Opus 5.5, com um trecho **[FABLE]**
 - Chamar `world.anim.update(dt, t)` por quadro e enviar só as linhas marcadas em `st.rows` (`texSubImage2D` por linha), zerando as marcas depois.

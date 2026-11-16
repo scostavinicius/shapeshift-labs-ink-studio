@@ -70,6 +70,17 @@ export function viewMatrix(yaw: number, pitch: number, dist: number, T: number[]
   ];
 }
 
+/**
+ * The same view on a grid twice as fine, as cli/render.js asks for the samples of its `colored` look:
+ * render(world, { ...o, px: px / 2, w: W * px, h: H * px }).
+ */
+export function finer(v: View): View {
+  const px = v.px / 2,
+    W = Math.ceil((v.W * v.px) / px),
+    H = Math.ceil((v.H * v.px) / px);
+  return { ...v, px, W, H, focal: H / 2 / Math.tan(FOV / 2) };
+}
+
 /** Resolve options into the view cli/render.js would use for this world. */
 export function makeView(world: World, o: ViewOptions = {}): View {
   const c = world.cam,
