@@ -9,8 +9,14 @@
 //   fps and milliseconds of the page's thread a frame, rows sent a frame (median over 2 seconds)
 // and, three times while it runs, ENGINE.checkWorker(): the worker's order and the page's must be the same, element for
 // element, and so must the two pictures. Any difference fails the run (exit 1).
+// Then the game core with the real mouse (see coreChecks; `--only core` runs just that). Pictures go to test/live/out/.
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright-core';
 import { startServer } from '../../scripts/server.mjs';
+
+const OUT = path.join(path.dirname(fileURLToPath(import.meta.url)), 'out');
 
 const SCENES = [
   { name: 'farol', q: 'file=showcase/farol.js' },
@@ -63,6 +69,65 @@ async function open(q) {
   await page.waitForTimeout(1200);
 }
 
+/**
+ * Stage 5, with the real mouse: dragging turns the farol at full frame rate while the clock keeps fixed steps, and a click
+ * on the idol meets it (the Node test core.test.mjs shows the same click breaking pieces off).
+ */
+async function coreChecks() {
+  console.log('\ngame core (real mouse):');
+  await open('file=showcase/farol.js');
+  const before = await page.evaluate(() => ({ yaw: window.ENGINE.cam.yaw, t: window.ENGINE.core.t, now: performance.now() }));
+  const cx = 640,
+    cy = 360;
+  await page.mouse.move(cx, cy);
+  await page.mouse.down();
+  for (let k = 1; k <= 80; k++) {
+    await page.mouse.move(cx + Math.sin(k / 12) * 300, cy + Math.sin(k / 20) * 80);
+    await page.waitForTimeout(25);
+  }
+  const during = await page.evaluate(() => ({ fps: window.ENGINE.info.fps, frameMs: window.ENGINE.info.frameMs }));
+  await page.mouse.up();
+  const after = await page.evaluate(() => ({ yaw: window.ENGINE.cam.yaw, t: window.ENGINE.core.t, now: performance.now(), pokes: window.ENGINE.core.pokes.length }));
+  const real = (after.now - before.now) / 1000,
+    sim = after.t - before.t;
+  const orbitOK = Math.abs(after.yaw - before.yaw) > 0.5 && during.fps >= 55 && Math.abs(sim - real) < 0.1 && after.pokes === 0;
+  console.log(
+    `  farol  orbit: yaw ${before.yaw.toFixed(2)} -> ${after.yaw.toFixed(2)} · ${during.fps} fps, ${during.frameMs} ms a frame while dragging · ` +
+      `${sim.toFixed(2)} s simulated in ${real.toFixed(2)} s · a drag is not a tap: ${after.pokes} taps  ${orbitOK ? 'ok' : 'FAILED'}`
+  );
+  if (!orbitOK) failed = true;
+
+  await open('scene=idol');
+  // aim at the idol: a solid splat high up near its middle, wherever it is on the page now
+  const at = await page.evaluate(() => {
+    const E = window.ENGINE,
+      D = E.world.data;
+    let best = -1,
+      top = -1e9;
+    for (let i = 0, q = 0; i < E.world.count; i++, q += 16)
+      if (D[q + 3] >= 1 && Math.hypot(D[q], D[q + 2]) < 0.6 && D[q + 1] > top) {
+        top = D[q + 1];
+        best = i;
+      }
+    return E.screenOf([D[best * 16], D[best * 16 + 1], D[best * 16 + 2]]);
+  });
+  await page.mouse.click(at.x, at.y);
+  await page.waitForTimeout(800);
+  const tap = await page.evaluate(() => {
+    const p = window.ENGINE.core.pokes;
+    return p.length ? { n: p.length, t: p[p.length - 1].t, hit: p[p.length - 1].hit } : { n: 0 };
+  });
+  const tapOK = tap.n === 1 && !!tap.hit;
+  console.log(
+    `  idol   click at (${at.x.toFixed(0)}, ${at.y.toFixed(0)}): ${tap.n} tap at ${tap.n ? tap.t.toFixed(2) + ' s' : '-'}, ` +
+      (tap.hit ? `hit splat ${tap.hit.i} at (${tap.hit.p.map(v => v.toFixed(2)).join(', ')})` : 'nothing hit') +
+      `  ${tapOK ? 'ok' : 'FAILED'}`
+  );
+  if (!tapOK) failed = true;
+  fs.mkdirSync(OUT, { recursive: true });
+  await page.screenshot({ path: path.join(OUT, 'idol-after-click.png') });
+}
+
 let failed = false;
 console.log('scene           sort    fps  page ms/frame  rows sent   worker sort ms   worker check (order / pixels differing)');
 try {
@@ -92,6 +157,7 @@ try {
     line(w, checks.map(c => `${c.orderDiff} / ${c.pixelDiff}`).join('   '));
     line(p, '');
   }
+  if (!only || 'core'.includes(only)) await coreChecks();
 } finally {
   await browser.close();
   await server.close();

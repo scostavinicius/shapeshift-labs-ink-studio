@@ -20,7 +20,7 @@ Fatos do código que moldam o plano:
 
 ## Como retomar em outro computador
 
-**Estado (2026-11-16):** etapas 0 a 4 concluídas (todo o renderizador). **Próximo passo: a Etapa 5** (núcleo do jogo: loop de passo fixo, input, câmera, clique), com o Opus 5.5. Os resultados medidos de cada etapa estão nas seções abaixo.
+**Estado (2026-11-16):** etapas 0 a 5 concluídas (todo o renderizador e o núcleo do jogo). **Próximo passo: a Etapa 6** (modelo de jogo e modo sem navegador): o desenho da API, do determinismo e da colisão com o **Fable 5.2**, o código com o Opus 5.5. Os resultados medidos de cada etapa estão nas seções abaixo.
 
 **Preparar a máquina** (Node 18 ou mais novo, Git, e o Microsoft Edge ou o Chrome para o teste de paridade):
 ```bash
@@ -33,13 +33,13 @@ npm install
 O aviso de `allow-scripts` do esbuild no `npm install` pode ser ignorado: tudo funciona sem ele. Não há download de navegador (o harness usa o Edge/Chrome que já existe; `--browser chrome` troca o navegador).
 
 **Comandos** (na pasta `engine/`):
-- `npm run dev`: servidor em http://127.0.0.1:5173. Abra `/?file=showcase/farol.js` ou `/?scene=cabinet` (também `burn`, `idol`, `watcher`). Arrastar gira, a roda dá zoom, a tecla **C** alterna entre o estilo padrão e o `colored` (`&look=colored` já abre nele).
+- `npm run dev`: servidor em http://127.0.0.1:5173. Abra `/?file=showcase/farol.js` ou `/?scene=cabinet` (também `burn`, `idol`, `watcher`). Arrastar gira, a roda dá zoom, clicar toca a cena, WASD/setas (ou o analógico esquerdo) movem o ponto que a câmera segue (Shift corre), a tecla **C** alterna entre o estilo padrão e o `colored` (`&look=colored` já abre nele).
 - `npm test`: typecheck e testes.
-- `npm run live`: abre a página ao vivo no navegador headless, mede fps, tempo por quadro e linhas enviadas, e confere se a ordem do Worker é idêntica à calculada na página. Falha se houver diferença.
+- `npm run live`: abre a página ao vivo no navegador headless, mede fps, tempo por quadro e linhas enviadas, e confere se a ordem do Worker é idêntica à calculada na página. Depois testa o núcleo do jogo com o mouse de verdade (arrastar o `farol`, clicar no `idol`; só essa parte: `npm run live -- --only core`). Falha se algo der errado.
 - `npm run parity -- --min 99`: compara o renderizador da engine com o do terminal em 60 casos (os dois estilos) e falha se algum cair abaixo de 99%. As imagens ficam em `engine/test/parity/out/` (não vão para o git).
 - `npm test` na **raiz** do repositório roda os 171 testes do ink-studio; a engine não altera `src/`, `cli/`, nem `demos/`.
 
-**O que não está no repositório** (é gerado de novo): `node_modules/`, `studio/out/`, `engine/test/parity/out/`.
+**O que não está no repositório** (é gerado de novo): `node_modules/`, `studio/out/`, `engine/test/parity/out/`, `engine/test/live/out/`.
 
 **Escolha do modelo:** siga a coluna de modelo de cada etapa e o quadro "Resumo de quando usar o Fable" mais abaixo. Uma nova sessão não lembra desta conversa: comece pedindo para ela ler `docs/engine-plan.md` e fazer a etapa seguinte.
 
@@ -60,7 +60,7 @@ engine/
   package.json, tsconfig.json
   types/ink-studio.d.ts      tipos do kit usados pela engine
   src/render/                renderizador WebGL2 (etapas 1 a 4)
-  src/core/                  loop, input, câmera, tempo (etapa 5)
+  src/core/                  loop, input, câmera, clique, Core (etapa 5)
   src/game/                  mundo, entidades, colisão, combate (etapas 6 e 7)
   src/ui/                    HUD em DOM, áudio (etapa 8)
   src/headless/              o mesmo jogo rodando no Node + CLI (etapa 6)
@@ -149,7 +149,23 @@ Resultado do trecho **[FABLE]**:
 - Tempo da thread da página por quadro, com Worker / sem (Edge headless, 60 fps em todas): `farol` **1,8 / 8,2 ms**; `cabinet` **1,0 / 5,5 ms**; `idol` 2,1 / 4,8; `burn` 5,1 / 7,8; `watcher` ~6 / ~8,7. A ordenação em si leva de 2 a 8 ms no Worker.
 - `farol` no `colored` segue em ~33 fps com 3,3 ms de CPU: o gargalo é a GPU (segunda passada na grade 2×), assunto da Etapa 11.
 
-### Etapa 5 — Núcleo do jogo · Opus 5.5
+### Etapa 5 — Núcleo do jogo · Opus 5.5 · ✅ concluída
+
+Resultado (`engine/src/core/`, sem DOM exceto `DomInput`, então roda igual no Node):
+- `loop.ts` — `FixedLoop`: passos de exatamente 1/60 s; o relógio é `passos × 1/60` (contado, não somado: não deriva). Um quadro muito atrasado roda no máximo 8 passos e descarta o resto (substitui o remendo de "aba em segundo plano" da página).
+- `input.ts` — `InputState` (sem DOM: `press/release/stick/turn/click`, testável e roteirizável) e `DomInput` (teclado por `e.code`, arrastar o canvas gira, clique sem arrastar é toque, roda dá zoom, gamepad no layout padrão lido a cada passo). `sample(yaw)` entrega exatamente o `inp` do `K.character` — `move/mz` já em eixos do mundo relativos à câmera, `jump/dash/attack/cast` verdadeiros só no passo em que foram apertados (um toque mais curto que um passo não se perde), `jumpHeld/run/crouch` enquanto seguros. Teclas: WASD/setas, Shift corre, Espaço pula, J ataca, K dash, L cast, Ctrl agacha. Gamepad: A pula, B dash, X ataca, Y cast, LB agacha, RB/RT corre, analógico direito gira.
+- `camera.ts` — `FollowCamera`: órbita (yaw/pitch/distância) em torno de um ponto seguido com mola criticamente amortecida, exata para qualquer `dt` (60 passos de 1/60 e 120 de 1/120 dão o mesmo resultado); girar é imediato, seguir e zoom são suaves; limites de pitch, distância e uma caixa opcional para o alvo.
+- `pick.ts` — `rayThrough(view, u, v)`: o inverso exato da projeção do shader; `project()` faz o caminho de ida.
+- `core.ts` — `Core`: junta tudo. Ordem de um passo: amostra o input → câmera gira/zoom → cliques viram raios (pela vista que estava na tela) e chamam `st.poke` **antes** do mundo avançar, como o `--poke` do CLI → `onStep` do jogo → câmera suaviza → `poseAt` até o novo instante. `core.run(s)` roda todos os passos sem o limite por quadro (testes e, na Etapa 6, o modo headless).
+- A página (`main.ts`) usa o `Core`; o "jogo" do visualizador é um ponto que WASD move e a câmera segue.
+
+Medido:
+- `npm test`: 14 testes (6 novos em `test/core.test.mjs`). Entre eles, em Node, um clique na cabeça do `idol` (projetado, convertido em raio, passado pelo `Core`) tira **691 splats** do lugar 1 s depois; duas execuções sem clique diferem em **0**.
+- `npm run live` (Edge headless): arrastando o `farol` com o mouse real, **180 fps a 0,6 ms de CPU por quadro**, a câmera gira e 3,67 s simulados em 3,67 s reais (o relógio do jogo não depende do fps); arrastar não conta como toque. Um clique real no `idol` acerta a cabeça e solta pedaços (imagem em `test/live/out/`). A ordem do Worker continua idêntica à da página em todas as cenas.
+- O fps headless agora passa de 60 (antes ficava em 60): a página desenha a cada quadro do navegador, e a maioria dos quadros não roda passo nenhum, por isso a mediana de linhas enviadas por quadro virou 0. Nos quadros sem passo a imagem é a mesma; pular o desenho neles é uma otimização possível para a Etapa 11.
+- Para a Etapa 6: a câmera e o mundo andam em passos de 1/60 sem interpolação entre eles; em telas de 120/144 Hz pode haver um leve tremor. Interpolar só a câmera (o `advance` já devolve a fração do próximo passo) resolve, se for preciso.
+
+Plano original:
 - Loop com passo fixo de 1/60 s (a simulação nunca depende do fps).
 - Input: teclado, mouse e gamepad mapeados para ações, entregues no formato que `K.character.update` já espera.
 - Câmera: segue um alvo com mola, yaw/pitch/distância, limites.
