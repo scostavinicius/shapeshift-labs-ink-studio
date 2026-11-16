@@ -18,6 +18,32 @@ Fatos do código que moldam o plano:
 - `K.play.fx / debris / eco` são os efeitos de gameplay; `st.poke(eye, dir)` faz o clique acertar a cena.
 - `package.json` está como `UNLICENSED`.
 
+## Como retomar em outro computador
+
+**Estado (2026-11-16):** etapas 0, 1 e 2 concluídas. **Próximo passo: o modo `colored` da Etapa 3** (o modo padrão do passo final já foi feito na Etapa 2), depois a Etapa 4. Os resultados medidos de cada etapa estão nas seções abaixo.
+
+**Preparar a máquina** (Node 18 ou mais novo, Git, e o Microsoft Edge ou o Chrome para o teste de paridade):
+```bash
+git clone https://github.com/scostavinicius/shapeshift-labs-ink-studio.git
+cd shapeshift-labs-ink-studio
+git checkout engine/stage-0
+cd engine
+npm install
+```
+O aviso de `allow-scripts` do esbuild no `npm install` pode ser ignorado: tudo funciona sem ele. Não há download de navegador (o harness usa o Edge/Chrome que já existe; `--browser chrome` troca o navegador).
+
+**Comandos** (na pasta `engine/`):
+- `npm run dev`: servidor em http://127.0.0.1:5173. Abra `/?file=showcase/farol.js` ou `/?scene=cabinet` (também `burn`, `idol`, `watcher`). Arrastar gira, a roda dá zoom.
+- `npm test`: typecheck e testes.
+- `npm run parity -- --min 99`: compara o renderizador da engine com o do terminal em 30 casos e falha se algum cair abaixo de 99%. As imagens ficam em `engine/test/parity/out/` (não vão para o git).
+- `npm test` na **raiz** do repositório roda os 171 testes do ink-studio; a engine não altera `src/`, `cli/`, nem `demos/`.
+
+**O que não está no repositório** (é gerado de novo): `node_modules/`, `studio/out/`, `engine/test/parity/out/`.
+
+**Escolha do modelo:** siga a coluna de modelo de cada etapa e o quadro "Resumo de quando usar o Fable" mais abaixo. Uma nova sessão não lembra desta conversa: comece pedindo para ela ler `docs/engine-plan.md` e fazer a etapa seguinte.
+
+**Remotos:** `origin` é o fork `scostavinicius/shapeshift-labs-ink-studio`; o repositório original do autor, `siliconjungle/shapeshift-labs-ink-studio`, é o `upstream` (`git remote add upstream https://github.com/siliconjungle/shapeshift-labs-ink-studio.git` em uma máquina nova).
+
 ## Decisões de arquitetura
 
 1. **WebGL2, não WebGPU.** O shader do estilo já existe em GLSL, WebGL2 roda em qualquer navegador e WebView (o que mantém aberto um empacotamento leve para desktop depois), e a cena cabe folgada em WebGL2. Isso muda a recomendação que dei antes na conversa.
