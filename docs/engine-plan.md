@@ -60,7 +60,16 @@ Resultado:
 - Escrever `types/ink-studio.d.ts` para `World`, `Stage`, `makeBuilder`, `makeSculpt` e o que mais for usado.
 - **Pronto quando:** `npm run dev` abre a página e o console mostra a contagem de splats de `burn`; `npm test` do repositório raiz continua passando.
 
-### Etapa 1 — Harness de paridade · Opus 5.5
+### Etapa 1 — Harness de paridade · Opus 5.5 · ✅ concluída
+
+Resultado:
+- `npm run parity` (em `engine/`) roda os 30 casos (5 cenas × 2 instantes × 3 ângulos) no Edge headless via `playwright-core` (sem baixar navegador; `--browser chrome` usa o Chrome). Leva ~25 s. Imagens em `engine/test/parity/out/<caso>.png` (referência | engine | diferença) e `report.json`.
+- **Métrica oficial: "foreground parity"**, a porcentagem de pixels iguais entre os que não são fundo em pelo menos uma das duas imagens. Uma imagem vazia dá 0% em qualquer cena. As metas das próximas etapas usam essa métrica. `--min N` faz o comando falhar se o pior caso de alguma cena ficar abaixo de N%.
+- Hoje todos os casos dão 0% ("no renderer"), como esperado. A grade de pixels (`px`, `W`, `H`) calculada pela engine em `src/render/view.ts` já bate com a do `cli/render.js` em todos os casos.
+- O mundo é posicionado no tempo pelo mesmo código nos dois lados: `src/shared/pose.mjs` (cópia fiel do `pose()` do CLI, incluindo ossos).
+- O navegador headless desta máquina tem WebGL2, `EXT_color_buffer_float` e `EXT_float_blend` (GPU AMD via ANGLE/D3D11). O harness imprime isso no início de cada execução, para a Etapa 2 saber com o que conta.
+- Observação para a Etapa 6: montar o mesmo mundo duas vezes e avançar até o mesmo instante dá quase os mesmos splats, mas o teste só exige menos de 5% de diferença. O determinismo completo é trabalho da Etapa 6.
+
 - `test/parity/`: o servidor Node gera a imagem de referência com `R.render(world, {...})` (mesmo padrão de [showcase/spin.js](../showcase/spin.js)); a página desenha a mesma cena no canvas e devolve os pixels; um script compara.
 - Métrica: porcentagem de pixels com a mesma cor de paleta, mais uma imagem de diferença salva em disco.
 - Rodar com Playwright (Chromium headless) para a IA conseguir executar sozinha.

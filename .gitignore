@@ -3,3 +3,4 @@ studio/out/
 node_modules/
 .validation/
 studio/snaps/
+engine/test/parity/out/
