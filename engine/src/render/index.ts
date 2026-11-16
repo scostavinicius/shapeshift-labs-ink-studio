@@ -20,11 +20,14 @@ export function rendererFor(canvas: HTMLCanvasElement): SplatRenderer {
   return r;
 }
 
-/** Draw the world as cli/render.js does, into the art grid, and read the picture back. */
+/**
+ * Draw the world as cli/render.js does, into the art grid, and read the picture back. The splats are sent as the live page
+ * sends them (only what changed since the last call), so a system that writes splats without marking them shows up here.
+ */
 export function renderFrame(canvas: HTMLCanvasElement, world: World, o: ViewOptions & DrawOptions = {}): Frame {
   const r = rendererFor(canvas),
     view = makeView(world, o);
-  r.uploadAll(world);
+  r.upload(world);
   r.draw(world, view, o);
   return { ...r.read(), px: view.px };
 }

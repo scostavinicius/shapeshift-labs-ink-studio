@@ -140,7 +140,7 @@ async function main() {
         if (got && s.fg < 100) notes.push(`off by <=1/<=2/<=16/more: ${s.deltas.join('/')} of ${s.fgCount} fg px`);
         const pic = sheet(img.w, img.h, [img.rgb, got, s.diff]);
         PNG.write(path.join(OUT, label + '.png'), pic.w, pic.h, pic.rgb);
-        rows.push({ case: label, scene: c.name + (ref.look === 'default' ? '' : ' ' + ref.look), fg: s.fg, all: s.all, ms: shot.ms, notes: notes.join('; ') });
+        rows.push({ upload: shot.upload, case: label, scene: c.name + (ref.look === 'default' ? '' : ' ' + ref.look), fg: s.fg, all: s.all, ms: shot.ms, notes: notes.join('; ') });
       });
     }
   } finally {
@@ -153,6 +153,10 @@ async function main() {
   console.log('\ncase'.padEnd(24) + 'foreground    all   engine ms  notes');
   for (const r of rows)
     console.log(r.case.padEnd(31) + pct(r.fg) + '  ' + pct(r.all) + '  ' + r.ms.toFixed(0).padStart(8) + '   ' + r.notes);
+  // how the splats reached the graphics card: the first shot of each time, the one that carried the changes
+  console.log('\nuploads (first shot of each time):');
+  for (const r of rows)
+    if (r.case.endsWith('-y0') && r.upload) console.log('  ' + r.case.padEnd(20) + `${r.upload.rows} of ${r.upload.total} rows (${r.upload.mode})`);
   const byScene = {};
   for (const r of rows) (byScene[r.scene] = byScene[r.scene] || []).push(r.fg);
   console.log('\nscene        worst   mean');

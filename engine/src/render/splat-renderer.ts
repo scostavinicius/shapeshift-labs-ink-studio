@@ -202,7 +202,7 @@ export class SplatRenderer {
     return { W, H, tex, fbo: this.framebuffer([tex]) };
   }
 
-  /** Send every splat to the graphics card. (Stage 4 sends only the rows the stage marks.) */
+  /** Send every splat to the graphics card. */
   uploadAll(world: World): void {
     const gl = this.gl,
       rows = Math.max(1, Math.ceil(world.count / SPLATS_PER_ROW)),
@@ -216,6 +216,62 @@ export class SplatRenderer {
       gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, DATA_WIDTH, rows, 0, gl.RGBA, gl.FLOAT, this.padded);
       this.dataRows = rows;
     } else gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, DATA_WIDTH, rows, gl.RGBA, gl.FLOAT, this.padded);
+    this.uploaded = { world, count: world.count };
+    this.lastUpload = { rows, mode: 'all' };
+    const marks = world.anim && world.anim.rows;
+    if (marks) marks.fill(0);
+  }
+
+  /** what upload() last sent: how many rows of 512 splats, and why */
+  lastUpload: { rows: number; mode: 'all' | 'marked' | 'span' | 'bones' } = { rows: 0, mode: 'all' };
+  private uploaded: { world: World; count: number } | null = null;
+
+  /**
+   * Send what changed since the last upload, as the toolkit's stage asks a host to (and as `ink-studio perf` counts it):
+   *   - the first time, or for another world: everything
+   *   - a world whose anim marks rows (anim.rows, one flag per 512 splats): those rows, and the flags are cleared
+   *   - a world whose anim has no marks: its moving span, anim.start .. anim.start + anim.count, every time
+   *   - a world on bones: everything, while bones are worked on the CPU (world.data is a posed copy each frame)
+   * A world without anim never changes after its first upload.
+   */
+  upload(world: World): void {
+    const a = world.anim;
+    if (!this.uploaded || this.uploaded.world !== world || this.uploaded.count !== world.count) return this.uploadAll(world);
+    if (!a) return void (this.lastUpload = { rows: 0, mode: 'marked' });
+    if (a.bones) {
+      this.uploadAll(world);
+      this.lastUpload.mode = 'bones';
+      return;
+    }
+    const gl = this.gl,
+      data = world.data,
+      len = world.count * 16,
+      padded = this.padded!;
+    gl.bindTexture(gl.TEXTURE_2D, this.dataTex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    let sent = 0;
+    // one row: the floats of its 512 splats into the mirror (the last row is short), then that row of the texture
+    const send = (r: number) => {
+      const o = r * FLOATS_PER_ROW;
+      padded.set(data.subarray(o, Math.min(o + FLOATS_PER_ROW, len)), o);
+      gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, r, DATA_WIDTH, 1, gl.RGBA, gl.FLOAT, padded, o);
+      sent++;
+    };
+    const marks = a.rows;
+    if (marks) {
+      for (let r = 0; r < marks.length && r < this.dataRows; r++)
+        if (marks[r]) {
+          send(r);
+          marks[r] = 0;
+        }
+      this.lastUpload = { rows: sent, mode: 'marked' };
+    } else {
+      const start = (a.start as number) || 0,
+        count = (a.count as number) ?? world.count;
+      for (let r = Math.floor(start / SPLATS_PER_ROW); r < Math.ceil((start + count) / SPLATS_PER_ROW) && r < this.dataRows; r++)
+        send(r);
+      this.lastUpload = { rows: sent, mode: 'span' };
+    }
   }
 
   // the palette as a texture of two rows: the colours a pixel is matched against, and under each the colour that is

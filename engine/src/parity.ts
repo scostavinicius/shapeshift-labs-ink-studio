@@ -3,7 +3,7 @@
 import type { Scene, World } from '../types/ink-studio';
 import { findScene, ink, loadSceneFile } from './kit';
 import { poseAt, start } from './shared/pose.mjs';
-import { makeView, renderFrame } from './render/index';
+import { makeView, rendererFor, renderFrame } from './render/index';
 import type { Look } from './render/splat-renderer';
 
 /** One scene, built once and walked forward through its times, drawn from several angles at each. */
@@ -28,6 +28,8 @@ export interface ParityShot {
   /** the engine's picture, base64 rgb top row first, or null while there is no renderer */
   frame: { w: number; h: number; rgb: string } | null;
   ms: number;
+  /** what the renderer sent to the graphics card before drawing this shot */
+  upload: { rows: number; mode: string; total: number };
 }
 
 const toBase64 = (bytes: Uint8Array) => {
@@ -60,7 +62,8 @@ async function run(spec: ParityScene): Promise<ParityShot[]> {
         look,
         view: { px: v.px, W: v.W, H: v.H },
         frame: frame && { w: frame.w, h: frame.h, rgb: toBase64(frame.rgb) },
-        ms: performance.now() - t0
+        ms: performance.now() - t0,
+        upload: { ...rendererFor(canvas).lastUpload, total: Math.ceil(world.count / 512) }
       });
     }
   }

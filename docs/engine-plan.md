@@ -20,7 +20,7 @@ Fatos do código que moldam o plano:
 
 ## Como retomar em outro computador
 
-**Estado (2026-11-16):** etapas 0 a 3 concluídas. **Próximo passo: a Etapa 4** (Opus 5.5, com o trecho de ordenação e ossos no Fable 5.2). Os resultados medidos de cada etapa estão nas seções abaixo.
+**Estado (2026-11-16):** etapas 0 a 3 concluídas; da Etapa 4, a parte do Opus está feita. **Próximo passo: o trecho [FABLE] da Etapa 4** (ordenação fora da thread principal e ossos na GPU). Troque o modelo com `/model claude-fable-5-2` antes de pedir. Os resultados medidos de cada etapa estão nas seções abaixo.
 
 **Preparar a máquina** (Node 18 ou mais novo, Git, e o Microsoft Edge ou o Chrome para o teste de paridade):
 ```bash
@@ -130,7 +130,16 @@ Resultado (`npm run parity -- --min 99`, agora 60 casos: os 30 de antes em cada 
 - Limite herdado do `PixelLook.glsl`: no máximo 48 cores na paleta no modo `colored` (o renderizador dá um erro claro se passar).
 - Desempenho medido no Edge headless: `cabinet` a 56 fps no `colored` (60 no padrão); `farol` cai para 30 fps no `colored` (126 mil splats desenhados duas vezes, a segunda numa grade com 4× mais pixels). Fica para as etapas 4 e 11.
 
-### Etapa 4 — Mundo vivo na GPU · Opus 5.5, com um trecho **[FABLE]**
+### Etapa 4 — Mundo vivo na GPU · Opus 5.5, com um trecho **[FABLE]** · parte do Opus ✅ concluída, trecho [FABLE] pendente
+
+Resultado da parte do Opus:
+- `SplatRenderer.upload(world)` envia só o que mudou, seguindo o protocolo do kit (o mesmo que `ink-studio perf` mede): as linhas de 512 splats marcadas em `anim.rows` (e zera as marcas); sem marcas, o trecho `anim.start .. start + count`; em mundos com ossos, tudo, enquanto os ossos forem calculados na CPU.
+- O harness de paridade e a página ao vivo usam esse envio incremental. Assim, um sistema que escreva splats sem marcar a linha aparece como diferença na paridade. Resultado: **100% nos 60 casos**, com o modo `marked` confirmado (o harness agora imprime quantas linhas cada caso enviou).
+- `anim.kick` e `anim.zoom` já estavam em `src/render/view.ts` desde a Etapa 1.
+- Medido ao vivo no Edge headless (linhas enviadas por quadro, mediana / total): `farol` 23 / 247 a 60 fps, **8,1 ms de CPU por quadro (eram 16,7)**; `burn` 2 / 97; `idol` 4 / 153; `watcher` 27 / 220; `cabinet` 149 / 149 (ossos: tudo). `farol` no `colored` continua em ~32 fps com só 9,6 ms de CPU: o limite ali é a GPU (a segunda passada na grade 2×), não o envio.
+- Atenção para as etapas 5 e 7: `K.play.fx`/`K.play.debris` (kg-play) e `K.character` escrevem nos splats **sem marcar** `rows` (o jogo original envia o trecho deles por conta própria). Quem usar esses módulos precisa marcar as linhas do trecho deles a cada quadro.
+
+O que falta (o trecho **[FABLE]**):
 - Chamar `world.anim.update(dt, t)` por quadro e enviar só as linhas marcadas em `st.rows` (`texSubImage2D` por linha), zerando as marcas depois.
 - `anim.kick` (tremor de câmera) e `anim.zoom`.
 - **[FABLE]** Ordenação fora da thread principal: radix sort em Web Worker com reaproveitamento da ordem do quadro anterior, e a decisão de quando reordenar (câmera parada × splats se movendo). Também os ossos na GPU (`anim.bones`, 12 números por osso; a referência de comportamento é `K.bones.posed` em [src/kit/k1-stage.js](../src/kit/k1-stage.js)).

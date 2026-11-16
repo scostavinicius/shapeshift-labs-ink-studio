@@ -60,7 +60,7 @@ async function start(): Promise<void> {
     // a world left in a background tab is not walked through all the time it missed
     if (t - ((world as { clock?: number }).clock || 0) > 0.5) (world as { clock?: number }).clock = t - 1 / 60;
     poseAt(world, t, ink().KIT);
-    renderer.uploadAll(world);
+    renderer.upload(world);
     renderer.draw(
       world,
       makeView(world, { t, yaw: cam.yaw, pitch: cam.pitch, zoom: cam.zoom, w: canvas.clientWidth, h: canvas.clientHeight }),
@@ -71,8 +71,10 @@ async function start(): Promise<void> {
     if (now - since >= 500) {
       info.fps = Math.round((frames * 1000) / (now - since));
       info.frameMs = +(spent / frames).toFixed(1);
+      (info as Record<string, unknown>).upload = { ...renderer.lastUpload };
       status.textContent =
-        `${scene.name} (${scene.id})\n${world.count} splats · ${info.fps} fps · ${info.frameMs} ms a frame\n` +
+        `${scene.name} (${scene.id})\n${world.count} splats · ${info.fps} fps · ${info.frameMs} ms a frame · ` +
+        `${renderer.lastUpload.rows} of ${Math.ceil(world.count / 512)} rows sent (${renderer.lastUpload.mode})\n` +
         `look: ${look} (C to switch) · drag to turn · wheel to zoom`;
       frames = 0;
       spent = 0;
