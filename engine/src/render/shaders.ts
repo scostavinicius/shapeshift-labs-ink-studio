@@ -16,6 +16,8 @@ layout(location = 0) in vec2 a_corner;   // a unit quad: -1..1
 layout(location = 1) in uint a_index;    // which splat, in back-to-front order
 
 uniform sampler2D u_data;
+uniform sampler2D u_boneTex;   // 3 texels a bone: the rows of its 3x3 turn, each with that row's move in w
+uniform int u_nb;              // how many bones (0: none)
 uniform mat4 u_V;
 uniform vec2 u_size;      // the art grid: W, H
 uniform vec2 u_lim;       // limx, limy
@@ -50,6 +52,31 @@ void main() {
   int kraw = int(floor(d2.w + 0.5));
   int kind = kraw % 16, flags = kraw / 16;
   float ph = d3.x, sp = d3.y, rg = d3.z, ex = d3.w, t = u_t;
+  vec3 cv0 = d1.xyz, cv1 = d2.xyz;   // the covariance: c00 c01 c02, c11 c12 c22
+
+  // carried by a bone (KIT.bones): kept at rest in the data, put in place here as K.bones.posed does it on the CPU. Its
+  // place may be shared with a second bone; its shape follows the first. Then it is a plain splat again (12), or one
+  // that sways as grass and hair do (13).
+  if (kind == 12 || kind == 13) {
+    if (u_nb > 0) {
+      int k = int(ph + 0.5);
+      vec4 b0 = texelFetch(u_boneTex, ivec2(0, k), 0), b1 = texelFetch(u_boneTex, ivec2(1, k), 0), b2 = texelFetch(u_boneTex, ivec2(2, k), 0);
+      vec3 P = vec3(x, y, z);
+      vec3 np = vec3(dot(b0.xyz, P) + b0.w, dot(b1.xyz, P) + b1.w, dot(b2.xyz, P) + b2.w);
+      if (rg > 0.0) {
+        int q = int(sp + 0.5);
+        vec4 e0 = texelFetch(u_boneTex, ivec2(0, q), 0), e1 = texelFetch(u_boneTex, ivec2(1, q), 0), e2 = texelFetch(u_boneTex, ivec2(2, q), 0);
+        np += (vec3(dot(e0.xyz, P) + e0.w, dot(e1.xyz, P) + e1.w, dot(e2.xyz, P) + e2.w) - np) * rg;
+      }
+      mat3 At = mat3(b0.xyz, b1.xyz, b2.xyz);   // its columns are the rows of the turn A
+      mat3 S = mat3(cv0.x, cv0.y, cv0.z, cv0.y, cv1.x, cv1.y, cv0.z, cv1.y, cv1.z);
+      mat3 C2 = transpose(At) * S * At;         // A S A'
+      cv0 = vec3(C2[0][0], C2[1][0], C2[2][0]);
+      cv1 = vec3(C2[1][1], C2[2][1], C2[2][2]);
+      x = np.x; y = np.y; z = np.z;
+    }
+    if (kind == 13) { kind = 11; ph = 1.0; sp = 1.9; rg = 0.022; } else kind = 0;
+  }
 
   // where it is at this moment, and what it looks like
   if (kind == 1) al *= 0.62 + 0.38 * sin(t * sp + ph);
@@ -123,7 +150,7 @@ void main() {
   vec3 r1 = vec3(u_V[0][1], u_V[1][1], u_V[2][1]);
   vec3 r2 = vec3(u_V[0][2], u_V[1][2], u_V[2][2]);
   vec3 a = j00 * r0 + j02 * r2, b = j00 * r1 + j12 * r2;
-  float c00 = d1.x * s2, c01 = d1.y * s2, c02 = d1.z * s2, c11 = d2.x * s2, c12 = d2.y * s2, c22 = d2.z * s2;
+  float c00 = cv0.x * s2, c01 = cv0.y * s2, c02 = cv0.z * s2, c11 = cv1.x * s2, c12 = cv1.y * s2, c22 = cv1.z * s2;
   vec3 u = vec3(c00 * a.x + c01 * a.y + c02 * a.z, c01 * a.x + c11 * a.y + c12 * a.z, c02 * a.x + c12 * a.y + c22 * a.z);
   vec3 w = vec3(c00 * b.x + c01 * b.y + c02 * b.z, c01 * b.x + c11 * b.y + c12 * b.z, c02 * b.x + c12 * b.y + c22 * b.z);
   float A = dot(a, u) + 0.15, Bq = dot(b, u), C = dot(b, w) + 0.15, det = A * C - Bq * Bq;

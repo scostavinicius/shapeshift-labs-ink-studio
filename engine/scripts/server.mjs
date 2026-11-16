@@ -10,8 +10,8 @@ import { kitScript, sceneScript } from './kit.mjs';
 
 export const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-// one esbuild entry per page: /main.js and /parity.js
-const ENTRIES = { '/main.js': 'src/main.ts', '/parity.js': 'src/parity.ts' };
+// one esbuild entry per page, and the sort worker
+const ENTRIES = { '/main.js': 'src/main.ts', '/parity.js': 'src/parity.ts', '/sort-worker.js': 'src/render/sort-worker.ts' };
 const TYPES = { '.html': 'text/html', '.css': 'text/css', '.js': 'text/javascript', '.png': 'image/png' };
 
 /** Start the server. port 0 picks a free one. Resolves to { url, close }. */

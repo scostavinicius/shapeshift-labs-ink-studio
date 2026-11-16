@@ -14,12 +14,14 @@ export function start(world) {
 /**
  * Put the world at time t. A stateful world is walked there a sixtieth of a second at a time and can only go forward;
  * a stateless one is set straight to t. Splats carried by bones are put in place in a copy (world.data), the rest pose
- * being kept in world.rest, as the CLI does for its pictures.
+ * being kept in world.rest, as the CLI does for its pictures: unless o.bones is 'gpu', when the data is left at rest
+ * for a renderer that carries them itself (the engine's does; the reference renderer does not).
  * @param {import('../../types/ink-studio').World} world
  * @param {number} t
  * @param {import('../../types/ink-studio').Kit} K
+ * @param {{ bones?: 'cpu' | 'gpu' }} [o]
  */
-export function poseAt(world, t, K) {
+export function poseAt(world, t, K, o) {
   const anim = world.anim;
   if (!anim) return;
   const w = /** @type {any} */ (world);
@@ -32,7 +34,7 @@ export function poseAt(world, t, K) {
     }
   } else anim.update(1 / 60, t);
   w.clock = t;
-  if (anim.bones) {
+  if (anim.bones && !(o && o.bones === 'gpu')) {
     if (!w.rest) w.rest = world.data;
     world.data = K.bones.posed({
       data: w.rest,

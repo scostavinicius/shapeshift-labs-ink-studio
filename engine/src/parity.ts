@@ -49,7 +49,7 @@ async function run(spec: ParityScene): Promise<ParityShot[]> {
   const canvas = document.getElementById('view') as HTMLCanvasElement;
   const shots: ParityShot[] = [];
   for (const t of [...spec.times].sort((a, b) => a - b)) {
-    poseAt(world, t, ink().KIT);
+    poseAt(world, t, ink().KIT, { bones: 'gpu' });
     for (const look of spec.looks)
     for (const dy of spec.yaws) {
       const o = { t, yaw: world.cam.yaw + dy, w: spec.w, h: spec.h, look };

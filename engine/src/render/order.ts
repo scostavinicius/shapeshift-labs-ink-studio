@@ -2,8 +2,18 @@
 // motions that move it: the same arithmetic as the reference, in doubles), its depth in view space stored as a float32,
 // the "back" splats pushed to the farthest depth, then a stable sort by depth. The reference uses a stable comparison
 // sort; a least-significant-digit radix sort on the float bits is stable too, so ties come out in the same order.
-import type { World } from '../../types/ink-studio';
-import type { View } from './view';
+// Splats carried by bones are put in place first, as the shader does (and as K.bones.posed does on the CPU).
+
+/** What the sort needs of a world and of a view: plain data, so it can also run in a worker on a copy. */
+export interface SortWorld {
+  data: Float32Array;
+  count: number;
+  back?: Int32Array | null;
+}
+export interface SortView {
+  t: number;
+  V: ArrayLike<number>;
+}
 
 export interface OrderScratch {
   depth: Float32Array;
@@ -24,8 +34,11 @@ export function makeScratch(n: number): OrderScratch {
   };
 }
 
-/** Fill s.order with splat indices, farthest first. Returns s.order. */
-export function sortSplats(world: World, view: View, s: OrderScratch): Uint32Array {
+/**
+ * Fill s.order with splat indices, farthest first. Returns s.order.
+ * bones: 12 floats a bone (anim.bones) when the data holds bone-carried splats at rest; null when there are none.
+ */
+export function sortSplats(world: SortWorld, view: SortView, s: OrderScratch, bones: ArrayLike<number> | null = null): Uint32Array {
   const d = world.data,
     N = world.count,
     t = view.t,
@@ -40,12 +53,39 @@ export function sortSplats(world: World, view: View, s: OrderScratch): Uint32Arr
     let x = d[q],
       y = d[q + 1],
       z = d[q + 2];
-    const kind = Math.round(d[q + 11]) % 16;
+    let kind = Math.round(d[q + 11]) % 16;
     if (kind > 1) {
-      const ph = d[q + 12],
+      let ph = d[q + 12],
         sp = d[q + 13],
-        rg = d[q + 14],
-        ex = d[q + 15];
+        rg = d[q + 14];
+      const ex = d[q + 15];
+      if (kind === 12 || kind === 13) {
+        if (bones) {
+          const k = ph * 12,
+            x0 = x,
+            y0 = y,
+            z0 = z;
+          x = bones[k] * x0 + bones[k + 1] * y0 + bones[k + 2] * z0 + bones[k + 9];
+          y = bones[k + 3] * x0 + bones[k + 4] * y0 + bones[k + 5] * z0 + bones[k + 10];
+          z = bones[k + 6] * x0 + bones[k + 7] * y0 + bones[k + 8] * z0 + bones[k + 11];
+          if (rg > 0) {
+            const m = sp * 12;
+            x += (bones[m] * x0 + bones[m + 1] * y0 + bones[m + 2] * z0 + bones[m + 9] - x) * rg;
+            y += (bones[m + 3] * x0 + bones[m + 4] * y0 + bones[m + 5] * z0 + bones[m + 10] - y) * rg;
+            z += (bones[m + 6] * x0 + bones[m + 7] * y0 + bones[m + 8] * z0 + bones[m + 11] - z) * rg;
+          }
+          // (the reference keeps posed splats as float32 before it moves them further)
+          x = Math.fround(x);
+          y = Math.fround(y);
+          z = Math.fround(z);
+        }
+        if (kind === 13) {
+          kind = 11;
+          ph = 1;
+          sp = 1.9;
+          rg = 0.022;
+        } else kind = 0;
+      }
       if (kind === 2) {
         const f = (t * sp) / rg + ph;
         y -= (f - Math.floor(f)) * rg;

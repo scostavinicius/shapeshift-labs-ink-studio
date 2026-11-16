@@ -20,7 +20,7 @@ Fatos do código que moldam o plano:
 
 ## Como retomar em outro computador
 
-**Estado (2026-11-16):** etapas 0 a 3 concluídas; da Etapa 4, a parte do Opus está feita. **Próximo passo: o trecho [FABLE] da Etapa 4** (ordenação fora da thread principal e ossos na GPU). Troque o modelo com `/model claude-fable-5-2` antes de pedir. Os resultados medidos de cada etapa estão nas seções abaixo.
+**Estado (2026-11-16):** etapas 0 a 4 concluídas (todo o renderizador). **Próximo passo: a Etapa 5** (núcleo do jogo: loop de passo fixo, input, câmera, clique), com o Opus 5.5. Os resultados medidos de cada etapa estão nas seções abaixo.
 
 **Preparar a máquina** (Node 18 ou mais novo, Git, e o Microsoft Edge ou o Chrome para o teste de paridade):
 ```bash
@@ -35,6 +35,7 @@ O aviso de `allow-scripts` do esbuild no `npm install` pode ser ignorado: tudo f
 **Comandos** (na pasta `engine/`):
 - `npm run dev`: servidor em http://127.0.0.1:5173. Abra `/?file=showcase/farol.js` ou `/?scene=cabinet` (também `burn`, `idol`, `watcher`). Arrastar gira, a roda dá zoom, a tecla **C** alterna entre o estilo padrão e o `colored` (`&look=colored` já abre nele).
 - `npm test`: typecheck e testes.
+- `npm run live`: abre a página ao vivo no navegador headless, mede fps, tempo por quadro e linhas enviadas, e confere se a ordem do Worker é idêntica à calculada na página. Falha se houver diferença.
 - `npm run parity -- --min 99`: compara o renderizador da engine com o do terminal em 60 casos (os dois estilos) e falha se algum cair abaixo de 99%. As imagens ficam em `engine/test/parity/out/` (não vão para o git).
 - `npm test` na **raiz** do repositório roda os 171 testes do ink-studio; a engine não altera `src/`, `cli/`, nem `demos/`.
 
@@ -130,7 +131,7 @@ Resultado (`npm run parity -- --min 99`, agora 60 casos: os 30 de antes em cada 
 - Limite herdado do `PixelLook.glsl`: no máximo 48 cores na paleta no modo `colored` (o renderizador dá um erro claro se passar).
 - Desempenho medido no Edge headless: `cabinet` a 56 fps no `colored` (60 no padrão); `farol` cai para 30 fps no `colored` (126 mil splats desenhados duas vezes, a segunda numa grade com 4× mais pixels). Fica para as etapas 4 e 11.
 
-### Etapa 4 — Mundo vivo na GPU · Opus 5.5, com um trecho **[FABLE]** · parte do Opus ✅ concluída, trecho [FABLE] pendente
+### Etapa 4 — Mundo vivo na GPU · Opus 5.5, com um trecho **[FABLE]** · ✅ concluída
 
 Resultado da parte do Opus:
 - `SplatRenderer.upload(world)` envia só o que mudou, seguindo o protocolo do kit (o mesmo que `ink-studio perf` mede): as linhas de 512 splats marcadas em `anim.rows` (e zera as marcas); sem marcas, o trecho `anim.start .. start + count`; em mundos com ossos, tudo, enquanto os ossos forem calculados na CPU.
@@ -139,11 +140,13 @@ Resultado da parte do Opus:
 - Medido ao vivo no Edge headless (linhas enviadas por quadro, mediana / total): `farol` 23 / 247 a 60 fps, **8,1 ms de CPU por quadro (eram 16,7)**; `burn` 2 / 97; `idol` 4 / 153; `watcher` 27 / 220; `cabinet` 149 / 149 (ossos: tudo). `farol` no `colored` continua em ~32 fps com só 9,6 ms de CPU: o limite ali é a GPU (a segunda passada na grade 2×), não o envio.
 - Atenção para as etapas 5 e 7: `K.play.fx`/`K.play.debris` (kg-play) e `K.character` escrevem nos splats **sem marcar** `rows` (o jogo original envia o trecho deles por conta própria). Quem usar esses módulos precisa marcar as linhas do trecho deles a cada quadro.
 
-O que falta (o trecho **[FABLE]**):
-- Chamar `world.anim.update(dt, t)` por quadro e enviar só as linhas marcadas em `st.rows` (`texSubImage2D` por linha), zerando as marcas depois.
-- `anim.kick` (tremor de câmera) e `anim.zoom`.
-- **[FABLE]** Ordenação fora da thread principal: radix sort em Web Worker com reaproveitamento da ordem do quadro anterior, e a decisão de quando reordenar (câmera parada × splats se movendo). Também os ossos na GPU (`anim.bones`, 12 números por osso; a referência de comportamento é `K.bones.posed` em [src/kit/k1-stage.js](../src/kit/k1-stage.js)).
-- **Pronto quando:** paridade ≥ 95% em `burn`, `stuff` e `farol` nos instantes `t=2` e `t=5`; 60 fps com `farol` num notebook comum (medir com um contador de quadros na página).
+Resultado do trecho **[FABLE]**:
+- **Ossos na GPU.** Splats carregados por ossos (kinds 12 e 13) ficam em repouso nos dados; o shader os coloca no lugar a partir de `anim.bones` (textura de 3 texels por osso), com a mesma conta de `K.bones.posed`: posição pelo primeiro osso misturada com o segundo pelo peso, forma (covariância) pelo primeiro, e o kind 13 volta a balançar como grama. A ordenação faz a mesma conta. A página chama `poseAt(..., { bones: 'gpu' })`; a referência em Node continua posando na CPU, então a paridade do `cabinet` (36 mil splats em 23 ossos) valida a conta: **100%**, e ele passou a enviar **1 linha de 149 por quadro**.
+- **Ordenação num Web Worker** (`src/render/sort-worker.ts`, `src/render/sorter.ts`). O Worker mantém a própria cópia dos splats, atualizada pelas mesmas linhas que vão para a GPU, e faz a conta de profundidade e a ordenação inteiras fora da thread da página. A página só troca mensagens e usa a ordem mais nova que tiver (um ou dois quadros atrasada). Sem `useSortWorker`, o renderizador ordena em passo, que é exato: é o que o harness de paridade usa.
+- **Quando reordenar:** sempre que o Worker estiver livre. Como não custa nada à página, não vale a complexidade de detectar "nada mudou" (quase toda cena tem splats que se movem no shader com o tempo).
+- `npm run live` confere isso de verdade: em três instantes por cena, a ordem do Worker é **idêntica, elemento a elemento**, à ordenada na página, e as duas imagens são iguais. (A matriz da câmera vai para o Worker em 64 bits; em 32 bits, centenas de quase-empates trocavam de lugar.)
+- Tempo da thread da página por quadro, com Worker / sem (Edge headless, 60 fps em todas): `farol` **1,8 / 8,2 ms**; `cabinet` **1,0 / 5,5 ms**; `idol` 2,1 / 4,8; `burn` 5,1 / 7,8; `watcher` ~6 / ~8,7. A ordenação em si leva de 2 a 8 ms no Worker.
+- `farol` no `colored` segue em ~33 fps com 3,3 ms de CPU: o gargalo é a GPU (segunda passada na grade 2×), assunto da Etapa 11.
 
 ### Etapa 5 — Núcleo do jogo · Opus 5.5
 - Loop com passo fixo de 1/60 s (a simulação nunca depende do fps).

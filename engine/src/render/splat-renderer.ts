@@ -18,6 +18,7 @@ import {
   SPLATS_PER_ROW,
   WORKED_FS
 } from './shaders';
+import { WorkerSorter } from './sorter';
 import { finer, type View } from './view';
 
 const FLOATS_PER_ROW = DATA_WIDTH * 4;
@@ -28,6 +29,8 @@ export interface DrawOptions {
   /** the ordered-noise amount, as cli/render.js takes it (0.35 when not given) */
   dither?: number;
   look?: Look;
+  /** draw in this order (farthest first) instead of sorting: for checking an order made elsewhere */
+  order?: Uint32Array;
 }
 
 function compile(gl: WebGL2RenderingContext, type: number, src: string): WebGLShader {
@@ -82,7 +85,7 @@ export class SplatRenderer {
   /** true when colour and depth are kept in 32-bit floats (needs EXT_float_blend); otherwise 16-bit */
   readonly float32: boolean;
   private splat: Pass<
-    'u_data' | 'u_V' | 'u_size' | 'u_lim' | 'u_t' | 'u_focal' | 'u_near' | 'u_dist' | 'u_R' | 'u_fogCol' | 'u_fog' | 'u_grow'
+    'u_data' | 'u_boneTex' | 'u_nb' | 'u_V' | 'u_size' | 'u_lim' | 'u_t' | 'u_focal' | 'u_near' | 'u_dist' | 'u_R' | 'u_fogCol' | 'u_fog' | 'u_grow'
   >;
   private resolve: Pass<
     'u_color' | 'u_depth' | 'u_glass' | 'u_pal' | 'u_n' | 'u_dith' | 'u_bend' | 'u_ao' | 'u_edge' | 'u_line'
@@ -96,6 +99,12 @@ export class SplatRenderer {
   private indexBuf: WebGLBuffer;
   private dataTex: WebGLTexture;
   private palTex: WebGLTexture;
+  private boneTex: WebGLTexture;
+  private boneCount = 0;
+  private sorter: WorkerSorter | null = null;
+  private sorterVersion = -1;
+  /** how the last draw was ordered, and what sorting cost the page's own thread in milliseconds */
+  lastSort: { by: 'page' | 'worker' | 'given'; ms: number; workerMs: number } = { by: 'page', ms: 0, workerMs: 0 };
   private dataRows = 0;
   private padded: Float32Array | null = null;
   private scratch: OrderScratch | null = null;
@@ -118,7 +127,7 @@ export class SplatRenderer {
     this.gl = gl;
     this.float32 = !!gl.getExtension('EXT_float_blend');
     this.splat = this.pass(SPLAT_VS, SPLAT_FS, [
-      'u_data', 'u_V', 'u_size', 'u_lim', 'u_t', 'u_focal', 'u_near', 'u_dist', 'u_R', 'u_fogCol', 'u_fog', 'u_grow'
+      'u_data', 'u_boneTex', 'u_nb', 'u_V', 'u_size', 'u_lim', 'u_t', 'u_focal', 'u_near', 'u_dist', 'u_R', 'u_fogCol', 'u_fog', 'u_grow'
     ] as const);
     this.resolve = this.pass(SCREEN_VS, RESOLVE_FS, [
       'u_color', 'u_depth', 'u_glass', 'u_pal', 'u_n', 'u_dith', 'u_bend', 'u_ao', 'u_edge', 'u_line'
@@ -142,6 +151,35 @@ export class SplatRenderer {
 
     this.dataTex = this.texture();
     this.palTex = this.texture();
+    this.boneTex = this.texture();
+  }
+
+  /**
+   * Sort in a worker from now on (url: the built sort-worker script). The page's thread then only passes messages; the
+   * order drawn is a frame or two behind. Without this, every draw sorts in step, which is exact.
+   */
+  useSortWorker(url: string): WorkerSorter {
+    if (this.sorter) this.sorter.dispose();
+    this.sorter = new WorkerSorter(url);
+    this.sorterVersion = -1;
+    if (this.uploaded && this.padded) this.sorter.init(this.padded, this.uploaded.count, this.uploaded.world.back);
+    return this.sorter;
+  }
+
+  /** The bones (anim.bones: 12 floats each, a 3x3 turn by rows then a move) as a texture 3 wide: a row a bone. */
+  private uploadBones(world: World): void {
+    const gl = this.gl,
+      m = world.anim && world.anim.bones;
+    this.boneCount = m ? m.length / 12 : 0;
+    if (!m) return;
+    const px = new Float32Array(this.boneCount * 12);
+    for (let b = 0; b < this.boneCount; b++) {
+      const k = b * 12;
+      px.set([m[k], m[k + 1], m[k + 2], m[k + 9], m[k + 3], m[k + 4], m[k + 5], m[k + 10], m[k + 6], m[k + 7], m[k + 8], m[k + 11]], k);
+    }
+    gl.bindTexture(gl.TEXTURE_2D, this.boneTex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, 3, this.boneCount, 0, gl.RGBA, gl.FLOAT, px);
   }
 
   private pass<K extends string>(vs: string, fs: string, names: readonly K[]): Pass<K> {
@@ -218,12 +256,13 @@ export class SplatRenderer {
     } else gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, 0, DATA_WIDTH, rows, gl.RGBA, gl.FLOAT, this.padded);
     this.uploaded = { world, count: world.count };
     this.lastUpload = { rows, mode: 'all' };
+    if (this.sorter) this.sorter.init(this.padded, world.count, world.back);
     const marks = world.anim && world.anim.rows;
     if (marks) marks.fill(0);
   }
 
   /** what upload() last sent: how many rows of 512 splats, and why */
-  lastUpload: { rows: number; mode: 'all' | 'marked' | 'span' | 'bones' } = { rows: 0, mode: 'all' };
+  lastUpload: { rows: number; mode: 'all' | 'marked' | 'span' } = { rows: 0, mode: 'all' };
   private uploaded: { world: World; count: number } | null = null;
 
   /**
@@ -231,18 +270,13 @@ export class SplatRenderer {
    *   - the first time, or for another world: everything
    *   - a world whose anim marks rows (anim.rows, one flag per 512 splats): those rows, and the flags are cleared
    *   - a world whose anim has no marks: its moving span, anim.start .. anim.start + anim.count, every time
-   *   - a world on bones: everything, while bones are worked on the CPU (world.data is a posed copy each frame)
-   * A world without anim never changes after its first upload.
+   * A world without anim never changes after its first upload. Splats carried by bones stay at rest in the data (the
+   * shader puts them in place from anim.bones), so a creature of tens of thousands of splats sends nothing.
    */
   upload(world: World): void {
     const a = world.anim;
     if (!this.uploaded || this.uploaded.world !== world || this.uploaded.count !== world.count) return this.uploadAll(world);
     if (!a) return void (this.lastUpload = { rows: 0, mode: 'marked' });
-    if (a.bones) {
-      this.uploadAll(world);
-      this.lastUpload.mode = 'bones';
-      return;
-    }
     const gl = this.gl,
       data = world.data,
       len = world.count * 16,
@@ -250,11 +284,13 @@ export class SplatRenderer {
     gl.bindTexture(gl.TEXTURE_2D, this.dataTex);
     gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
     let sent = 0;
+    const changed: number[] = [];
     // one row: the floats of its 512 splats into the mirror (the last row is short), then that row of the texture
     const send = (r: number) => {
       const o = r * FLOATS_PER_ROW;
       padded.set(data.subarray(o, Math.min(o + FLOATS_PER_ROW, len)), o);
       gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, r, DATA_WIDTH, 1, gl.RGBA, gl.FLOAT, padded, o);
+      changed.push(r);
       sent++;
     };
     const marks = a.rows;
@@ -272,6 +308,7 @@ export class SplatRenderer {
         send(r);
       this.lastUpload = { rows: sent, mode: 'span' };
     }
+    if (this.sorter) this.sorter.rows(changed, padded, FLOATS_PER_ROW);
   }
 
   // the palette as a texture of two rows: the colours a pixel is matched against, and under each the colour that is
@@ -331,6 +368,11 @@ export class SplatRenderer {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.dataTex);
     gl.uniform1i(u.u_data, 0);
+    gl.activeTexture(gl.TEXTURE1);
+    gl.bindTexture(gl.TEXTURE_2D, this.boneTex);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.uniform1i(u.u_boneTex, 1);
+    gl.uniform1i(u.u_nb, this.boneCount);
     gl.uniformMatrix4fv(u.u_V, false, view.V);
     gl.uniform2f(u.u_size, W, H);
     gl.uniform2f(u.u_lim, (1.3 * 0.5 * W) / view.focal, (1.3 * 0.5 * H) / view.focal);
@@ -380,11 +422,38 @@ export class SplatRenderer {
     this.H = H;
     this.out = this.target(this.out, W, H);
     this.scene = this.sceneTargets(this.scene, W, H);
-    if (!this.scratch || this.scratch.order.length !== N) this.scratch = makeScratch(N);
-    // (one order serves both grids of the colored look: depth depends only on the camera, which they share)
-    const order = sortSplats(world, view, this.scratch);
-    gl.bindBuffer(gl.ARRAY_BUFFER, this.indexBuf);
-    gl.bufferData(gl.ARRAY_BUFFER, order, gl.DYNAMIC_DRAW);
+    this.uploadBones(world);
+    // ---- the order (one serves both grids of the colored look: depth depends only on the camera, which they share)
+    const bones = (world.anim && world.anim.bones) || null,
+      began = performance.now(),
+      sorter = this.sorter;
+    let order: Uint32Array | null = null,
+      by: 'page' | 'worker' | 'given' = 'page';
+    if (o.order) {
+      order = o.order;
+      by = 'given';
+      this.sorterVersion = -1;
+    } else if (sorter) {
+      sorter.request(view.t, view.V, bones);
+      by = 'worker';
+      if (sorter.order && sorter.order.length === N) {
+        // the newest the worker has made: sent to the graphics card only when it is new
+        if (sorter.version !== this.sorterVersion) {
+          order = sorter.order;
+          this.sorterVersion = sorter.version;
+        }
+      } else by = 'page'; // nothing from the worker yet: sort this once here
+    }
+    if (by === 'page') {
+      if (!this.scratch || this.scratch.order.length !== N) this.scratch = makeScratch(N);
+      order = sortSplats(world, view, this.scratch, bones);
+      this.sorterVersion = -1;
+    }
+    if (order) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.indexBuf);
+      gl.bufferData(gl.ARRAY_BUFFER, order, gl.DYNAMIC_DRAW);
+    }
+    this.lastSort = { by, ms: performance.now() - began, workerMs: sorter ? sorter.ms : 0 };
     this.drawn = N;
     this.splatPass(world, view, this.scene);
 

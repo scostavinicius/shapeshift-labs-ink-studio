@@ -8,7 +8,8 @@
     "build": "node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && node --test test/*.test.mjs",
-    "parity": "node test/parity/run.mjs"
+    "parity": "node test/parity/run.mjs",
+    "live": "node test/live/run.mjs"
   },
   "license": "UNLICENSED",
   "engines": {
