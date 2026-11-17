@@ -6,6 +6,8 @@ import { Core } from '../core/core';
 import type { InputState, Sample, StepInput } from '../core/input';
 import { buildLevel, hideSlot, markSlot, type Level, type SceneFn, type Slot } from './level';
 import { Dice } from './rng';
+import { Combat } from './combat';
+import { effectOptions, GameEffects } from './effects';
 import type { Actor, Brain, Collision, Entity, Game, GameDef, Prop, Snapshot, Trigger } from './types';
 
 /** A game definition, typed. (Nothing more: it is there so an editor knows what goes where.) */
@@ -47,6 +49,7 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
   const level = dice.during(K, () => buildLevel(def, ink, o.scene, seed));
   const world: World = level.world;
   const collision: Collision = level.collision;
+  const combat = def.combat === false ? null : new Combat(def.combat || {});
 
   const entities: Entity[] = [];
   let nextId = 1;
@@ -77,6 +80,8 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
       })
   );
 
+  const effects = level.pools ? new GameEffects(effectOptions(def.effects)!, level.pools, world, collision, a => slotOf.get(a.id)) : null;
+
   const game: RunningGame<State> = {
     def,
     world,
@@ -85,6 +90,7 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
     collision,
     level,
     built: level.built,
+    effects,
     get entities() {
       return entities;
     },
@@ -134,6 +140,11 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
         face: ch.st.face,
         radius: def0.radius ?? 0.3,
         hp: ch.st.hp,
+        team: a.team || ((a.brain || 'player') === 'player' ? 'player' : 'enemy'),
+        damage: def0.damage ?? 1,
+        invuln: 0,
+        deadFor: -1,
+        home: [ch.st.x, ch.st.y, ch.st.z],
         input: { ...NO_INPUT }
       };
       actor.pos = [ch.st.x, ch.st.y, ch.st.z];
@@ -172,6 +183,9 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
     byTag(tag: string) {
       return entities.filter(e => e.alive && e.tags.includes(tag));
     },
+    get events() {
+      return events;
+    },
     emit(name: string, data?: unknown) {
       events.push(data === undefined ? { name } : { name, data });
     },
@@ -193,6 +207,8 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
             data: JSON.parse(JSON.stringify(e.data))
           };
           if (e.type === 'actor') {
+            out.team = e.team;
+            out.invuln = e.invuln;
             out.hp = e.ch.st.hp;
             out.face = e.ch.st.face;
             out.ground = !!e.ch.st.ground;
@@ -267,10 +283,11 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
         a.hp = a.ch.st.hp;
       }
       // 3. actors push each other apart (half each), never into a wall
-      for (let i = 0; i < actors.length; i++)
-        for (let j = i + 1; j < actors.length; j++) {
-          const a = actors[i],
-            b = actors[j],
+      const standing = actors.filter(a => a.deadFor < 0);
+      for (let i = 0; i < standing.length; i++)
+        for (let j = i + 1; j < standing.length; j++) {
+          const a = standing[i],
+            b = standing[j],
             dx = b.pos[0] - a.pos[0],
             dz = b.pos[2] - a.pos[2],
             min = a.radius + b.radius;
@@ -288,6 +305,8 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
             e.ch.st.z = e.pos[2] = nz;
           }
         }
+      // 3b. blows land, the dead fall, the player comes back
+      combat?.step(game, actors, dt, effects);
       // 4. triggers
       for (const tr of now) {
         if (tr.type !== 'trigger' || !tr.alive) continue;
@@ -306,6 +325,8 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
       for (const p of now) if (p.type === 'prop' && p.alive) p.update?.(p, game, dt);
       // 6. the rules
       def.step?.(game, dt);
+      // 6b. the effects move on
+      effects?.step(dt);
       // 7. what the characters wrote this step goes to the graphics card
       const rows = world.anim && world.anim.rows;
       for (const e of entities) if (e.type === 'actor' && e.alive) markSlot(rows, slotOf.get(e.id)!);
@@ -362,7 +383,7 @@ function hashGame(world: World, entities: readonly Entity[], state: unknown, dic
     JSON.stringify({
       state: state ?? null,
       dice,
-      e: entities.map(e => [e.id, e.type, e.kind, e.alive, e.pos, e.data, e.type === 'actor' ? [e.ch.st.hp, e.ch.st.face, e.ch.st.vx, e.ch.st.vy, e.ch.st.vz] : 0])
+      e: entities.map(e => [e.id, e.type, e.kind, e.alive, e.pos, e.data, e.type === 'actor' ? [e.ch.st.hp, e.ch.st.face, e.ch.st.vx, e.ch.st.vy, e.ch.st.vz, e.invuln, e.deadFor, e.team] : 0])
     })
   );
   return h.hex();

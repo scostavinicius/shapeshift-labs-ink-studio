@@ -82,10 +82,11 @@ export interface ParityGame {
   h: number;
 }
 
-async function game(spec: ParityGame) {
+async function game(spec: ParityGame & { hashEachStep?: boolean }) {
   const { def, scene } = await loadGame(spec.game);
   const script = await (await fetch('/examples/' + spec.input)).json();
-  const { game: g } = runHeadless(def, ink(), scene, script, spec.t, { bones: 'gpu' });
+  const { game: g, hashes } = runHeadless(def, ink(), scene, script, spec.t, { bones: 'gpu', hashEachStep: spec.hashEachStep });
+  if (spec.hashEachStep) return { hashes, ...partsOf(g) };
   const canvas = document.getElementById('view') as HTMLCanvasElement;
   const shots = spec.looks.map(look => {
     const o = { t: g.t, ...g.core.camera.view(), w: spec.w, h: spec.h, look };
@@ -94,6 +95,28 @@ async function game(spec: ParityGame) {
     return { look, view: { px: v.px, W: v.W, H: v.H }, frame: { w: frame.w, h: frame.h, rgb: toBase64(frame.rgb) } };
   });
   return { hash: g.hash(), steps: g.steps, player: g.player && g.player.pos, shots };
+}
+
+/** a game taken apart for finding where two runs differ: a checksum of each stretch of splats, and the entities */
+export function partsOf(g: { world: World; level: any; entities: readonly any[]; diceState(): number[] }) {
+  const D = g.world.data,
+    sum = (a: number, b: number) => {
+      let h = 0;
+      const u = new Uint32Array(D.buffer, D.byteOffset + a * 64, (b - a) * 16);
+      for (let i = 0; i < u.length; i++) h = (Math.imul(h, 31) + u[i]) >>> 0;
+      return h;
+    };
+  const marks: [string, number, number][] = [];
+  const first = Math.min(...g.level.slots.map((s: any) => s.at), ...g.level.reserved.map((r: any) => r.at), g.world.count);
+  marks.push(['scene', 0, first]);
+  g.level.slots.forEach((s: any, k: number) => marks.push(['slot' + k, s.at, s.at + s.total]));
+  g.level.reserved.forEach((r: any, k: number) => marks.push(['reserved' + k, r.at, r.at + r.total]));
+  return {
+    parts: marks.map(([n, a, b]) => [n, sum(a, b)]),
+    dice: g.diceState(),
+    entities: JSON.stringify(g.entities.map(e => [e.id, e.alive, e.pos, e.data, e.type === 'actor' ? [e.ch.st.hp, e.ch.st.face, e.invuln, e.deadFor] : 0])),
+    st: g.entities.map(e => (e.type === 'actor' ? Object.entries(e.ch.st).filter(([, v]) => typeof v === 'number') : []))
+  };
 }
 
 (window as unknown as { PARITY: unknown }).PARITY = { run, game, ready: true };

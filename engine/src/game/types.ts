@@ -91,6 +91,60 @@ export interface ActorDef {
   /** body radius for actors pushing each other apart (default 0.3) */
   radius?: number;
   hp?: number;
+  /** what one of its blows takes off (default 1) */
+  damage?: number;
+}
+
+// ---------------------------------------------------------------------------------------------------------- combat
+
+/**
+ * Fighting (stage 7): a blow lands while the attacker's K.character says it is striking, on anyone of another team in
+ * reach and in front of it; each swing lands once on each target. A hit takes `damage` off, throws the target back
+ * (ch.hurt) and leaves it unhittable for `invuln` seconds. At 0 hp an actor dies: an enemy goes to pieces and is gone; the
+ * player comes back at its spawn after `respawn` seconds. Events: 'hit' { by, target, damage, hp }, 'death' { id, kind,
+ * team, by, at }, 'respawn' { id }.
+ */
+export interface CombatOptions {
+  /** seconds a hit actor cannot be hit again (default 0.6) */
+  invuln?: number;
+  /** how wide the swing is: a target must be within this many degrees of where the attacker faces (default 70) */
+  arc?: number;
+  /** seconds before a dead player stands up again at its spawn, or false for never (default 1.5) */
+  respawn?: number | false;
+  /** the spawn point a dead player comes back at (default: where it was first spawned) */
+  respawnAt?: string;
+  /** how hard a blow throws its target, as a factor on the kit's own knockback (default 1) */
+  knock?: number;
+}
+
+/**
+ * Effects of the kit, made for the game when asked for (def.effects): pools of splats set aside at build time and stepped
+ * by the engine. fx: sparks, rings, flashes (K.play.fx). debris: pieces that fly and land (K.play.debris). eco: what the
+ * ground remembers (K.play.eco): burnt, burning and frozen ground, painted onto the ground's own splats.
+ */
+export interface EffectsOptions {
+  /** splats for sparks and rings (default 400; 0 for none) */
+  fx?: number;
+  /** splats for pieces (default 800; 0 for none) */
+  debris?: number;
+  /** the ground's memory (default true) */
+  eco?: boolean;
+  /** how readily the ground burns where there is ground, 0..1 (default 0.5; under 0.05 nothing burns) */
+  fuel?: number;
+  /** the weather the ground's memory runs in: rain 0..1 slows fire and (above 0.7) puts it out; winter > 0.5 frosts it */
+  weather?: { rain?: number; winter?: number };
+}
+
+export interface Effects {
+  fx: any | null;
+  debris: any | null;
+  eco: any | null;
+  /** set the ground at (x, z) burning, radius r (what can burn is the ground of the level) */
+  ignite(x: number, z: number, r: number): void;
+  /** frost the ground at (x, z), radius r, for dur seconds */
+  freeze(x: number, z: number, r: number, dur: number): void;
+  /** throw an actor's body to pieces from where it stands */
+  shatter(a: Actor, power?: number): void;
 }
 
 /**
@@ -126,6 +180,16 @@ export interface Actor extends EntityBase {
   face: number;
   radius: number;
   hp: number;
+  /** blows land only on actors of another team ('player' for the player's brain, 'enemy' otherwise, unless given) */
+  team: string;
+  /** what one of its blows takes off */
+  damage: number;
+  /** seconds left in which it cannot be hit */
+  invuln: number;
+  /** seconds since it died, or -1 while alive */
+  deadFor: number;
+  /** where it came back to life (its first spawn, or combat.respawnAt) */
+  home: Vec3;
   /** the input it was given this step (for tests and for other brains to read) */
   input: StepInput;
 }
@@ -177,6 +241,10 @@ export interface GameDef<State = unknown> {
   /** named places. Give y as null to stand it on the ground there. */
   spawns?: Record<string, [number, number | null, number]>;
   camera?: CameraOptions;
+  /** fighting between actors (default on; false for a game with none) */
+  combat?: CombatOptions | false;
+  /** the kit's effects, made for the game (default none) */
+  effects?: EffectsOptions | true;
   /**
    * more splats to reserve before the world is finished (K.play.fx, K.pool ...): what it returns is game.built, for
    * init() and step() to use (the effects pool, say)
@@ -200,6 +268,8 @@ export interface Game<State = unknown> {
   state: State;
   /** what def.build() returned (objects of the kit: not part of snapshots) */
   readonly built: Record<string, unknown>;
+  /** the kit's effects, when def.effects asked for them */
+  readonly effects: Effects | null;
   /** simulation time in seconds, and steps run */
   readonly t: number;
   readonly steps: number;
@@ -207,7 +277,7 @@ export interface Game<State = unknown> {
   rng(): number;
   /** a named spawn point, with y resolved */
   place(name: string): Vec3;
-  spawnActor(o: { actor: string; kind?: string; at: Vec3 | string; brain?: 'player' | Brain; tags?: string[]; face?: number }): Actor;
+  spawnActor(o: { actor: string; kind?: string; at: Vec3 | string; brain?: 'player' | Brain; tags?: string[]; face?: number; team?: string }): Actor;
   spawnTrigger(o: { kind?: string; at: Vec3 | string; shape: Trigger['shape']; watch?: string[]; onEnter?: Trigger['onEnter']; onLeave?: Trigger['onLeave'] }): Trigger;
   spawnProp(o: { kind: string; at: Vec3 | string; tags?: string[]; update?: Prop['update'] }): Prop;
   /** takes it off stage (an actor goes back to its pool, hidden) */
@@ -217,6 +287,8 @@ export interface Game<State = unknown> {
   readonly player: Actor | null;
   /** an event for whoever is listening (the HUD, the sound, a test): events are also kept in the snapshot of the step */
   emit(name: string, data?: unknown): void;
+  /** what has been emitted so far in this step (the last step's, between steps) */
+  readonly events: readonly { name: string; data?: unknown }[];
   /** the game as plain data: what a test asserts on, what `shot --state` writes */
   snapshot(): Snapshot<State>;
   /** a number that changes if anything in the simulation does: the splats, the entities, the dice */
@@ -238,6 +310,8 @@ export interface Snapshot<State = unknown> {
     alive: boolean;
     data: Record<string, unknown>;
     /** actors only */
+    team?: string;
+    invuln?: number;
     hp?: number;
     face?: number;
     ground?: boolean;

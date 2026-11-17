@@ -20,7 +20,7 @@ Fatos do código que moldam o plano:
 
 ## Como retomar em outro computador
 
-**Estado (2026-11-16):** etapas 0 a 6 concluídas (renderizador, núcleo do jogo, modelo de jogo com colisão, determinismo e modo sem navegador). **Próximo passo: a Etapa 7** (combate e inimigos), com o Opus 5.5. Os resultados medidos de cada etapa estão nas seções abaixo. Os resultados medidos de cada etapa estão nas seções abaixo.
+**Estado (2026-11-16):** etapas 0 a 7 concluídas (renderizador, núcleo do jogo, modelo de jogo com colisão, determinismo e modo sem navegador, combate e inimigos). **Pendente antes da Etapa 8:** decidir o que fazer com o determinismo entre versões diferentes do V8 (ver "Resultado" da Etapa 7). **Próximo passo depois disso: a Etapa 8** (HUD, áudio e save), com o Opus 5.5. Os resultados medidos de cada etapa estão nas seções abaixo. Os resultados medidos de cada etapa estão nas seções abaixo.
 
 **Preparar a máquina** (Node 18 ou mais novo, Git, e o Microsoft Edge ou o Chrome para o teste de paridade):
 ```bash
@@ -36,6 +36,7 @@ O aviso de `allow-scripts` do esbuild no `npm install` pode ser ignorado: tudo f
 - `npm run dev`: servidor em http://127.0.0.1:5173. Abra `/?file=showcase/farol.js` ou `/?scene=cabinet` (também `burn`, `idol`, `watcher`). Arrastar gira, a roda dá zoom, clicar toca a cena, WASD/setas (ou o analógico esquerdo) movem o ponto que a câmera segue (Shift corre), a tecla **C** alterna entre o estilo padrão e o `colored` (`&look=colored` já abre nele).
 - `/?game=farol-walk`: um jogo (`engine/examples/<nome>/game.ts`) jogado no navegador; `&input=farol-walk/walk.json&t=6` roda o roteiro até 6 s como a CLI e para o relógio.
 - `node cli.js shot farol-walk --input examples/farol-walk/walk.json --t 6 [--out q.png] [--state estado.json] [--colored]`: o mesmo jogo sem navegador; grava o PNG em `engine/out/` e termina com uma linha JSON `{ png, state, hash, t, steps }`.
+- `/?game=farol-fight` ou `node cli.js shot farol-fight --input examples/farol-fight/fight.json --t 8.3`: a luta (J golpeia).
 - `npm test`: typecheck e testes.
 - `npm run live`: abre a página ao vivo no navegador headless, mede fps, tempo por quadro e linhas enviadas, e confere se a ordem do Worker é idêntica à calculada na página. Depois testa o núcleo do jogo com o mouse de verdade (arrastar o `farol`, clicar no `idol`; só essa parte: `npm run live -- --only core`). Falha se algo der errado.
 - `npm run parity -- --min 99`: compara o renderizador da engine com o do terminal em 60 casos (os dois estilos) e falha se algum cair abaixo de 99%. As imagens ficam em `engine/test/parity/out/` (não vão para o git).
@@ -199,13 +200,30 @@ O que a Etapa 7 precisa saber:
 - O `respawn` do `K.character` procura chão só até 6 unidades abaixo de y = 7; o `spawnActor` corrige a altura logo depois, com o chão do ponto de spawn.
 - Efeitos do kit que reservam splats (`K.play.fx`, `K.play.debris`) entram por `build(ctx)` com `ctx.reserve(() => K.play.fx(ctx.B, n))`: a engine liga ao mundo e marca as linhas a cada passo; o objeto fica em `game.built`.
 - O `farol` + 1 personagem constrói em ~1,1 s (a cena sozinha leva ~0,95 s; a colisão, 0,05 s).
-- Os testes de determinismo constroem o `farol` seis vezes: `npm test` passou a levar ~45 s.
+- Os testes de determinismo constroem o `farol` várias vezes: o `npm test` da engine leva ~20 s.
 - **[FABLE]** Definir a API de jogo: como se declara um nível (função `build` que devolve mundo + stage + pontos de spawn), entidades (jogador, inimigo, objeto, gatilho), e o contrato de determinismo (mesma seed + mesmo roteiro de input = mesmo resultado, usando `K.seed`/`K.rnd`, nunca `Math.random`).
 - **[FABLE]** Colisão: na construção do nível, cozinhar `S.sdf`/`S.heightAt` numa grade (mapa de altura + células bloqueadas) e expor `world.height(x, z, y)` para o `K.character`.
 - Modo sem navegador: `engine/src/headless` roda o mesmo loop no Node com input roteirizado e desenha com `cli/render.js`. Comando: `node engine/cli.js shot <jogo> --input roteiro.json --t 5 --out quadro.png`.
 - **Pronto quando:** um personagem `K.character` anda sobre a ilha do `farol` sem atravessar o farol nem cair fora da borda; o comando `shot` gera o mesmo quadro duas vezes seguidas (byte a byte) e esse quadro bate ≥ 95% com o navegador.
 
-### Etapa 7 — Combate e inimigos · Opus 5.5
+### Etapa 7 — Combate e inimigos · Opus 5.5 · ✅ concluída
+
+Resultado (`engine/src/game/combat.ts`, `brains.ts`, `effects.ts`; exemplo `engine/examples/farol-fight/` com o roteiro `fight.json`):
+- **O que o kit faz e o que ficou com a engine.** O `K.character` sabe golpear (`ch.striking()`) e apanhar (`ch.hurt(kx, kz)`: arremesso, piscar, −1 de vida), mas não decide quem acerta quem. Ele **não** marca `st.connected` (então um golpe acertaria a cada passo da janela de golpe) e o `hurt` **não** checa invencibilidade. Os dois ficaram com o `Combat`.
+- **Regras (`def.combat`, ligado por padrão):** um golpe acerta atores de outro time (`team`: `'player'` para o cérebro do jogador, `'enemy'` para os outros, ou o que o `spawnActor` disser), dentro do alcance (`spec.reach` do atacante + o raio do alvo) e de um arco de 70° à frente; cada golpe acerta cada alvo uma vez. Dano por ator (`ActorDef.damage`), invencibilidade de 0,6 s, knockback do próprio kit. Com 0 de vida o ator morre mesmo sem `spec.mortal`: um inimigo vira pedaços (`debris`) e sai de cena (o lugar dele no pool fica livre); o jogador se levanta no ponto de spawn 1,5 s depois. Eventos: `hit`, `death` (com a posição `at`), `respawn`; `game.events` lista os do passo.
+- **Inimigos (`chaser()`):** um cérebro que persegue o adversário mais próximo que **vê** (`collision.clear`: uma parede esconde o jogador), golpeia quando está ao alcance e esfriou, recua um pouco e volta. Tudo o que ele lembra fica em `self.data.brain` (dados simples: entram no snapshot e no hash); o ritmo varia com `game.rng()`. O `K.anim.steer` do plano não foi preciso: o cérebro devolve o mesmo `StepInput` do jogador, e o `K.character` já cuida de andar e virar.
+- **Efeitos (`def.effects`):** `fx` (faíscas no golpe, anel na morte), `debris` (o corpo do inimigo em pedaços) e `eco` (o chão que queima ou congela e **guarda a marca**). O `eco` guarda a memória numa textura feita para o shader do jogo original, que o nosso renderizador não lê: a engine **repinta os splats do chão** com um *painter* do stage, só nas células que mudaram. O fogo do kit se espalha até ~14 células; `effects.weather.rain` (usado no exemplo: 0,6) contém o incêndio, e `effects.fuel` diz o quanto o chão queima.
+
+Medido:
+- **Pronto quando (cumprido):** `test/combat.test.mjs` roda a luta roteirizada do `farol-fight` sem navegador e confere **no estado e nos eventos**: os inimigos acertam o jogador (vida 5 → 4 → 3 → 2 → 1 → 0), ele morre aos 5,58 s e volta aos 7,08 s com vida 5, mata os dois inimigos (7,93 s e 10,10 s), `state.kills = 2`, `won = true`, só o jogador fica em cena, e o chão continua queimado onde cada inimigo caiu.
+- Mais 4 testes de regras numa cena plana: alcance e arco (só quem está à frente leva), um acerto por golpe, invencibilidade, times, morte e volta do jogador, o inimigo que não vê através do pilar, e a marca do fogo nos splats do chão (mais de 80% repintados, nada mudou longe dali, e a marca fica).
+- A mesma luta duas vezes: os mesmos eventos, golpe a golpe, e o mesmo `hash`.
+- `npm run parity`: a luta aos 8,3 s (pedaços no ar, chão em brasa) dá **100%** de paridade no navegador, nos dois estilos.
+- `npm run live`: no `?game=farol-fight`, ao vivo, os inimigos vêm, acertam o jogador, o jogador mata um deles com J; 180 fps, 0,6 ms de CPU por quadro.
+
+**Achado que muda o contrato de determinismo da Etapa 6.** O `hash` da luta no Edge **difere** do Node, embora as imagens batam 100%. A causa: **o Node 24 (V8 13.6) e o Edge 157 arredondam diferente o último bit** de `Math.sin`, `cos`, `tan`, `atan`, `atan2`, `asin`, `acos`, `exp`, `log`, `cbrt`, `sinh`, `tanh` e outras (de 3% a 18% das entradas, medido em 20 mil por função); só `pow`, `hypot` e `sqrt` batem. No `farol-walk` o `hash` bateu por sorte (os splats são `Float32` e engolem diferenças de 1 ulp); na luta, o ângulo dos inimigos (`atan2`) diverge no passo 6. O que continua valendo: no **mesmo** motor e versão (todos os testes em Node, ou a mesma versão do navegador), mesma seed + mesmo roteiro = mesmo jogo, bit a bit. O que não vale: gravar uma partida num navegador e garantir o mesmo resultado no Node de outra versão do V8. O harness de paridade agora mostra o `hash` diferente como observação explicada, e a imagem continua sendo o critério. **Decisão pendente** (ver "Como retomar"): aceitar o limite, ou trocar as funções do `Math` por versões em JavaScript puro durante o passo (como já se faz com `Math.random`), o que dá o mesmo bit em qualquer motor, ao custo de algum desempenho.
+
+Plano original:
 - Vida, dano, invencibilidade curta, knockback (`ch.hurt`), morte e respawn.
 - Acerto de ataque usando `ch.striking()`.
 - Inimigos simples (perseguir, atacar, recuar) usando `K.character` ou `K.creature` e `K.anim.steer`.

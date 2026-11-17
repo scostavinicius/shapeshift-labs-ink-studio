@@ -5,6 +5,7 @@
 import type { Builder, Ink, Scene, Sculpt, World } from '../../types/ink-studio';
 import { CollisionBuilder, makeCollision, splatBox, type BakeStats } from './collision';
 import type { Collision, GameDef } from './types';
+import { effectOptions, GameEffects, reservePools, type EffectPools } from './effects';
 
 /** One character of an actor pool, made at build time. */
 export interface Slot {
@@ -27,6 +28,8 @@ export interface Level {
   reserved: { at: number; total: number }[];
   /** what def.build returned */
   built: Record<string, unknown>;
+  /** the effect pools def.effects asked for, set aside before B.finish and bound after */
+  pools: EffectPools | null;
   /** time spent building, and the part of it spent sampling collision */
   ms: number;
 }
@@ -61,6 +64,7 @@ export function buildLevel(def: GameDef<any>, ink: Ink, sceneFn: SceneFn, seed: 
   const slots: Slot[] = [];
   const reserved: { at: number; total: number }[] = [];
   let built: Record<string, unknown> = {};
+  let pools: EffectPools | null = null;
 
   const facade: Ink = {
     ...ink,
@@ -84,6 +88,11 @@ export function buildLevel(def: GameDef<any>, ink: Ink, sceneFn: SceneFn, seed: 
             slots.push({ actor: name, ch, at, total, used: false });
           }
         }
+        const eo = effectOptions(def.effects);
+        if (eo) {
+          pools = reservePools(K, b, eo);
+          reserved.push(...GameEffects.ranges(pools));
+        }
         const toBind: { thing: { bind(world: World, at: number): void }; at: number }[] = [];
         built =
           def.build?.({
@@ -103,6 +112,7 @@ export function buildLevel(def: GameDef<any>, ink: Ink, sceneFn: SceneFn, seed: 
         const w = finish.call(b, meta);
         for (const s of slots) s.ch.bind(w, s.at);
         for (const r of toBind) r.thing.bind(w, r.at);
+        if (pools) GameEffects.bind(pools, w);
         return w;
       };
       return b;
@@ -131,5 +141,5 @@ export function buildLevel(def: GameDef<any>, ink: Ink, sceneFn: SceneFn, seed: 
   // the engine marks rows and runs systems: a world with no stage gets one
   if (!world.anim) K.stage(world);
   for (const s of slots) hideSlot(world, s);
-  return { world, B, S, collision, bakes: cb.stats, slots, reserved, built, ms: now() - t0 };
+  return { world, B, S, collision, bakes: cb.stats, slots, reserved, built, pools, ms: now() - t0 };
 }

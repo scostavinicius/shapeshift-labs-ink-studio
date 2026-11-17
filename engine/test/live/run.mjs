@@ -144,6 +144,25 @@ async function coreChecks() {
   );
   if (!walkOK) failed = true;
   await page.screenshot({ path: path.join(OUT, 'farol-walk.png') });
+
+  // stage 7: the grunts come for a player who stands still, and hit it; J swings back
+  await open('game=farol-fight');
+  for (let k = 0; k < 10; k++) {
+    await page.keyboard.press('KeyJ');
+    await page.waitForTimeout(400);
+  }
+  const f = await page.evaluate(() => {
+    const E = window.ENGINE,
+      g = E.game;
+    return { fps: E.info.fps, frameMs: E.info.frameMs, t: g.t, hp: g.player ? g.player.hp : null, state: g.state, grunts: g.byTag('enemy').map(e => e.hp) };
+  });
+  const fightOK = f.fps >= 55 && (f.hp < 5 || f.state.deaths > 0) && (f.state.kills > 0 || f.grunts.some(h => h < 3));
+  console.log(
+    `  farol-fight  4 s standing and swinging: player hp ${f.hp}, grunts' hp ${JSON.stringify(f.grunts)}, ${JSON.stringify(f.state)} · ` +
+      `${f.fps} fps, ${f.frameMs} ms a frame  ${fightOK ? 'ok' : 'FAILED'}`
+  );
+  if (!fightOK) failed = true;
+  await page.screenshot({ path: path.join(OUT, 'farol-fight.png') });
 }
 
 let failed = false;

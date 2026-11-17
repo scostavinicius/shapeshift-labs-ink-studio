@@ -79,7 +79,9 @@ Depois o `Core` suaviza a câmera e roda os sistemas do mundo (`poseAt`). Entida
 
 ## 3. Contrato de determinismo
 
-**A mesma seed e o mesmo roteiro de input dão o mesmo jogo: o mesmo `hash` a cada passo e o mesmo PNG, byte a byte.** Vale para o mesmo motor de JavaScript (Node e Edge/Chrome são V8). Entre motores diferentes (Firefox, Safari) funções como `Math.sin` podem variar no último bit; por isso a comparação com o navegador é uma porcentagem (≥ 95%), não igualdade.
+**A mesma seed e o mesmo roteiro de input dão o mesmo jogo: o mesmo `hash` a cada passo e o mesmo PNG, byte a byte.** Vale para o mesmo motor de JavaScript.
+
+> **Correção medida na Etapa 7:** "o mesmo motor" quer dizer a mesma *versão*. O Node 24 (V8 13.6) e o Edge 157 já arredondam diferente o último bit de `Math.sin`, `atan2`, `exp`, `log` e outras, e numa luta isso aparece no `hash` a partir do passo 6 (as imagens continuam 100% iguais). Detalhes e a decisão pendente no resultado da Etapa 7 em [engine-plan.md](engine-plan.md). Entre motores diferentes (Firefox, Safari) funções como `Math.sin` podem variar no último bit; por isso a comparação com o navegador é uma porcentagem (≥ 95%), não igualdade.
 
 Regras:
 
