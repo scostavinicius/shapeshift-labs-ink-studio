@@ -39,6 +39,8 @@ export interface CollisionOptions {
   block?: Box[];
   /** empty whatever the scene says (a bush that should not stop anyone) */
   open?: Box[];
+  /** where to look for solids (default x and z -64..64, y -32..64: room for any diorama of the kit) */
+  region?: Box;
 }
 
 /**
@@ -156,6 +158,12 @@ export interface BuildContext {
   S: Sculpt;
   K: Kit;
   seed: number;
+  /**
+   * Make something of the kit that sets splats aside and is bound to the world afterwards (K.play.fx(B, n),
+   * K.play.debris(B, n) ...): its splats are noted, bind(world, at) is called once the world is finished, and its rows are
+   * marked as changed every step (these write their splats without saying so).
+   */
+  reserve<T extends { bind(world: World, at: number): void }>(make: () => T): T;
 }
 
 export interface GameDef<State = unknown> {
@@ -169,8 +177,11 @@ export interface GameDef<State = unknown> {
   /** named places. Give y as null to stand it on the ground there. */
   spawns?: Record<string, [number, number | null, number]>;
   camera?: CameraOptions;
-  /** more splats to reserve before the world is finished (K.pool for effects, K.play ...): rarely needed */
-  build?(ctx: BuildContext): void;
+  /**
+   * more splats to reserve before the world is finished (K.play.fx, K.pool ...): what it returns is game.built, for
+   * init() and step() to use (the effects pool, say)
+   */
+  build?(ctx: BuildContext): Record<string, unknown> | void;
   /** once, when the world is ready: spawn what starts on stage; what it returns is game.state (plain data) */
   init(game: Game<State>): State;
   /** every step, after every entity has moved: rules, scores, winning and losing */
@@ -187,6 +198,8 @@ export interface Game<State = unknown> {
   /** every entity, in id order */
   readonly entities: readonly Entity[];
   state: State;
+  /** what def.build() returned (objects of the kit: not part of snapshots) */
+  readonly built: Record<string, unknown>;
   /** simulation time in seconds, and steps run */
   readonly t: number;
   readonly steps: number;

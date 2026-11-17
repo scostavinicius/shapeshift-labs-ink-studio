@@ -126,6 +126,24 @@ async function coreChecks() {
   if (!tapOK) failed = true;
   fs.mkdirSync(OUT, { recursive: true });
   await page.screenshot({ path: path.join(OUT, 'idol-after-click.png') });
+
+  // stage 6: a game, played with the real keyboard: W walks the walker away from the camera
+  await open('game=farol-walk');
+  const g0 = await page.evaluate(() => ({ pos: window.ENGINE.game.player.pos.slice(), t: window.ENGINE.game.t }));
+  await page.keyboard.down('KeyW');
+  await page.waitForTimeout(1500);
+  const playing = await page.evaluate(() => ({ fps: window.ENGINE.info.fps, frameMs: window.ENGINE.info.frameMs }));
+  await page.keyboard.up('KeyW');
+  await page.waitForTimeout(300);
+  const g1 = await page.evaluate(() => ({ pos: window.ENGINE.game.player.pos.slice(), t: window.ENGINE.game.t, ground: window.ENGINE.game.player.ch.st.ground }));
+  const walked = Math.hypot(g1.pos[0] - g0.pos[0], g1.pos[2] - g0.pos[2]);
+  const walkOK = walked > 1.5 && playing.fps >= 55 && g1.ground;
+  console.log(
+    `  farol-walk  W held 1.5 s: walked ${walked.toFixed(2)} from (${g0.pos.map(v => v.toFixed(2))}) to (${g1.pos.map(v => v.toFixed(2))}) · ` +
+      `${playing.fps} fps, ${playing.frameMs} ms a frame  ${walkOK ? 'ok' : 'FAILED'}`
+  );
+  if (!walkOK) failed = true;
+  await page.screenshot({ path: path.join(OUT, 'farol-walk.png') });
 }
 
 let failed = false;

@@ -1,7 +1,8 @@
 // The page the parity harness drives (public/parity.html). It builds and poses worlds exactly as the harness does in Node,
 // draws them with the engine's renderer, and hands the pictures back. See test/parity/run.mjs.
 import type { Scene, World } from '../types/ink-studio';
-import { findScene, ink, loadSceneFile } from './kit';
+import { findScene, ink, loadGame, loadSceneFile } from './kit';
+import { runHeadless } from './headless/run';
 import { poseAt, start } from './shared/pose.mjs';
 import { makeView, rendererFor, renderFrame } from './render/index';
 import type { Look } from './render/splat-renderer';
@@ -70,4 +71,29 @@ async function run(spec: ParityScene): Promise<ParityShot[]> {
   return shots;
 }
 
-(window as unknown as { PARITY: unknown }).PARITY = { run, ready: true };
+/** A game run by a script to time t, as `cli.js shot` runs it, drawn by the engine; with its hash, to hold against Node's. */
+export interface ParityGame {
+  game: string;
+  /** a script under engine/examples/ */
+  input: string;
+  t: number;
+  looks: Look[];
+  w: number;
+  h: number;
+}
+
+async function game(spec: ParityGame) {
+  const { def, scene } = await loadGame(spec.game);
+  const script = await (await fetch('/examples/' + spec.input)).json();
+  const { game: g } = runHeadless(def, ink(), scene, script, spec.t, { bones: 'gpu' });
+  const canvas = document.getElementById('view') as HTMLCanvasElement;
+  const shots = spec.looks.map(look => {
+    const o = { t: g.t, ...g.core.camera.view(), w: spec.w, h: spec.h, look };
+    const v = makeView(g.world, o),
+      frame = renderFrame(canvas, g.world, o);
+    return { look, view: { px: v.px, W: v.W, H: v.H }, frame: { w: frame.w, h: frame.h, rgb: toBase64(frame.rgb) } };
+  });
+  return { hash: g.hash(), steps: g.steps, player: g.player && g.player.pos, shots };
+}
+
+(window as unknown as { PARITY: unknown }).PARITY = { run, game, ready: true };

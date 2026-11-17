@@ -16,12 +16,14 @@ export function kitScript() {
     'const SCENES = [];',
     studio.demos(),
     // the scene modules a page loads later add themselves here (see sceneScript)
-    'window.INK = { SCENES, makeBuilder, makeSculpt, KIT, PixelLook, PALETTES, PAL_HEX, extra: [] };',
+    'window.INK = { SCENES, makeBuilder, makeSculpt, KIT, PixelLook, PALETTES, PAL_HEX, extra: [], sceneFns: {} };',
     ''
   ].join('\n');
 }
 
-// A scene module (module.exports = kit => ({ id, name, seed, build })) wrapped for the page. Only files inside the repository are served.
+// A scene module (module.exports = kit => ({ id, name, seed, build })) wrapped for the page: its scene goes on INK.extra,
+// and the function itself on INK.sceneFns[path] (a game hands it its own kit facade). Only files inside the repository
+// are served.
 export function sceneScript(rel) {
   const file = path.resolve(REPO, rel);
   if (!file.startsWith(REPO + path.sep) || !file.endsWith('.js') || !fs.existsSync(file)) return null;
@@ -29,6 +31,7 @@ export function sceneScript(rel) {
   return (
     '(function () {\n  const module = { exports: {} };\n' +
     src +
+    `\n  window.INK.sceneFns[${JSON.stringify(rel)}] = module.exports;` +
     '\n  window.INK.extra.push(module.exports(window.INK));\n})();\n'
   );
 }

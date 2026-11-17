@@ -1,5 +1,7 @@
 # Etapa 6 — desenho: modelo de jogo, determinismo e colisão
 
+> **Implementado** (2026-11-16). Um desvio, medido: a poda da seção 4.2 foi trocada pela caixa dos splats de cada bake, porque o campo do sculpt é limitado a 1,0 longe dos sólidos (ver o resultado da Etapa 6 em [engine-plan.md](engine-plan.md)). Acréscimos ao contrato: `CollisionOptions.region`, `BuildContext.reserve` e `Game.built`.
+
 Parte **[FABLE]** da Etapa 6 do [plano](engine-plan.md). Este documento decide; o código é do Opus 5.5 (lista no fim).
 O contrato em TypeScript está em [engine/src/game/types.ts](../engine/src/game/types.ts) (só declarações; já passa no typecheck).
 

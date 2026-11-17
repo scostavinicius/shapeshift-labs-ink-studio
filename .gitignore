@@ -5,3 +5,4 @@ node_modules/
 studio/snaps/
 engine/test/parity/out/
 engine/test/live/out/
+engine/out/

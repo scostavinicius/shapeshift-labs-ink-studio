@@ -20,7 +20,7 @@ Fatos do código que moldam o plano:
 
 ## Como retomar em outro computador
 
-**Estado (2026-11-16):** etapas 0 a 5 concluídas (todo o renderizador e o núcleo do jogo). **Próximo passo: o código da Etapa 6** (modelo de jogo e modo sem navegador), com o **Opus 5.5**: o desenho do Fable 5.2 já está pronto em [engine-stage6-design.md](engine-stage6-design.md) (contrato em `engine/src/game/types.ts`), e a seção 7 dele é a lista de trabalho, em ordem. Os resultados medidos de cada etapa estão nas seções abaixo.
+**Estado (2026-11-16):** etapas 0 a 6 concluídas (renderizador, núcleo do jogo, modelo de jogo com colisão, determinismo e modo sem navegador). **Próximo passo: a Etapa 7** (combate e inimigos), com o Opus 5.5. Os resultados medidos de cada etapa estão nas seções abaixo. Os resultados medidos de cada etapa estão nas seções abaixo.
 
 **Preparar a máquina** (Node 18 ou mais novo, Git, e o Microsoft Edge ou o Chrome para o teste de paridade):
 ```bash
@@ -34,12 +34,14 @@ O aviso de `allow-scripts` do esbuild no `npm install` pode ser ignorado: tudo f
 
 **Comandos** (na pasta `engine/`):
 - `npm run dev`: servidor em http://127.0.0.1:5173. Abra `/?file=showcase/farol.js` ou `/?scene=cabinet` (também `burn`, `idol`, `watcher`). Arrastar gira, a roda dá zoom, clicar toca a cena, WASD/setas (ou o analógico esquerdo) movem o ponto que a câmera segue (Shift corre), a tecla **C** alterna entre o estilo padrão e o `colored` (`&look=colored` já abre nele).
+- `/?game=farol-walk`: um jogo (`engine/examples/<nome>/game.ts`) jogado no navegador; `&input=farol-walk/walk.json&t=6` roda o roteiro até 6 s como a CLI e para o relógio.
+- `node cli.js shot farol-walk --input examples/farol-walk/walk.json --t 6 [--out q.png] [--state estado.json] [--colored]`: o mesmo jogo sem navegador; grava o PNG em `engine/out/` e termina com uma linha JSON `{ png, state, hash, t, steps }`.
 - `npm test`: typecheck e testes.
 - `npm run live`: abre a página ao vivo no navegador headless, mede fps, tempo por quadro e linhas enviadas, e confere se a ordem do Worker é idêntica à calculada na página. Depois testa o núcleo do jogo com o mouse de verdade (arrastar o `farol`, clicar no `idol`; só essa parte: `npm run live -- --only core`). Falha se algo der errado.
 - `npm run parity -- --min 99`: compara o renderizador da engine com o do terminal em 60 casos (os dois estilos) e falha se algum cair abaixo de 99%. As imagens ficam em `engine/test/parity/out/` (não vão para o git).
 - `npm test` na **raiz** do repositório roda os 171 testes do ink-studio; a engine não altera `src/`, `cli/`, nem `demos/`.
 
-**O que não está no repositório** (é gerado de novo): `node_modules/`, `studio/out/`, `engine/test/parity/out/`, `engine/test/live/out/`.
+**O que não está no repositório** (é gerado de novo): `node_modules/`, `studio/out/`, `engine/test/parity/out/`, `engine/test/live/out/`, `engine/out/`.
 
 **Escolha do modelo:** siga a coluna de modelo de cada etapa e o quadro "Resumo de quando usar o Fable" mais abaixo. Uma nova sessão não lembra desta conversa: comece pedindo para ela ler `docs/engine-plan.md` e fazer a etapa seguinte.
 
@@ -172,7 +174,7 @@ Plano original:
 - Clique: converte o pixel em raio e chama `st.poke(eye, dir)`.
 - **Pronto quando:** dá para orbitar a cena `farol` com o mouse a 60 fps e clicar em `idol` quebra pedaços.
 
-### Etapa 6 — Modelo de jogo e modo sem navegador · **[FABLE]** para o desenho, Opus 5.5 para o código
+### Etapa 6 — Modelo de jogo e modo sem navegador · **[FABLE]** para o desenho, Opus 5.5 para o código · ✅ concluída
 Decisões que definem o quanto a engine é AI-friendly; erro aqui custa caro depois.
 
 **Desenho [FABLE]: ✅ concluído** em [engine-stage6-design.md](engine-stage6-design.md), com o contrato em `engine/src/game/types.ts`. Resumo das decisões:
@@ -181,6 +183,23 @@ Decisões que definem o quanto a engine é AI-friendly; erro aqui custa caro dep
 - Determinismo: passo fixo, ordem por `id`, e a engine troca `Math.random`, `K.rnd` e `K.seed` por geradores do próprio jogo durante o build e cada passo (o `kg-play.js` usa `Math.random` 21 vezes).
 - Colisão: o campo do sculpt só conhece o último bake, então é amostrado logo após cada bake num mapa de colunas com trechos sólidos (0,25 de lado). Medido no `farol`: 1969 colunas, 2193 trechos; a ilha sai andável, o farol e a casa viram parede e fora é vazio, o que já impede cair da borda.
 - O código (Opus 5.5) segue a seção 7 do documento.
+
+**Código (Opus 5.5): ✅ concluído.** `engine/src/game/` (`rng.ts`, `collision.ts`, `level.ts`, `game.ts`, `script.ts`), `engine/src/headless/run.ts`, `engine/cli.js shot`, `engine/examples/farol-walk/` (jogo e roteiro `walk.json`), `?game=` na página, e um caso de jogo no harness de paridade.
+
+Medido:
+- **Colisão no `farol`:** 49 ms de amostragem no total (bake 0: 1982 colunas, 2205 trechos; bake 1, o facho, é `ghost`: 0). Concorda com o `S.heightAt` do próprio sculpt em 1976 de 2000 pontos sorteados (98,8%; o resto fica em bordas, a até meia célula); de 207 mil consultas, só 2 diferem da varredura da região inteira. Uma consulta `height()` custa ~55 ns.
+- **Desvio do desenho, medido:** a poda por blocos da seção 4.2 não funciona, porque o campo do sculpt é limitado a 1,0 longe de tudo (`MARG` em `src/sculpt.js`): ele não sabe dizer que um bloco está vazio. No lugar, a região de cada bake é a **caixa dos splats que aquele bake escreveu** (`B.dabAt`), com 1 de folga: as superfícies dos sólidos estão onde os splats deles estão. O `S.freeze()` (que não desenha) varre a região inteira.
+- **`farol-walk` (aceitação):** com o roteiro de 12 s, o personagem chega a 0,92 do eixo do farol (a parede alcança 0,65), nunca fica sem chão sob os pés, nunca cai (y mínimo −0,02) e termina parado na borda leste (x = 6,12).
+- **Determinismo:** o mesmo roteiro dá o mesmo `hash` em todos os 180 passos de 3 s; outro roteiro diverge desde o primeiro passo; dois jogos avançando intercalados dão os mesmos `hash` que cada um sozinho; um jogo que usa `K.play.fx` (que chama `Math.random`) dá o mesmo resultado duas vezes, e `Math.random`/`K.rnd`/`K.seed` voltam a ser os originais entre os passos.
+- **`shot` duas vezes:** PNG idêntico byte a byte e o mesmo `hash` (`7cb5835f3a13791c` em 6 s).
+- **Navegador × Node:** `npm run parity` roda o mesmo roteiro na página: **100%** de paridade nos dois estilos, e o **`hash` do navegador é idêntico ao do Node** (os dois são V8: a simulação é a mesma bit a bit, não só parecida).
+- **Ao vivo** (`npm run live`, Edge headless): `?game=farol-walk` com o teclado real, W por 1,5 s anda 3,9 unidades, a 180 fps e 0,5 ms de CPU por quadro.
+
+O que a Etapa 7 precisa saber:
+- O `respawn` do `K.character` procura chão só até 6 unidades abaixo de y = 7; o `spawnActor` corrige a altura logo depois, com o chão do ponto de spawn.
+- Efeitos do kit que reservam splats (`K.play.fx`, `K.play.debris`) entram por `build(ctx)` com `ctx.reserve(() => K.play.fx(ctx.B, n))`: a engine liga ao mundo e marca as linhas a cada passo; o objeto fica em `game.built`.
+- O `farol` + 1 personagem constrói em ~1,1 s (a cena sozinha leva ~0,95 s; a colisão, 0,05 s).
+- Os testes de determinismo constroem o `farol` seis vezes: `npm test` passou a levar ~45 s.
 - **[FABLE]** Definir a API de jogo: como se declara um nível (função `build` que devolve mundo + stage + pontos de spawn), entidades (jogador, inimigo, objeto, gatilho), e o contrato de determinismo (mesma seed + mesmo roteiro de input = mesmo resultado, usando `K.seed`/`K.rnd`, nunca `Math.random`).
 - **[FABLE]** Colisão: na construção do nível, cozinhar `S.sdf`/`S.heightAt` numa grade (mapa de altura + células bloqueadas) e expor `world.height(x, z, y)` para o `K.character`.
 - Modo sem navegador: `engine/src/headless` roda o mesmo loop no Node com input roteirizado e desenha com `cli/render.js`. Comando: `node engine/cli.js shot <jogo> --input roteiro.json --t 5 --out quadro.png`.

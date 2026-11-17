@@ -41,6 +41,10 @@ export const CASES = [
   { name: 'farol', file: 'showcase/farol.js' }
 ];
 
+// games run by a script to a moment (stage 6): the engine in the browser against `cli.js shot` in Node. Besides the
+// picture, the two simulations must agree exactly (the same hash): the same seed and script give the same game
+export const GAMES = [{ name: 'farol-walk game', game: 'farol-walk', input: 'farol-walk/walk.json', t: 6 }];
+
 const args = process.argv.slice(2);
 const opt = name => {
   const i = args.indexOf('--' + name);
@@ -73,6 +77,21 @@ function references(c) {
         });
   }
   return out;
+}
+
+// a game's reference: run in Node exactly as `cli.js shot` runs it, drawn by cli/render.js in each look
+async function gameReference(g) {
+  const { loadTs, loadInk, sceneFn } = await import('../load.mjs');
+  const def = (await loadTs(`examples/${g.game}/game.ts`)).default;
+  const { runHeadless } = await loadTs('src/headless/run.ts');
+  const script = JSON.parse(fs.readFileSync(path.join(HERE, '..', '..', 'examples', g.input), 'utf8'));
+  const { game } = runHeadless(def, loadInk(), sceneFn(def.scene), script, g.t, { bones: 'cpu' });
+  const view = game.core.camera.view();
+  return {
+    hash: game.hash(),
+    steps: game.steps,
+    imgs: LOOKS.map(look => R.render(game.world, { t: game.t, ...view, w: W, h: H, colored: look === 'colored' }))
+  };
 }
 
 async function launch() {
@@ -141,6 +160,29 @@ async function main() {
         const pic = sheet(img.w, img.h, [img.rgb, got, s.diff]);
         PNG.write(path.join(OUT, label + '.png'), pic.w, pic.h, pic.rgb);
         rows.push({ upload: shot.upload, case: label, scene: c.name + (ref.look === 'default' ? '' : ' ' + ref.look), fg: s.fg, all: s.all, ms: shot.ms, notes: notes.join('; ') });
+      });
+    }
+    for (const g of GAMES) {
+      if (only && !g.name.includes(only)) continue;
+      const ref = await gameReference(g);
+      const got = await page.evaluate(spec => window.PARITY.game(spec), { game: g.game, input: g.input, t: g.t, looks: LOOKS, w: W, h: H });
+      await page.reload();
+      await page.waitForFunction(() => window.PARITY && window.PARITY.ready);
+      const same = got.hash === ref.hash && got.steps === ref.steps;
+      if (!same) errors.push(`${g.name}: the browser's game is not Node's: hash ${got.hash} vs ${ref.hash}, steps ${got.steps} vs ${ref.steps}`);
+      ref.imgs.forEach((img, k) => {
+        const shot = got.shots[k],
+          look = LOOKS[k];
+        const label = `${g.game}-t${g.t}` + (look === 'default' ? '' : '-' + look);
+        const notes = [`hash ${same ? 'same as Node' : 'DIFFERS'} (${got.hash})`];
+        let pix = null;
+        if (shot.frame.w !== img.w || shot.frame.h !== img.h) notes.push(`frame ${shot.frame.w}x${shot.frame.h} vs ${img.w}x${img.h}`);
+        else pix = Buffer.from(shot.frame.rgb, 'base64');
+        const bg = [img.rgb[0], img.rgb[1], img.rgb[2]];
+        const s = compare(img, pix, bg);
+        const pic = sheet(img.w, img.h, [img.rgb, pix, s.diff]);
+        PNG.write(path.join(OUT, label + '.png'), pic.w, pic.h, pic.rgb);
+        rows.push({ case: label, scene: g.name + (look === 'default' ? '' : ' ' + look), fg: s.fg, all: s.all, ms: 0, notes: notes.join('; ') });
       });
     }
   } finally {

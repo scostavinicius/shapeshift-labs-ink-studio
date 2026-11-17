@@ -41,6 +41,21 @@ export async function startServer({ port = 5173, host = '127.0.0.1' } = {}) {
       }
       if (url.pathname === '/favicon.ico') return send(res, 204, 'image/x-icon', '');
       if (url.pathname === '/kit.js') return send(res, 200, 'text/javascript', kitScript());
+      // a game module (engine/examples/<name>/game.ts), bundled for the page
+      const game = /^\/game\/([\w-]+)\.js$/.exec(url.pathname);
+      if (game) {
+        const entry = path.join(ROOT, 'examples', game[1], 'game.ts');
+        if (!fs.existsSync(entry)) return send(res, 404, 'text/plain', 'no such game');
+        const out = await esbuild.build({ entryPoints: [entry], bundle: true, format: 'esm', target: 'es2022', write: false, logLevel: 'silent' });
+        return send(res, 200, 'text/javascript', out.outputFiles[0].contents);
+      }
+      // the examples' own files (input scripts)
+      if (url.pathname.startsWith('/examples/') && url.pathname.endsWith('.json')) {
+        const ex = path.join(ROOT, 'examples'),
+          file = path.join(ex, decodeURIComponent(url.pathname.slice('/examples/'.length)));
+        if (!file.startsWith(ex + path.sep) || !fs.existsSync(file)) return send(res, 404, 'text/plain', 'not found');
+        return send(res, 200, 'application/json', fs.readFileSync(file));
+      }
       if (url.pathname.startsWith('/scene/')) {
         const js = sceneScript(decodeURIComponent(url.pathname.slice('/scene/'.length)));
         return js ? send(res, 200, 'text/javascript', js) : send(res, 404, 'text/plain', 'no such scene');

@@ -77,6 +77,8 @@ export interface Builder {
   finish(meta: Partial<World> & { cam: World['cam']; detail: number }): World;
   R(): number;
   rr(a: number, b: number): number;
+  /** splat i as [x, y, z, nx, ny, nz, density, ..., colour, palette index], or null if it has no normal (not lit by a bake) */
+  dabAt(i: number, out?: number[]): number[] | null;
   P: number[][];
   TAU: number;
   [key: string]: any;
@@ -119,6 +121,8 @@ export interface Ink {
   SCENES: Scene[];
   /** scenes loaded from module files after the toolkit (see /scene/<path> on the dev server) */
   extra: Scene[];
+  /** the functions of scene modules loaded in the page, by path ('showcase/farol.js'): a game builds them through its own kit */
+  sceneFns?: Record<string, (kit: Ink) => Scene>;
   makeBuilder(seed: number, palette?: number[]): Builder;
   makeSculpt(B: Builder): Sculpt;
   KIT: Kit;
