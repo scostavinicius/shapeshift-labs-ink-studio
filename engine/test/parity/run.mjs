@@ -131,6 +131,12 @@ async function main() {
     };
   });
   console.log('browser graphics:', JSON.stringify(caps));
+  // the deterministic Math gives the same bits here as in Node (the fingerprint a port to another language must match too)
+  const { loadTs } = await import('../load.mjs');
+  const here = (await loadTs('src/game/dmath.ts')).fingerprint();
+  const there = await page.evaluate(() => window.PARITY.fingerprint());
+  console.log(`deterministic Math fingerprint: Node ${here}, browser ${there}` + (here === there ? ' (same)' : ' DIFFERENT'));
+  if (here !== there) errors.push(`deterministic Math differs: Node ${here}, browser ${there}`);
   const rows = [];
   try {
     for (const c of CASES) {
@@ -172,16 +178,15 @@ async function main() {
       const got = await page.evaluate(spec => window.PARITY.game(spec), { game: g.game, input: g.input, t: g.t, looks: LOOKS, w: W, h: H });
       await page.reload();
       await page.waitForFunction(() => window.PARITY && window.PARITY.ready);
-      // the same seed and script run the same steps everywhere; the hash is the same only where the JavaScript engine
-      // rounds Math.sin, atan2, exp ... the same way to the last bit, which differs between versions of V8 (Node 24 and a
-      // newer Chrome or Edge, for one): see the determinism section of docs/engine-plan.md. Pictures are the gate here.
-      if (got.steps !== ref.steps) errors.push(`${g.name}: the browser ran ${got.steps} steps, Node ${ref.steps}`);
-      const same = got.hash === ref.hash;
+      // the same seed and script give the same game in any JavaScript engine, to the last bit: the engine puts its own
+      // deterministic Math in place of the native one while a game runs (docs/engine-determinism.md)
+      const same = got.hash === ref.hash && got.steps === ref.steps;
+      if (!same) errors.push(`${g.name}: the browser's game is not Node's: hash ${got.hash} vs ${ref.hash}, steps ${got.steps} vs ${ref.steps}`);
       ref.imgs.forEach((img, k) => {
         const shot = got.shots[k],
           look = LOOKS[k];
         const label = `${g.game}-t${g.t}` + (look === 'default' ? '' : '-' + look);
-        const notes = [same ? `hash same as Node (${got.hash})` : `hash differs from Node's (${got.hash} vs ${ref.hash}: Math rounds differently in this browser's V8)`];
+        const notes = [`hash ${same ? 'same as Node' : 'DIFFERS'} (${got.hash})`];
         let pix = null;
         if (shot.frame.w !== img.w || shot.frame.h !== img.h) notes.push(`frame ${shot.frame.w}x${shot.frame.h} vs ${img.w}x${img.h}`);
         else pix = Buffer.from(shot.frame.rgb, 'base64');

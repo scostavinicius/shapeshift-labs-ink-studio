@@ -4,7 +4,10 @@
 //                  steps, K.rnd and K.seed are swapped for a generator of the game's (the same xorshift32 as the kit's)
 //   Math.random    used by K.play.* (kg-play.js) and as a fallback in ks-xpbd.js: swapped the same way
 // The swap is synchronous and always undone (try / finally), so two games stepping in turn never see each other's dice.
+// The same swap puts the deterministic Math functions (dmath.ts: sin, cos, exp, atan2, pow ...) in place of the native
+// ones, so that every JavaScript engine computes the same game to the last bit (docs/engine-determinism.md).
 import type { Kit } from '../../types/ink-studio';
+import { DMATH, DMATH_NAMES } from './dmath';
 
 /** xorshift32, the kit's own generator (k0-math.js K.rnd), with its state in the open so it can be saved and hashed. */
 export class XorShift {
@@ -46,17 +49,21 @@ export class Dice {
   }
 
   /**
-   * Run fn with Math.random, K.rnd and K.seed being this game's, and put the originals back afterwards, even if fn throws.
-   * Nested calls (a step inside a build) leave the outer swap in place.
+   * Run fn with Math.random, K.rnd and K.seed being this game's, and Math's transcendental functions the deterministic
+   * ones; put the originals back afterwards, even if fn throws. Nested calls (a step inside a build) leave the outer swap
+   * in place.
    */
   during<T>(K: Kit, fn: () => T): T {
     if (this.depth > 0) return fn();
     const mr = Math.random,
       kr = K.rnd,
-      ks = K.seed;
+      ks = K.seed,
+      M = Math as unknown as Record<string, unknown>,
+      saved = DMATH_NAMES.map(n => M[n]);
     Math.random = () => this.math.next();
     K.rnd = () => this.kit.next();
     K.seed = (n: number) => this.kit.seed(n);
+    for (const n of DMATH_NAMES) M[n] = DMATH[n];
     this.depth++;
     try {
       return fn();
@@ -65,6 +72,7 @@ export class Dice {
       Math.random = mr;
       K.rnd = kr;
       K.seed = ks;
+      DMATH_NAMES.forEach((n, i) => (M[n] = saved[i]));
     }
   }
 }

@@ -4,6 +4,7 @@ export { createGame, defineGame, type CreateOptions, type RunningGame } from './
 export { buildLevel, type Level, type SceneFn, type Slot } from './level';
 export { CollisionBuilder, makeCollision, splatBox, type BakeStats, type Field } from './collision';
 export { Dice, XorShift } from './rng';
+export { DMATH, DMATH_NAMES, fingerprint as dmathFingerprint } from './dmath';
 export { ScriptPlayer, InputRecorder } from './script';
 export { Combat } from './combat';
 export { GameEffects } from './effects';

@@ -3,6 +3,7 @@
 import type { Scene, World } from '../types/ink-studio';
 import { findScene, ink, loadGame, loadSceneFile } from './kit';
 import { runHeadless } from './headless/run';
+import { fingerprint } from './game/dmath';
 import { poseAt, start } from './shared/pose.mjs';
 import { makeView, rendererFor, renderFrame } from './render/index';
 import type { Look } from './render/splat-renderer';
@@ -119,4 +120,4 @@ export function partsOf(g: { world: World; level: any; entities: readonly any[];
   };
 }
 
-(window as unknown as { PARITY: unknown }).PARITY = { run, game, ready: true };
+(window as unknown as { PARITY: unknown }).PARITY = { run, game, fingerprint, ready: true };
