@@ -90,6 +90,8 @@ Ela está fixada em `engine/test/dmath.test.mjs`, e o harness de paridade (`npm 
 - Usar `Math.pow`, não o operador `**`. O operador é calculado pelo motor e **não passa pela troca**. O kit e a engine não usam `**` (conferido com `grep`). O validador da Etapa 9 deve recusar `**`, `Date`, `performance` e `Math.random` no código de jogo.
 - Nunca guardar uma função do `Math` numa variável fora do passo (`const sin = Math.sin` no topo do módulo): ela ficaria com a nativa. Dentro da função, a cada chamada, tudo bem: é o que o `ki-deform.js` faz.
 - Estado do jogo (`game.state`, `entity.data`) só com dados simples. Nada de `Map`/`Set` com chaves de objeto, que dependem da ordem de criação.
+- O que mostra o jogo (HUD, som, a página) lê o jogo **entre** os passos, por `game.takeEvents()`, e nunca reage de dentro do passo: lá dentro o `Math.random` e o `Math` são os do jogo, e um som que sorteasse algo gastaria o dado da partida.
+- Um save é aplicado dentro do dado do jogo (`game.withDice`), então carregar um save também é determinístico: o mesmo save e o mesmo roteiro dão o mesmo jogo.
 
 ## 6. Para um port a outra linguagem
 

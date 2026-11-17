@@ -8,7 +8,7 @@ import { buildLevel, hideSlot, markSlot, type Level, type SceneFn, type Slot } f
 import { Dice } from './rng';
 import { Combat } from './combat';
 import { effectOptions, GameEffects } from './effects';
-import type { Actor, Brain, Collision, Entity, Game, GameDef, Prop, Snapshot, Trigger } from './types';
+import type { Actor, Brain, Collision, Entity, Game, GameDef, GameEvent, Prop, Snapshot, Trigger } from './types';
 
 /** A game definition, typed. (Nothing more: it is there so an editor knows what goes where.) */
 export function defineGame<State>(def: GameDef<State>): GameDef<State> {
@@ -37,6 +37,8 @@ export interface RunningGame<State = unknown> extends Game<State> {
   runSteps(n: number, beforeStep?: (step: number) => void): void;
   /** the dice's states (for tests) */
   diceState(): [number, number, number];
+  /** run fn as the game's own code runs: with its dice and the deterministic Math (loading a save, a rule from outside) */
+  withDice<T>(fn: () => T): T;
 }
 
 const NO_INPUT: StepInput = { move: 0, mz: 0, run: false, jump: false, jumpHeld: false, dash: false, attack: false, cast: false, crouch: false };
@@ -54,6 +56,7 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
   const entities: Entity[] = [];
   let nextId = 1;
   let events: { name: string; data?: unknown }[] = [];
+  let outbox: GameEvent[] = [];
   let player: Actor | null = null;
   const slotOf = new Map<number, Slot>();
   let state = undefined as unknown as State;
@@ -188,6 +191,13 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
     },
     emit(name: string, data?: unknown) {
       events.push(data === undefined ? { name } : { name, data });
+      outbox.push({ name, data, t: core.t, step: core.loop.steps });
+      if (outbox.length > 4096) outbox.shift();
+    },
+    takeEvents() {
+      const out = outbox;
+      outbox = [];
+      return out;
     },
     snapshot(): Snapshot<State> {
       return {
@@ -237,7 +247,8 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
         }
       });
     },
-    diceState: () => dice.state()
+    diceState: () => dice.state(),
+    withDice: fn => dice.during(K, fn)
   };
 
   /** take removed entities off the list, and put removed actors back in their pool */
@@ -277,7 +288,10 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
       for (const a of actors) a.input = a.brain === 'player' ? { ...s.act } : { ...NO_INPUT, ...(a.brain as Brain)(a, game, dt) };
       // 2. movement
       for (const a of actors) {
+        const before = a.ch.st.atk;
         a.ch.update(dt, a.input, t);
+        // a swing has begun (for the sound and the HUD; nothing in the game depends on it)
+        if (before < 0 && a.ch.st.atk >= 0) game.emit('swing', { id: a.id });
         a.pos = [a.ch.st.x, a.ch.st.y, a.ch.st.z];
         a.face = a.ch.st.face;
         a.hp = a.ch.st.hp;

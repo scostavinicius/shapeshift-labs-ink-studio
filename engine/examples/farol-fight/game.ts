@@ -40,6 +40,9 @@ export default defineGame<FightState>({
     game.spawnActor({ actor: 'grunt', at: 'south', brain: chaser({ sight: 7, cooldown: 1.4 }), tags: ['enemy'] });
     return { kills: 0, deaths: 0, won: false };
   },
+  hud: {
+    lines: game => [`KILLS ${game.state.kills}/2`, ...(game.state.won ? ['ALL CLEAR'] : [])]
+  },
   step(game) {
     const s = game.state;
     for (const e of game.events) {

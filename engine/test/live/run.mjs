@@ -163,6 +163,72 @@ async function coreChecks() {
   );
   if (!fightOK) failed = true;
   await page.screenshot({ path: path.join(OUT, 'farol-fight.png') });
+
+  // stage 8: the HUD follows the health; the page saves itself, and a reload brings the player back where it was
+  await open('game=farol-fight&fresh=1');
+  await page.keyboard.press('KeyJ'); // (a key: the browser lets the page make sound from now on)
+  const hudSamples = [];
+  for (let k = 0; k < 24; k++) {
+    await page.waitForTimeout(150);
+    hudSamples.push(
+      await page.evaluate(() => {
+        const g = window.ENGINE.game,
+          h = document.getElementById('hud-health');
+        return { hp: g.player.deadFor >= 0 ? 0 : g.player.hp, shown: +h.dataset.hp, down: g.player.deadFor >= 0 };
+      })
+    );
+    if (hudSamples[hudSamples.length - 1].hp < 5 && k > 4) break;
+  }
+  // walk away from the grunts for a moment, then leave the page as it is
+  await page.keyboard.down('KeyW');
+  await page.waitForTimeout(500);
+  await page.keyboard.up('KeyW');
+  const left = await page.evaluate(() => {
+    const E = window.ENGINE,
+      p = E.game.player;
+    return {
+      pos: p.pos.slice(),
+      hp: p.hp,
+      down: p.deadFor >= 0,
+      steps: E.game.steps,
+      audio: E.sound.ctx ? E.sound.ctx.state : 'none',
+      played: { ...E.sound.played },
+      messages: document.getElementById('hud-messages').dataset.text
+    };
+  });
+  // open it again (without &fresh=1, which forgets the save): leaving the page saves it
+  await page.goto(server.url + '?game=farol-fight');
+  await page.waitForFunction(() => window.ENGINE && window.ENGINE.info.fps > 0, null, { timeout: 60000 });
+  const back = await page.evaluate(() => {
+    const E = window.ENGINE,
+      s = E.loadedFrom,
+      p = s && s.entities.find(e => e.kind === 'player');
+    return {
+      loaded: !!s,
+      steps: s ? s.steps : 0,
+      pos: p ? p.pos : null,
+      hp: p ? p.hp : null,
+      shown: +document.getElementById('hud-health').dataset.hp,
+      now: E.game.player.hp,
+      welcome: document.getElementById('hud-messages').dataset.text
+    };
+  });
+  const hudFollows = hudSamples.every(x => x.hp === x.shown) && hudSamples.some(x => x.hp < 5);
+  const moved = back.pos ? Math.hypot(back.pos[0] - left.pos[0], back.pos[2] - left.pos[2]) : Infinity;
+  const restored = back.loaded && back.steps >= left.steps && moved < 0.5 && (left.down || back.hp === left.hp) && back.shown === back.now;
+  console.log(
+    `  HUD          ${hudSamples.length} samples, hearts = health in all: ${hudSamples.map(x => x.shown).join(' ')}  ${hudFollows ? 'ok' : 'FAILED'}`
+  );
+  console.log(
+    `  sound        context ${left.audio}, played ${JSON.stringify(left.played)}  ${left.audio === 'running' && left.played.swing > 0 ? 'ok' : 'FAILED'}`
+  );
+  console.log(
+    `  save/reload  left at (${left.pos.map(v => v.toFixed(2))}) hp ${left.hp}${left.down ? ' (down)' : ''}, step ${left.steps}; ` +
+      `came back at (${back.pos ? back.pos.map(v => v.toFixed(2)) : '-'}) hp ${back.hp} from the save of step ${back.steps}; ` +
+      `HUD shows ${back.shown}; "${(back.welcome || '').split(String.fromCharCode(10)).join(' / ')}"  ${restored ? 'ok' : 'FAILED'}`
+  );
+  if (!hudFollows || !restored || left.audio !== 'running') failed = true;
+  await page.screenshot({ path: path.join(OUT, 'farol-fight-hud.png') });
 }
 
 let failed = false;

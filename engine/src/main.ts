@@ -7,7 +7,13 @@
 //   &sort=page                     sort on the page's own thread every frame (exact) instead of in the worker
 //   ?game=farol-walk               a game (engine/examples/<name>/game.ts), played: the player's character takes the input
 //   &input=farol-walk/walk.json&t=6   ...or that game run by a script to t (as `cli.js shot` runs it), the clock then stopped
+//   &fresh=1                       start the game over, forgetting its save
+// A game shows its HUD and makes sound (M: music on or off, N: all sound off), saves itself every 2 seconds and when the
+// page is left (P: save now), and comes back where it was saved when the page is opened again.
 import { Core, DomInput, project, type Sample } from './core/index';
+import { forgetLocal, loadSave, readLocal, saveGame, saveProblem, storeLocal } from './game/save';
+import { Sound } from './ui/audio';
+import { Hud, HudFeed, hudModel } from './ui/hud';
 import { createGame, type RunningGame } from './game/game';
 import { runHeadless } from './headless/run';
 import { buildWorld, findScene, ink, loadGame, loadSceneFile } from './kit';
@@ -29,7 +35,8 @@ async function start(): Promise<void> {
     name: string,
     id: string,
     // a game run by a script is shown at its last step, the clock stopped
-    frozen = false;
+    frozen = false,
+    loadedFrom: ReturnType<typeof readLocal> = null;
   if (q.get('game')) {
     const loaded = await loadGame(q.get('game')!);
     const input = q.get('input');
@@ -43,6 +50,15 @@ async function start(): Promise<void> {
     core = game.core;
     name = loaded.def.name || loaded.def.id;
     id = loaded.def.id;
+    if (!frozen) {
+      if (q.get('fresh')) forgetLocal(id);
+      const saved = readLocal(id);
+      const problem = saved && saveProblem(game, saved);
+      if (saved && !problem) {
+        loadSave(game, saved);
+        loadedFrom = saved;
+      } else if (problem) console.warn(`${id}: the save kept in this browser was not loaded: ${problem}`);
+    }
   } else {
     const file = q.get('file');
     const scene = file ? await loadSceneFile(file) : findScene(q.get('scene') || 'burn');
@@ -72,6 +88,31 @@ async function start(): Promise<void> {
     if (e.code === 'KeyC' && !e.repeat) look = look === 'colored' ? 'default' : 'colored';
   });
 
+  // what shows the game: the HUD and the sound, fed with its events between steps; and its saves
+  const hud = game ? new Hud(document.body, world.pal) : null,
+    feed = new HudFeed(),
+    sound = game ? new Sound(game.def.sounds) : null;
+  if (loadedFrom) feed.say('WELCOME BACK', performance.now() / 1000);
+  // what happened before the first frame (a scripted run) is not news
+  game?.takeEvents();
+  let savedAt = performance.now(),
+    saves = 0;
+  const save = (say: boolean) => {
+    if (!game || frozen) return false;
+    const ok = storeLocal(saveGame(game));
+    if (ok) saves++;
+    if (say) {
+      feed.say(ok ? 'SAVED' : 'COULD NOT SAVE', performance.now() / 1000);
+      sound?.play('save');
+    }
+    return ok;
+  };
+  addEventListener('keydown', e => {
+    if (e.code === 'KeyP' && !e.repeat) save(true);
+  });
+  addEventListener('pagehide', () => save(false));
+  document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && save(false));
+
   let paused = false,
     last = -1,
     frames = 0,
@@ -92,6 +133,17 @@ async function start(): Promise<void> {
     renderer.upload(world);
     renderer.draw(world, view, { look });
     core.shown = view;
+    if (game && hud) {
+      const events = game.takeEvents(),
+        sec = now / 1000;
+      feed.feed(events, game, sec);
+      sound?.events(events);
+      hud.render(hudModel(game, feed, sec), Math.max(2, view.px));
+      if (!frozen && now - savedAt >= 2000) {
+        savedAt = now;
+        save(false);
+      }
+    }
     spent += performance.now() - began;
     frames++;
     if (now - since >= 500) {
@@ -109,7 +161,12 @@ async function start(): Promise<void> {
         (p ? ` · last tap at ${p.t.toFixed(2)} s: ${p.hit ? 'hit (' + p.hit.p.map(v => v.toFixed(2)).join(', ') + ')' : 'nothing'}` : '') +
         (game ? ` · hash ${game.hash()}` + (game.player ? ` · player (${game.player.pos.map(v => v.toFixed(2)).join(', ')})` : '') : '') +
         '\n' +
-        `look: ${look} (C) · drag: turn · wheel: zoom · click: tap · WASD: move (Shift runs)`;
+        `look: ${look} (C) · drag: turn · wheel: zoom · click: tap · WASD: move (Shift runs)` +
+        (game
+          ? ` · J hit · K dash
+sound: ${sound!.ctx ? sound!.ctx.state : 'waits for a key'} · music ${sound!.volumes.musicOn ? 'on' : 'off'} (M) · ` +
+            `${sound!.volumes.muted ? 'muted' : 'sound on'} (N) · saves: ${saves} (P to save now; &fresh=1 starts over)`
+          : '');
       frames = 0;
       spent = 0;
       since = now;
@@ -120,6 +177,12 @@ async function start(): Promise<void> {
   (window as unknown as { ENGINE: unknown }).ENGINE = {
     scene: id,
     game,
+    hud,
+    feed,
+    sound,
+    save,
+    /** the save this page was opened from, if any */
+    loadedFrom,
     world,
     info,
     core,

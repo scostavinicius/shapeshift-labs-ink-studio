@@ -20,7 +20,7 @@ Fatos do código que moldam o plano:
 
 ## Como retomar em outro computador
 
-**Estado (2026-11-16):** etapas 0 a 7 concluídas (renderizador, núcleo do jogo, modelo de jogo com colisão, determinismo e modo sem navegador, combate e inimigos). O determinismo agora vale **entre motores de JavaScript** (Math determinístico; ver [engine-determinism.md](engine-determinism.md)). **Próximo passo: a Etapa 8** (HUD, áudio e save), com o Opus 5.5. Os resultados medidos de cada etapa estão nas seções abaixo.
+**Estado (2026-11-16):** etapas 0 a 8 concluídas (renderizador, núcleo do jogo, modelo de jogo com colisão, determinismo e modo sem navegador, combate e inimigos, HUD, áudio e save). O determinismo vale **entre motores de JavaScript** (Math determinístico; ver [engine-determinism.md](engine-determinism.md)). **Próximo passo: a Etapa 9** (camada para a IA: `AGENTS.md`, validador, comandos e exemplos), com o Opus 5.5. Os resultados medidos de cada etapa estão nas seções abaixo.
 
 **Preparar a máquina** (Node 18 ou mais novo, Git, e o Microsoft Edge ou o Chrome para o teste de paridade):
 ```bash
@@ -36,7 +36,8 @@ O aviso de `allow-scripts` do esbuild no `npm install` pode ser ignorado: tudo f
 - `npm run dev`: servidor em http://127.0.0.1:5173. Abra `/?file=showcase/farol.js` ou `/?scene=cabinet` (também `burn`, `idol`, `watcher`). Arrastar gira, a roda dá zoom, clicar toca a cena, WASD/setas (ou o analógico esquerdo) movem o ponto que a câmera segue (Shift corre), a tecla **C** alterna entre o estilo padrão e o `colored` (`&look=colored` já abre nele).
 - `/?game=farol-walk`: um jogo (`engine/examples/<nome>/game.ts`) jogado no navegador; `&input=farol-walk/walk.json&t=6` roda o roteiro até 6 s como a CLI e para o relógio.
 - `node cli.js shot farol-walk --input examples/farol-walk/walk.json --t 6 [--out q.png] [--state estado.json] [--colored]`: o mesmo jogo sem navegador; grava o PNG em `engine/out/` e termina com uma linha JSON `{ png, state, hash, t, steps }`.
-- `/?game=farol-fight` ou `node cli.js shot farol-fight --input examples/farol-fight/fight.json --t 8.3`: a luta (J golpeia).
+- `/?game=farol-fight` ou `node cli.js shot farol-fight --input examples/farol-fight/fight.json --t 8.3`: a luta (J golpeia, K dá dash). Na página: M liga e desliga a música, N tira todo o som, P salva agora; o jogo também se salva sozinho a cada 2 s e ao sair, e volta de onde parou ao abrir de novo (`&fresh=1` começa do zero).
+- `node cli.js shot farol-fight --t 4 --input ... --save s.json` grava um save; `--load s.json` começa dele (o mesmo formato do save da página).
 - `npm test`: typecheck e testes.
 - `npm run live`: abre a página ao vivo no navegador headless, mede fps, tempo por quadro e linhas enviadas, e confere se a ordem do Worker é idêntica à calculada na página. Depois testa o núcleo do jogo com o mouse de verdade (arrastar o `farol`, clicar no `idol`; só essa parte: `npm run live -- --only core`). Falha se algo der errado.
 - `npm run parity -- --min 99`: compara o renderizador da engine com o do terminal em 60 casos (os dois estilos) e falha se algum cair abaixo de 99%. As imagens ficam em `engine/test/parity/out/` (não vão para o git).
@@ -230,7 +231,19 @@ Plano original:
 - Efeitos com `K.play.fx`, `K.play.debris` e `K.play.eco` (chão queimado/congelado que persiste).
 - **Pronto quando:** um teste headless roteirizado mostra o jogador matando um inimigo e perdendo vida ao ser atingido, conferido por asserções no estado (não só pela imagem).
 
-### Etapa 8 — HUD, áudio e save · Opus 5.5
+### Etapa 8 — HUD, áudio e save · Opus 5.5 · ✅ concluída
+
+Resultado (`engine/src/ui/`: `font.ts`, `hud.ts`, `audio.ts`; `engine/src/game/save.ts`):
+- **Fora da simulação, sempre.** HUD e som leem o jogo **entre** os passos: `game.takeEvents()` entrega tudo o que foi emitido desde a última vez, com o instante. Reagir de dentro do passo gastaria o dado do jogo e quebraria o determinismo (o som usa `Math.random` à vontade, porque está fora dele). A engine passou a emitir `swing` quando um ator começa a golpear.
+- **HUD** em DOM por cima do canvas: corações de vida (cheios e vazios), a barra de habilidades (J golpe, K dash, L cast se houver; cada caixa enche conforme fica pronta), as linhas do próprio jogo (`def.hud.lines`: no `farol-fight`, `KILLS 1/2` e `ALL CLEAR`) e mensagens que somem sozinhas (`YOU FELL`, `BACK ON YOUR FEET`, `GRUNT DOWN`, `SAVED`, `WELCOME BACK`; o jogo pode dar as suas com `def.hud.message`). **Fonte de pixel própria** (5 × 7, maiúsculas, dígitos e pontuação; nada a baixar), na escala do pixel de arte, e **cores tiradas da paleta da cena** (a mais clara, a mais escura, a mais vermelha e um cinza discreto). Cada pedaço só é redesenhado quando o que mostra muda.
+- **Som** com WebAudio: canais geral, efeitos e música, cada um com seu volume, guardados no navegador; M liga e desliga a música, N tira tudo. **Nenhum arquivo de som:** golpe, acerto, morte, volta e save são sintetizados na hora (osciladores e ruído), e a música é um laço curto numa escala pentatônica menor, agendado um pouco à frente. O contexto de áudio só nasce no primeiro gesto do jogador (exigência dos navegadores). Eventos viram sons por `DEFAULT_SOUNDS`, e o jogo acrescenta os seus com `def.sounds`.
+- **Save** em JSON (formato `ink-engine-save`, versão 1): o `game.state` e, de cada entidade, lugar, ângulo, vida, se ainda está em cena e os dados (a memória dos cérebros). **Não** guarda o momento do mundo (partículas, fogo no chão, a animação da cena): carregar reconstrói o nível do zero, roda o `init` e põe cada entidade onde o save diz. Um jogador salvo caído volta de pé em casa, com a vida cheia. Entidades que o `init` não cria (nascidas durante o jogo) precisam de `def.brains[kind]` para voltar. No navegador vai para o `localStorage` (a cada 2 s, ao sair da página e com P); no Node, para arquivo (`--save`/`--load`). Um save de outro jogo, de outra versão ou que não é save é recusado dizendo por quê. Carregar roda dentro do dado do jogo, então **o mesmo save + o mesmo roteiro dão o mesmo jogo**.
+
+Medido:
+- **Pronto quando (cumprido):** no `npm run live` (Edge headless, teclado de verdade), os corações mostram a vida do jogador em todas as amostras enquanto os inimigos batem (5 → 4 → 3); a página é deixada com o jogador em (2,16; 0,25; 0,64) e vida 3, e ao abrir de novo ele está **no mesmo lugar, com vida 3**, o HUD mostra 3 e diz `WELCOME BACK`. O som roda (contexto `running`; golpes e acertos tocados).
+- `test/ui.test.mjs`, sem navegador: a fonte escreve e lê de volta todos os caracteres; numa luta roteirizada de 12 s o HUD mostra a vida certa **em todos os 720 passos** e as mensagens certas na ordem certa; os eventos da luta dão os sons certos (11 acertos, 3 mortes, 1 volta, mais de 20 golpes); um save carregado num jogo novo reproduz posições, vida e estado, e o mesmo save + roteiro dá o mesmo `hash` duas vezes; saves errados são recusados com a razão.
+
+Plano original:
 - HUD em DOM por cima do canvas: vida, barra de habilidades, mensagens. Fonte e escala em pixel-art.
 - Áudio com WebAudio: efeitos e música, com volume por canal.
 - Save em JSON (localStorage no navegador, arquivo no Node).

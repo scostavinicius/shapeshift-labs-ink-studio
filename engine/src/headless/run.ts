@@ -6,6 +6,8 @@ import { createGame, type RunningGame } from '../game/game';
 import type { SceneFn } from '../game/level';
 import { ScriptPlayer } from '../game/script';
 import type { GameDef, Script } from '../game/types';
+import { loadSave, type SaveData } from '../game/save';
+export { saveGame } from '../game/save';
 
 export interface HeadlessRun<State = unknown> {
   game: RunningGame<State>;
@@ -24,10 +26,12 @@ export function runHeadless<State>(
   scene: SceneFn,
   script: Script,
   t: number,
-  o: { hashEachStep?: boolean; bones?: 'cpu' | 'gpu' } = {}
+  o: { hashEachStep?: boolean; bones?: 'cpu' | 'gpu'; load?: SaveData } = {}
 ): HeadlessRun<State> {
   const player = new ScriptPlayer(script);
   const game = createGame(def, ink, { scene, seed: script.seed, bones: o.bones || 'cpu' });
+  // a save puts the game where it was before the script starts
+  if (o.load) loadSave(game, o.load);
   const steps = Math.round(t * 60),
     { w, h } = player.view,
     hashes: string[] = [];

@@ -2,7 +2,9 @@
 // The engine's command line: games run without a browser (docs/engine-stage6-design.md §5). One game per process.
 //
 //   node engine/cli.js shot <game> [--input script.json] [--t 5] [--out frame.png] [--state state.json]
-//                                  [--w 900 --h 620] [--colored] [--seed n]
+//                                  [--w 900 --h 620] [--colored] [--seed n] [--load save.json] [--save save.json]
+// --load starts the game where a save left it (a file written by --save, or saved from the page); --save writes one at
+// the end.
 //
 // <game> is a folder of engine/examples/ (its game.ts) or the path of a game module. The game is stepped to --t exactly as
 // the page steps it (fixed 1/60 s steps, the script's input), drawn with the toolkit's own renderer (cli/render.js), and
@@ -17,7 +19,7 @@ const R = require(path.join(REPO, 'cli', 'render.js'));
 const PNG = require(path.join(REPO, 'cli', 'png.js'));
 
 const USAGE = `usage: node engine/cli.js shot <game> [--input script.json] [--t 5] [--out frame.png] [--state state.json]
-                                       [--w 900 --h 620] [--colored] [--seed n]
+                                       [--w 900 --h 620] [--colored] [--seed n] [--load save.json] [--save save.json]
   <game>: a folder of engine/examples/ (${listExamples().join(', ') || 'none yet'}) or a path to a game module`;
 
 function listExamples() {
@@ -62,7 +64,7 @@ async function shot(o) {
   const file = gameFile(name);
   const def = (await load(file)).default;
   if (!def || typeof def.init !== 'function') die(`${file}: export default defineGame({ ... }) was expected`);
-  const { runHeadless } = await load(path.join(ENGINE, 'src', 'headless', 'run.ts'));
+  const { runHeadless, saveGame } = await load(path.join(ENGINE, 'src', 'headless', 'run.ts'));
   const script = o.input ? JSON.parse(fs.readFileSync(path.resolve(o.input), 'utf8')) : { events: [] };
   if (o.seed !== undefined) script.seed = +o.seed;
   const w = +(o.w || (script.view && script.view.w) || 900),
@@ -75,7 +77,8 @@ async function shot(o) {
   const scene = require(path.join(REPO, def.scene));
 
   const t0 = Date.now();
-  const { game } = runHeadless(def, ink, scene, script, t, { bones: 'cpu' });
+  const saved = o.load ? JSON.parse(fs.readFileSync(path.resolve(o.load), 'utf8')) : undefined;
+  const { game } = runHeadless(def, ink, scene, script, t, { bones: 'cpu', load: saved });
   const ms = Date.now() - t0;
   const img = R.render(game.world, { t: game.t, ...game.core.camera.view(), w, h, colored: !!o.colored });
   const big = R.upscale(img, img.px);
@@ -90,13 +93,19 @@ async function shot(o) {
     fs.mkdirSync(path.dirname(state), { recursive: true });
     fs.writeFileSync(state, JSON.stringify(snap, null, 2));
   }
+  let save = null;
+  if (o.save) {
+    save = path.resolve(o.save);
+    fs.mkdirSync(path.dirname(save), { recursive: true });
+    fs.writeFileSync(save, JSON.stringify(saveGame(game), null, 2));
+  }
   const p = game.player;
   console.log(
     `${def.id}: ${game.steps} steps (${game.t.toFixed(2)} s) in ${ms} ms` +
       (p ? ` · player at (${p.pos.map(v => v.toFixed(2)).join(', ')})` : '') +
       ` · ${game.entities.length} entities`
   );
-  console.log(JSON.stringify({ png, state, hash: snap.hash, t: +game.t.toFixed(6), steps: game.steps }));
+  console.log(JSON.stringify({ png, state, save, hash: snap.hash, t: +game.t.toFixed(6), steps: game.steps }));
 }
 
 const o = parse(process.argv.slice(2));

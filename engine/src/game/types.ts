@@ -241,6 +241,16 @@ export interface GameDef<State = unknown> {
   /** named places. Give y as null to stand it on the ground there. */
   spawns?: Record<string, [number, number | null, number]>;
   camera?: CameraOptions;
+  /** what the HUD shows of this game (stage 8): its own lines (a score), and its own words for events */
+  hud?: {
+    lines?(game: Game<State>): string[];
+    /** a message for an event: a string to show it, null to show nothing, undefined for the engine's default words */
+    message?(e: GameEvent, game: Game<State>): string | null | undefined;
+  };
+  /** the sounds of this game's events (stage 8): event name -> sound name, added to the engine's defaults */
+  sounds?: Record<string, string>;
+  /** brains by kind, for actors a save has that init did not make (spawned during play) */
+  brains?: Record<string, Brain>;
   /** fighting between actors (default on; false for a game with none) */
   combat?: CombatOptions | false;
   /** the kit's effects, made for the game (default none) */
@@ -289,10 +299,23 @@ export interface Game<State = unknown> {
   emit(name: string, data?: unknown): void;
   /** what has been emitted so far in this step (the last step's, between steps) */
   readonly events: readonly { name: string; data?: unknown }[];
+  /**
+   * Everything emitted since the last call, with when, and forget it: for what shows the game (HUD, sound), which reads
+   * it between steps. Never react to events inside the step from outside the game: the step runs on the game's dice.
+   */
+  takeEvents(): GameEvent[];
   /** the game as plain data: what a test asserts on, what `shot --state` writes */
   snapshot(): Snapshot<State>;
   /** a number that changes if anything in the simulation does: the splats, the entities, the dice */
   hash(): string;
+}
+
+/** an event as takeEvents() hands it out: what, when (simulation time and step), and its data */
+export interface GameEvent {
+  name: string;
+  data?: unknown;
+  t: number;
+  step: number;
 }
 
 export interface Snapshot<State = unknown> {
