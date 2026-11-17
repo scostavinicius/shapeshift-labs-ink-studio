@@ -20,7 +20,7 @@ Fatos do código que moldam o plano:
 
 ## Como retomar em outro computador
 
-**Estado (2026-11-16):** etapas 0 a 5 concluídas (todo o renderizador e o núcleo do jogo). **Próximo passo: a Etapa 6** (modelo de jogo e modo sem navegador): o desenho da API, do determinismo e da colisão com o **Fable 5.2**, o código com o Opus 5.5. Os resultados medidos de cada etapa estão nas seções abaixo.
+**Estado (2026-11-16):** etapas 0 a 5 concluídas (todo o renderizador e o núcleo do jogo). **Próximo passo: o código da Etapa 6** (modelo de jogo e modo sem navegador), com o **Opus 5.5**: o desenho do Fable 5.2 já está pronto em [engine-stage6-design.md](engine-stage6-design.md) (contrato em `engine/src/game/types.ts`), e a seção 7 dele é a lista de trabalho, em ordem. Os resultados medidos de cada etapa estão nas seções abaixo.
 
 **Preparar a máquina** (Node 18 ou mais novo, Git, e o Microsoft Edge ou o Chrome para o teste de paridade):
 ```bash
@@ -174,6 +174,13 @@ Plano original:
 
 ### Etapa 6 — Modelo de jogo e modo sem navegador · **[FABLE]** para o desenho, Opus 5.5 para o código
 Decisões que definem o quanto a engine é AI-friendly; erro aqui custa caro depois.
+
+**Desenho [FABLE]: ✅ concluído** em [engine-stage6-design.md](engine-stage6-design.md), com o contrato em `engine/src/game/types.ts`. Resumo das decisões:
+- Um jogo é uma cena do ink-studio **sem alteração** mais uma declaração (`defineGame`). A engine entrega à cena um kit-fachada que intercepta `makeBuilder`, `makeSculpt`, `S.bake` e `B.finish` (testado no `farol`: constrói igual).
+- Atores (`K.character`) são declarados com um máximo e sorteados de um pool; um inimigo é um ator cujo "cérebro" devolve o mesmo `StepInput` do jogador.
+- Determinismo: passo fixo, ordem por `id`, e a engine troca `Math.random`, `K.rnd` e `K.seed` por geradores do próprio jogo durante o build e cada passo (o `kg-play.js` usa `Math.random` 21 vezes).
+- Colisão: o campo do sculpt só conhece o último bake, então é amostrado logo após cada bake num mapa de colunas com trechos sólidos (0,25 de lado). Medido no `farol`: 1969 colunas, 2193 trechos; a ilha sai andável, o farol e a casa viram parede e fora é vazio, o que já impede cair da borda.
+- O código (Opus 5.5) segue a seção 7 do documento.
 - **[FABLE]** Definir a API de jogo: como se declara um nível (função `build` que devolve mundo + stage + pontos de spawn), entidades (jogador, inimigo, objeto, gatilho), e o contrato de determinismo (mesma seed + mesmo roteiro de input = mesmo resultado, usando `K.seed`/`K.rnd`, nunca `Math.random`).
 - **[FABLE]** Colisão: na construção do nível, cozinhar `S.sdf`/`S.heightAt` numa grade (mapa de altura + células bloqueadas) e expor `world.height(x, z, y)` para o `K.character`.
 - Modo sem navegador: `engine/src/headless` roda o mesmo loop no Node com input roteirizado e desenha com `cli/render.js`. Comando: `node engine/cli.js shot <jogo> --input roteiro.json --t 5 --out quadro.png`.
