@@ -151,6 +151,8 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
         input: { ...NO_INPUT }
       };
       actor.pos = [ch.st.x, ch.st.y, ch.st.z];
+      // draw it where it stands now (K.character writes its splats when it is updated: otherwise it shows from the next step)
+      ch.update(0, { ...NO_INPUT }, core.t);
       slotOf.set(actor.id, slot);
       markSlot(world.anim && world.anim.rows, slot);
       entities.push(actor);

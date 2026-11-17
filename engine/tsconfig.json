@@ -12,5 +12,5 @@
     "checkJs": false,
     "types": []
   },
-  "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.mjs", "types/**/*.d.ts"]
+  "include": ["src/**/*.ts", "src/**/*.js", "src/**/*.mjs", "types/**/*.d.ts", "examples/**/*.ts"]
 }

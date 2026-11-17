@@ -20,7 +20,7 @@ Fatos do código que moldam o plano:
 
 ## Como retomar em outro computador
 
-**Estado (2026-11-16):** etapas 0 a 8 concluídas (renderizador, núcleo do jogo, modelo de jogo com colisão, determinismo e modo sem navegador, combate e inimigos, HUD, áudio e save). O determinismo vale **entre motores de JavaScript** (Math determinístico; ver [engine-determinism.md](engine-determinism.md)). **Próximo passo: a Etapa 9** (camada para a IA: `AGENTS.md`, validador, comandos e exemplos), com o Opus 5.5. Os resultados medidos de cada etapa estão nas seções abaixo.
+**Estado (2026-11-17):** etapas 0 a 9 concluídas (renderizador, núcleo do jogo, modelo de jogo com colisão, determinismo e modo sem navegador, combate e inimigos, HUD, áudio e save, camada para a IA). O determinismo vale **entre motores de JavaScript** (Math determinístico; ver [engine-determinism.md](engine-determinism.md)). **Próximo passo: a Etapa 10** (o jogo de demonstração, a arena), com o Opus 5.5. Os resultados medidos de cada etapa estão nas seções abaixo.
 
 **Preparar a máquina** (Node 18 ou mais novo, Git, e o Microsoft Edge ou o Chrome para o teste de paridade):
 ```bash
@@ -249,7 +249,24 @@ Plano original:
 - Save em JSON (localStorage no navegador, arquivo no Node).
 - **Pronto quando:** a vida no HUD acompanha o estado; recarregar a página restaura a posição e a vida salvas.
 
-### Etapa 9 — Camada para a IA · Opus 5.5
+### Etapa 9 — Camada para a IA · Opus 5.5 · ✅ concluída
+
+Resultado:
+- **[engine/AGENTS.md](../engine/AGENTS.md):** o guia. O ciclo "escreve → `check` → `shot`/`sheet` → olha o PNG → corrige"; o que é um jogo e tudo o que uma definição aceita; como escrever uma cena com o kit (coordenadas, `S.box` com meias medidas, `res`, materiais em rampa de paleta, `B.finish`); atores, cérebros, triggers, props, a ordem do passo; combate, eventos e efeitos; as regras do determinismo; roteiros e saves; uma tabela de armadilhas (ordem de bake, pools depois do `B.finish`, sólidos negativos que apagam o que está dentro, graus × radianos, meias medidas, as cores fixas do `walker`, ghost não é chão...).
+- **Validador** (`engine/src/game/validate.ts`): todos os problemas de uma vez, cada um com onde, o quê e o que provavelmente se quis (`->`), mais um código estável. Três passadas: o **código-fonte** do jogo (`Math.random`, relógio, `**`, `Math` guardado no topo do módulo, timers; ignora comentários e textos), a **definição** (forma das coisas, graus onde vão radianos e vice-versa, números fora de propósito) e uma **execução** curta (spawn sem chão, com a sugestão do chão livre mais próximo; spawn dentro de parede; splats feitos depois do `B.finish`; sólidos depois do último bake; nível sem chão; `init` que devolve algo que não é dado; ninguém com cérebro de jogador; ator que cai do mundo ou vira NaN; a mesma partida duas vezes dando resultados diferentes; build ou passo lento). Se o `init` falha, o nível ainda é conferido.
+- **Comandos** (`node engine/cli.js ...`, todos terminando numa linha de JSON): `new` (um jogo a partir de um modelo: `blank` com cena própria, `walk`, `fight`), `check` (o validador; `--parity` também desenha no navegador e compara com o Node), `shot`, `sheet` (vários instantes da mesma partida lado a lado), `play` (abre no navegador). O jogo e a engine são empacotados juntos (uma cópia só da engine), e a cena pode ser escrita no próprio módulo do jogo.
+- **Três exemplos completos:** `farol-walk` (andar), `farol-fight` (lutar) e o novo **`yard`**: um nível escrito do zero, com um gerador de inimigos durante a partida (uma *prop*), um portão que dá a vitória (um *trigger*), chão que congela onde um inimigo cai, e `def.brains` para o save; o roteiro `win.json` ganha o jogo aos 25 s.
+- Correções no caminho: um ator agora aparece no instante em que nasce (antes, só no passo seguinte); o `sheet` mostrava o estado final em todas as linhas; o modelo em branco trazia o jogador e o inimigo com as mesmas cores; o typecheck agora cobre `engine/examples/`.
+
+Medido: `test/ai.test.mjs` (8 testes): o validador acha cada erro típico com a linha e a dica certas; os três exemplos passam **sem erros e sem avisos**; `new` gera um jogo que passa no `check`, e um jogo quebrado de propósito (spawn fora do chão + `Math.random` numa regra) faz o `check` sair com erro e um JSON que diz os três problemas.
+
+**Pronto quando (cumprido):** um agente Opus novo, **sem o contexto desta conversa**, recebeu só "leia engine/AGENTS.md e crie um nível jogável novo, diferente dos exemplos" e fez o **`beacons`** em menos de 3 minutos: uma cena própria (platô de grama, santuário em ruínas, três postes de farol), um jogador, inimigos que acordam a cada farol aceso, vitória (acender os três) e derrota (cair três vezes), HUD, e um roteiro que vence aos 7,2 s. Conferido à parte: `check` sem erros nem avisos, o roteiro chega a `won: true`, o PNG mostra o nível certo, e `check --parity` dá 100% e o mesmo `hash` no navegador. Ficou como quarto exemplo.
+
+O relato dele apontou 10 lacunas, e as que pesavam foram corrigidas:
+- **na ferramenta:** o `shot` agora escreve o texto do HUD no PNG (vida e `hud.lines`; `--no-hud` tira), traz o estado do jogo na linha JSON (`game: { player, state, ... }`) e ganhou `--trace 0.5`, que anota o jogador a cada meio segundo, para ajustar roteiros;
+- **no guia:** o formato do JSON de cada comando; as medidas do `walker` (anda ≈ 2,7 u/s, corre ≈ 5 u/s, alcance 1,1, degrau até 0,45); como a câmera segue o jogador; a assinatura e o padrão dos triggers (`onEnter(who, game)`, `watch` = `['player']`, raio medido até o pé do ator); a semente do roteiro (substitui a do jogo); o `dither`; e um passo a passo para montar um roteiro que chega a algum lugar.
+
+Plano original:
 - `engine/AGENTS.md`: como criar um nível, um inimigo, um efeito; o ciclo "escreve → `shot` → olha o PNG → corrige"; armadilhas conhecidas (ordem de `bake`, alocar `pool` antes de `B.finish`, sólidos negativos apagam o que está dentro deles, graus × radianos).
 - Validador de nível com mensagens que dizem o que provavelmente se quis (mesmo espírito de `K.diorama.check` em [src/kit/kc-data.js](../src/kit/kc-data.js)).
 - Comandos: `shot`, `sheet` (vários instantes), `play` (abre no navegador), `check` (paridade).
