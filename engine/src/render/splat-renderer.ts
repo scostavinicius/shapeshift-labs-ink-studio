@@ -407,8 +407,47 @@ export class SplatRenderer {
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
+  /**
+   * The graphics card's own time for draw(), in ms, when timing is on (timeGpu(true)): measured with
+   * EXT_disjoint_timer_query_webgl2 without waiting, so each figure arrives a few frames after its frame. NaN until one has.
+   */
+  lastGpuMs = NaN;
+  private timer: { ext: any; pending: WebGLQuery[] } | null = null;
+
+  /** Time the graphics card's work for each draw (stage 11). False if the browser cannot. */
+  timeGpu(on: boolean): boolean {
+    if (!on) {
+      this.timer = null;
+      return true;
+    }
+    const ext = this.gl.getExtension('EXT_disjoint_timer_query_webgl2');
+    if (!ext) return false;
+    this.timer = { ext, pending: [] };
+    return true;
+  }
+
   /** Draw the world (as last uploaded) for this view, and show it on the canvas. */
   draw(world: World, view: View, o: DrawOptions = {}): void {
+    const tm = this.timer;
+    if (!tm) return this.drawFrame(world, view, o);
+    const gl = this.gl;
+    // collect what has finished (oldest first), without waiting
+    while (tm.pending.length) {
+      const q = tm.pending[0];
+      if (!gl.getQueryParameter(q, gl.QUERY_RESULT_AVAILABLE)) break;
+      tm.pending.shift();
+      if (!gl.getParameter(tm.ext.GPU_DISJOINT_EXT)) this.lastGpuMs = gl.getQueryParameter(q, gl.QUERY_RESULT) / 1e6;
+      gl.deleteQuery(q);
+    }
+    const q = gl.createQuery()!;
+    gl.beginQuery(tm.ext.TIME_ELAPSED_EXT, q);
+    this.drawFrame(world, view, o);
+    gl.endQuery(tm.ext.TIME_ELAPSED_EXT);
+    tm.pending.push(q);
+    if (tm.pending.length > 8) gl.deleteQuery(tm.pending.shift()!);
+  }
+
+  private drawFrame(world: World, view: View, o: DrawOptions = {}): void {
     const gl = this.gl,
       N = world.count,
       { W, H } = view,

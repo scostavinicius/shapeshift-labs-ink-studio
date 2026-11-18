@@ -9,6 +9,8 @@
 //   &input=farol-walk/walk.json&t=6   ...or that game run by a script to t (as `cli.js shot` runs it), the clock then stopped
 //   &fresh=1                       start the game over, forgetting its save
 //   &replay=arena/win.json         play the game in real time with a script's input (a recorded game, watched live)
+//   &perf=1                        keep what each frame costs (simulation, upload, draw, HUD) in ENGINE.perf;
+//   &perf=gpu                      ...and wait for the graphics card each frame (a pixel read back) to time it (slows it)
 // A game shows its HUD and makes sound (M: music on or off, N: all sound off), saves itself every 2 seconds and when the
 // page is left (P: save now), and comes back where it was saved when the page is opened again.
 import { Core, DomInput, project, type Sample } from './core/index';
@@ -124,10 +126,27 @@ async function start(): Promise<void> {
     since = performance.now(),
     spent = 0,
     view: View = core.view(canvas.clientWidth, canvas.clientHeight);
+  // measuring (stage 11): what each frame costs, part by part
+  const perfMode = q.get('perf');
+  type PerfFrame = { drew: boolean; sim: number; steps: number; upload: number; rows: number; draw: number; gpu: number; hud: number; total: number; sort: string; sortMs: number };
+  const perfFrames: PerfFrame[] = [];
+  /** what the last picture was drawn for (page size and look), and how many pictures have been drawn */
+  let drawnKey = '',
+    drawn = 0;
+  const perfPixel = new Uint8Array(4);
+  // the card's own time per draw, by timer query, where the browser has one (not waiting: a few frames late)
+  const perfTimer = !!perfMode && renderer.timeGpu(true);
+  const gpuTimes: number[] = [];
   const frame = (now: number) => {
     requestAnimationFrame(frame);
     if (paused) return;
     const began = performance.now();
+    const steps0 = core.loop.steps;
+    let tSim = 0,
+      tUp = 0,
+      tDraw = 0,
+      tGpu = 0,
+      tHud = 0;
     // the first frame only starts the clock; after that, the time between frames is simulated in fixed steps
     const real = last < 0 ? 0 : (now - last) / 1000;
     last = now;
@@ -139,9 +158,28 @@ async function start(): Promise<void> {
           if (replay) replay.apply(step, game!.core.input);
         });
     } else core.advance(real, dt => dom.poll(dt));
-    view = core.view(canvas.clientWidth, canvas.clientHeight);
-    renderer.upload(world);
-    renderer.draw(world, view, { look });
+    if (perfMode) tSim = performance.now();
+    // draw only when there is something new: a step ran, or the page's size or the look changed. On a screen faster than
+    // the 60 steps a second (120, 144 Hz) the frames between steps would show the same picture again, at full cost
+    const key = `${canvas.clientWidth}x${canvas.clientHeight} ${look}`,
+      fresh = core.loop.steps !== steps0 || key !== drawnKey;
+    if (fresh) {
+      view = core.view(canvas.clientWidth, canvas.clientHeight);
+      renderer.upload(world);
+    }
+    if (perfMode) tUp = performance.now();
+    if (fresh) {
+      renderer.draw(world, view, { look });
+      drawnKey = key;
+      drawn++;
+    }
+    if (perfMode) tDraw = performance.now();
+    if (perfMode === 'gpu' && fresh) {
+      // wait for the card: reading a pixel back cannot happen before it has drawn (gl.finish does not wait in Chrome)
+      renderer.gl.readPixels(0, 0, 1, 1, renderer.gl.RGBA, renderer.gl.UNSIGNED_BYTE, perfPixel);
+      tGpu = performance.now();
+    }
+    if (perfMode && perfTimer && fresh) gpuTimes.push(renderer.lastGpuMs);
     core.shown = view;
     if (game && hud) {
       const events = game.takeEvents(),
@@ -153,6 +191,23 @@ async function start(): Promise<void> {
         savedAt = now;
         save(false);
       }
+    }
+    if (perfMode) {
+      tHud = performance.now();
+      perfFrames.push({
+        drew: fresh,
+        sim: tSim - began,
+        steps: core.loop.steps - steps0,
+        upload: tUp - tSim,
+        rows: renderer.lastUpload.rows,
+        draw: tDraw - tUp,
+        gpu: perfMode === 'gpu' ? tGpu - tDraw : 0,
+        hud: tHud - (perfMode === 'gpu' ? tGpu : tDraw),
+        total: tHud - began,
+        sort: renderer.lastSort.by,
+        sortMs: renderer.lastSort.by === 'worker' ? renderer.lastSort.workerMs : renderer.lastSort.ms
+      });
+      if (perfFrames.length > 5000) perfFrames.shift();
     }
     spent += performance.now() - began;
     frames++;
@@ -187,6 +242,14 @@ sound: ${sound!.ctx ? sound!.ctx.state : 'waits for a key'} · music ${sound!.vo
   (window as unknown as { ENGINE: unknown }).ENGINE = {
     scene: id,
     game,
+    /** (with &perf) the cost of the last frames, part by part, in ms */
+    perf: perfFrames,
+    /** how many pictures have been drawn (frames with nothing new are not drawn again) */
+    get drawn() {
+      return drawn;
+    },
+    /** (with &perf) the card's time per draw, by timer query; empty if the browser has no timer */
+    gpuTimes,
     hud,
     feed,
     sound,

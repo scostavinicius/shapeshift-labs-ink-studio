@@ -20,7 +20,7 @@ Fatos do código que moldam o plano:
 
 ## Como retomar em outro computador
 
-**Estado (2026-11-17):** etapas 0 a 10 concluídas (renderizador, núcleo do jogo, modelo de jogo com colisão, determinismo e modo sem navegador, combate e inimigos, HUD, áudio e save, camada para a IA, jogo de demonstração). O determinismo vale **entre motores de JavaScript** (Math determinístico; ver [engine-determinism.md](engine-determinism.md)). **Próximo passo: a Etapa 11** (desempenho), com o **Fable 5.2**: medir antes de mexer e decidir, com números, o que vale levar para Worker ou WebAssembly. Os resultados medidos de cada etapa estão nas seções abaixo.
+**Estado (2026-11-17):** **todas as etapas (0 a 11) concluídas** (renderizador, núcleo do jogo, modelo de jogo com colisão, determinismo e modo sem navegador, combate e inimigos, HUD, áudio e save, camada para a IA, jogo de demonstração, desempenho). O determinismo vale **entre motores de JavaScript** (Math determinístico; ver [engine-determinism.md](engine-determinism.md)). **O plano terminou.** O que ficou para depois, com custo estimado, está na seção 4 de [engine-performance.md](engine-performance.md) (desempenho em GPUs integradas antigas) e no item 1 das decisões dele (personagens carregados por ossos na GPU). Os resultados medidos de cada etapa estão nas seções abaixo.
 
 **Preparar a máquina** (Node 18 ou mais novo, Git, e o Microsoft Edge ou o Chrome para o teste de paridade):
 ```bash
@@ -291,7 +291,26 @@ Plano original:
 - `examples/arena`: uma arena circular como a do vídeo, um jogador, 2 tipos de inimigo, um chefe simples, vitória e derrota.
 - **Pronto quando:** dá para jogar do início ao fim no navegador a 60 fps e o roteiro headless de "vitória" passa.
 
-### Etapa 11 — Desempenho · **[FABLE]**
+### Etapa 11 — Desempenho · **[FABLE]** → feita com o Opus 5.5 (o acesso ao Fable acabou) · ✅ concluída
+
+Resultado: o relatório completo está em **[engine-performance.md](engine-performance.md)**. Em resumo:
+- **Medido** (Ryzen 5 5500 + RTX 5050; esta máquina não tem GPU integrada): a thread da página gasta 0,1 a 0,4 ms por quadro (p95 < 2 ms) e a simulação 0,4 ms por passo, a mesma com 50 mil ou 303 mil splats. A GPU gasta 0,96 ms por desenho com 303 mil splats no estilo padrão e 1,92 ms no `colored`. **O gargalo de GPU é por splat (vertex shader)**, não por pixel: o SwiftShader escala em proporção direta aos splats.
+- **Perfil da simulação:** ~72% é o `K.character` do kit reescrevendo os splats de cada personagem (~0,1 ms por personagem por passo).
+- **Decidido:**
+  - simulação e ordenação **não** vão para WebAssembly (os números não pedem);
+  - se um jogo tiver dezenas de inimigos, o caminho é carregar o `K.character` por ossos na GPU, o que muda o kit (2 a 3 dias).
+- **Feito:**
+  - a página só desenha quando há algo novo (60 desenhos por segundo em vez de 176: **3 vezes menos GPU** num monitor rápido, a mesma imagem);
+  - `hypot` determinístico mais leve, com os mesmos bits;
+  - cronômetro de GPU no renderizador;
+  - `npm run perf` e `test/perf/profile.mjs`;
+  - a arena densa (`engine/examples/arena-dense`, 303 mil splats).
+- **Pronto quando (pela segunda opção do critério):** o relatório diz o que impede e quanto custa.
+  - Pela estimativa, as integradas atuais (Iris Xe, Radeon 680M e Vega, M1) seguram 60 fps com 300 mil splats no estilo padrão; as antigas (Intel UHD 6xx) não, com ~29 ms estimados.
+  - O que impede é o trabalho de vértice por splat. Resolver vai de horas (densidade de acordo com o pixel de arte; estilo padrão em GPU fraca) a 1 ou 2 dias (pré-passe de projeção com *transform feedback*, estimado em 2 a 3 vezes menos GPU).
+  - Medir num aparelho com GPU integrada fecha a estimativa.
+
+Plano original:
 - Medir antes de mexer: perfil de CPU (simulação × ordenação × envio) e de GPU na arena cheia.
 - Decidir, com números, o que vale mover para Worker ou WebAssembly (candidatos: ordenação, `K.mpm`, `K.xpbd`, partículas).
 - **Pronto quando:** a arena mantém 60 fps com 300 mil splats numa GPU integrada, ou existe um relatório dizendo o que impede e quanto custaria resolver.
@@ -307,7 +326,7 @@ Plano original:
 | 5 | Opus 5.5 |
 | **6 — API de jogo, determinismo, colisão** | **Fable 5.2 no desenho**, Opus no código |
 | 7, 8, 9, 10 | Opus 5.5 |
-| **11 — desempenho** | **Fable 5.2** |
+| **11 — desempenho** | **Fable 5.2** no plano; feita com o Opus 5.5 |
 
 ## Verificação de ponta a ponta
 

@@ -337,6 +337,7 @@ export default function (api: BotApi) {
 | **Ator nascendo durante a partida, sem `brains`** | o save não carrega | `brains: { kind: cérebro }` na definição |
 | **Estado com funções ou objetos do kit** | o save quebra; o `check` acusa | `game.state` só com dados simples; objetos do kit vão em `build()` → `game.built` |
 | **Mais atores que `max`** | erro "max is N, all in use" | aumente `actors.<nome>.max` |
+| **Superfícies finas demais para o pixel de arte** | o jogo pesa numa GPU fraca sem ficar mais bonito | o custo de GPU é por splat. Use `res` de acordo com o `detail` da cena: a arena tem ~2,7 splats por pixel de arte, e a arena densa (16 por pixel) custa 4,5 vezes mais na GPU. O estilo `colored` dobra o custo. Meça com `cd engine && npm run perf` (ver `docs/engine-performance.md`) |
 
 Quando o `check` não explicar, rode `shot`/`sheet` e **olhe o PNG**.
 

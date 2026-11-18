@@ -21,8 +21,12 @@ const PALETTE = [
   0x3a1416, 0x6b1f22, 0xa8342c, 0xe0603a // 23-26 the warden's embers
 ];
 
-/** the arena: a sand disc 20 across with a stone rim, a ring wall with four gates, pillars and torches */
-const arenaScene = (kit: any) => ({
+/**
+ * The arena: a sand disc 20 across with a stone rim, a ring wall with four gates, pillars and torches. `density` scales
+ * how finely its surfaces are sampled (splats grow with its square): 1 is the game's own, ~2.8 makes ~300 000 splats
+ * (engine/examples/arena-dense, for measuring).
+ */
+export const makeArenaScene = (density = 1) => (kit: any) => ({
   id: 'arena',
   name: 'The Arena',
   seed: 9,
@@ -34,15 +38,15 @@ const arenaScene = (kit: any) => ({
     S.amb = 0.25;
     const stone = { r: [1, 2, 3, 4, 5] };
     // the floor: a disc of sand on a wider disc of stone
-    S.lathe([0, -1.5, 0], 1.5, 11.5, stone, { res: 0.25 });
-    S.lathe([0, -0.45, 0], 0.5, 9.8, { r: [6, 7, 8, 9] }, { res: 0.2 });
+    S.lathe([0, -1.5, 0], 1.5, 11.5, stone, { res: 0.25 / density });
+    S.lathe([0, -0.45, 0], 0.5, 9.8, { r: [6, 7, 8, 9] }, { res: 0.2 / density });
     // the ring wall: segments of a low wall between four gates (north, east, south, west)
     for (let k = 0; k < 24; k++) {
       const a = ((k + 0.5) / 24) * Math.PI * 2;
       if (k % 6 === 2 || k % 6 === 3) continue; // gates at 90° steps
       const x = Math.cos(a) * 10.6,
         z = Math.sin(a) * 10.6;
-      S.ball([x, 0.5, z], [0.95, 0.55, 0.95], stone, { res: 0.16 });
+      S.ball([x, 0.5, z], [0.95, 0.55, 0.95], stone, { res: 0.16 / density });
     }
     // pillars either side of each gate, with torches
     for (let g = 0; g < 4; g++) {
@@ -50,12 +54,12 @@ const arenaScene = (kit: any) => ({
       for (const off of [-0.32, 0.32]) {
         const x = Math.cos(a + off) * 10.8,
           z = Math.sin(a + off) * 10.8;
-        S.box([x, 1.6, z], [0.45, 1.6, 0.45], stone, { res: 0.14 });
-        S.ball([x, 3.45, z], 0.32, { r: [18, 19], em: true }, { res: 0.08, ghost: true });
+        S.box([x, 1.6, z], [0.45, 1.6, 0.45], stone, { res: 0.14 / density });
+        S.ball([x, 3.45, z], 0.32, { r: [18, 19], em: true }, { res: 0.08 / density, ghost: true });
       }
     }
     // a worn mark at the middle
-    S.lathe([0, 0.02, 0], 0.03, 2.2, { r: [7, 8] }, { res: 0.2 });
+    S.lathe([0, 0.02, 0], 0.03, 2.2, { r: [7, 8] }, { res: 0.2 / density });
     S.bake();
     return B.finish({ cam: { target: [0, 0.5, 0], dist: 22, pitch: 0.82, yaw: 0.3 }, detail: 7, radius: 12, dither: 0.2 });
   }
@@ -160,7 +164,7 @@ export interface ArenaState {
 export default defineGame<ArenaState>({
   id: 'arena',
   name: 'The Arena',
-  scene: arenaScene,
+  scene: makeArenaScene(1),
   actors: {
     hero: { spec: walker, hp: HERO_HP },
     grunt: { spec: grunt, max: 3, hp: 3, radius: 0.36 },

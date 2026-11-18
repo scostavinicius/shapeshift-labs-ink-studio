@@ -1150,7 +1150,40 @@ export function atanh(x: number): number {
 }
 
 /** sqrt(sum of squares), scaled by the largest so nothing overflows; in argument order */
-export function hypot(...args: number[]): number {
+export function hypot(a?: number, b?: number, c?: number): number {
+  // two and three arguments (nearly every call: 4 000 a step in the arena) without making an array: the same arithmetic,
+  // in the same order, as the general case below, so the same bits (the fingerprint test holds this)
+  const n = arguments.length;
+  if (n === 2 || n === 3) {
+    const x = +a!,
+      y = +b!,
+      z = n === 3 ? +c! : 0,
+      ax = fabs(x),
+      ay = fabs(y),
+      az = fabs(z);
+    if (ax === Infinity || ay === Infinity || az === Infinity) return Infinity;
+    if (ax !== ax || ay !== ay || az !== az) return NaN;
+    let max = 0;
+    if (ax > max) max = ax;
+    if (ay > max) max = ay;
+    if (az > max) max = az;
+    if (max === 0) return 0;
+    let sum = 0;
+    const qx = x / max,
+      qy = y / max;
+    sum += qx * qx;
+    sum += qy * qy;
+    if (n === 3) {
+      const qz = z / max;
+      sum += qz * qz;
+    }
+    return Math_sqrt(sum) * max;
+  }
+  return hypotN(Array.prototype.slice.call(arguments) as number[]);
+}
+
+/** hypot of any number of arguments */
+function hypotN(args: number[]): number {
   let max = 0,
     nan = false;
   for (let i = 0; i < args.length; i++) {

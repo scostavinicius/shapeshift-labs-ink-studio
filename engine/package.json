@@ -9,7 +9,8 @@
     "typecheck": "tsc --noEmit",
     "test": "npm run typecheck && node --test test/*.test.mjs",
     "parity": "node test/parity/run.mjs",
-    "live": "node test/live/run.mjs"
+    "live": "node test/live/run.mjs",
+    "perf": "node test/perf/run.mjs"
   },
   "license": "UNLICENSED",
   "engines": {
