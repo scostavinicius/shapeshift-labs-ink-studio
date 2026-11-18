@@ -177,7 +177,8 @@ export class Hud {
     this.hearts.el.id = 'hud-health';
     this.lines = new Piece(corner({ right: '16px', top: '16px' }));
     this.lines.el.id = 'hud-lines';
-    this.msgs = new Piece(corner({ left: '50%', top: '16px', transform: 'translateX(-50%)' }));
+    // messages a third of the way down, clear of the corners' lines however long those get
+    this.msgs = new Piece(corner({ left: '50%', top: '30%', transform: 'translateX(-50%)' }));
     this.msgs.el.id = 'hud-messages';
     this.bar = new Piece(corner({ right: '16px', bottom: '16px' }));
     this.bar.el.id = 'hud-abilities';

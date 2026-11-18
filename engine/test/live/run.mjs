@@ -229,6 +229,35 @@ async function coreChecks() {
   );
   if (!hudFollows || !restored || left.audio !== 'running') failed = true;
   await page.screenshot({ path: path.join(OUT, 'farol-fight-hud.png') });
+
+  // stage 10: the arena played from start to end in the browser, in real time, by its winning script
+  await open('game=arena&replay=arena/win.json');
+  const fpsSeen = [];
+  let end = null;
+  const started = Date.now();
+  while (Date.now() - started < 90000) {
+    await page.waitForTimeout(1000);
+    const r = await page.evaluate(() => {
+      const E = window.ENGINE,
+        g = E.game;
+      return { fps: E.info.fps, frameMs: E.info.frameMs, steps: g.steps, t: g.t, state: g.state, hash: g.hash() };
+    });
+    fpsSeen.push(r.fps);
+    if (r.state.won || r.state.lost) {
+      end = r;
+      break;
+    }
+  }
+  const settled = fpsSeen.slice(1),
+    minFps = Math.min(...settled),
+    meanFps = settled.reduce((a, b) => a + b, 0) / Math.max(1, settled.length);
+  const arenaOK = !!end && end.state.won && minFps >= 55;
+  console.log(
+    `  arena        replayed win.json live: ${end ? (end.state.won ? 'VICTORY' : 'DEFEAT') + ` at ${end.t.toFixed(1)} s (step ${end.steps}), kills ${end.state.kills}, falls ${end.state.falls}` : 'no end in 90 s'}; ` +
+      `fps min ${minFps}, mean ${meanFps.toFixed(0)} over ${settled.length} s  ${arenaOK ? 'ok' : 'FAILED'}`
+  );
+  if (!arenaOK) failed = true;
+  await page.screenshot({ path: path.join(OUT, 'arena-victory.png') });
 }
 
 let failed = false;

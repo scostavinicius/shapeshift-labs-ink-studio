@@ -30,7 +30,7 @@ export interface CreateOptions {
 export interface RunningGame<State = unknown> extends Game<State> {
   readonly level: Level;
   /** let real seconds pass (the page, every frame): runs the fixed steps that fit */
-  advance(real: number, beforeStep?: (dt: number) => void): number;
+  advance(real: number, beforeStep?: (dt: number, step: number) => void): number;
   /** run every step of the next `seconds`, with no frame cap (tests, headless) */
   run(seconds: number): void;
   /** run exactly n steps */

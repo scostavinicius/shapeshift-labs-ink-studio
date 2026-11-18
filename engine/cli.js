@@ -14,6 +14,8 @@
 //   node engine/cli.js sheet <game> [--input s.json] [--times 0,1,2,4] [--cols 4] [--out f.png] [--colored] [--w 600 --h 420]
 //                                                                        several moments of one run, side by side
 //   node engine/cli.js play  <game> [--port 5173] [--no-open]           the game in the browser (dev server)
+//   node engine/cli.js record <game> --bot bot.ts [--t 120] [--until won] [--out script.json]
+//                                                                        a bot plays; what it pressed becomes a script
 //
 // <game> is a folder of engine/examples/ or the path of a game module. Pictures go to engine/out/ unless --out says.
 const fs = require('node:fs');
@@ -32,6 +34,7 @@ const USAGE = `usage: node engine/cli.js <command> <game> [options]
   shot  <game> [--input s.json] [--t 5] [--out f.png] [--state st.json] [--save s.json] [--load s.json] [--trace 0.5] [--colored] [--no-hud]
   sheet <game> [--input s.json] [--times 0,1,2,4] [--cols 4] [--out f.png] [--colored]
   play  <game> [--port 5173] [--no-open]
+  record <game> --bot bot.ts [--t 120] [--until won] [--out script.json]
   <game>: a folder of engine/examples/ (${listExamples().join(', ') || 'none yet'}) or a path to a game module`;
 
 function listExamples() {
@@ -344,6 +347,60 @@ async function play(o) {
   }
 }
 
+// ---------------------------------------------------------------------------------------------------------- record
+
+/**
+ * A bot plays the game (a module whose default export is (api) => void, called before each step: see
+ * engine/src/game/bot.ts) for up to --t seconds, or until game.state[--until] is true; every key it pressed is recorded
+ * as a script. The script is then replayed with no bot, and must give the same game (the same hash): it is the script,
+ * not the bot, that a test keeps.
+ */
+async function record(o) {
+  const file = gameFile(o._[1]);
+  if (!o.bot) die('record needs --bot <module>: a function (api) => void that presses keys (see engine/examples/arena/bot.ts)');
+  const { def, rt } = await loadGame(file);
+  const botFile = path.resolve(o.bot);
+  const out = await esbuild.build({ entryPoints: [botFile], bundle: true, format: 'esm', platform: 'node', write: false, logLevel: 'silent' });
+  const bot = (await import('data:text/javascript,' + encodeURIComponent(out.outputFiles[0].text))).default;
+  if (typeof bot !== 'function') die(`${o.bot}: export default function (api) { ... } was expected`);
+  const t = o.t === undefined ? 120 : +o.t,
+    until = o.until;
+  const view = { w: 900, h: 620 };
+  const seedScript = { seed: o.seed !== undefined ? +o.seed : undefined, view, events: [] };
+  const { game } = rt.runHeadless(def, freshInk(), sceneOf(def), seedScript, 0, { bones: 'cpu' });
+  const rec = new rt.InputRecorder(game.core.input, () => game.steps, view);
+  const { api, before } = rt.botApi(game, game.core.input);
+  const steps = Math.round(t * 60);
+  const t0 = Date.now();
+  while (game.steps < steps) {
+    if (until && game.state && game.state[until]) break;
+    bot(api);
+    before();
+    game.core.shown = game.core.view(view.w, view.h);
+    game.runSteps(1);
+  }
+  rec.stop();
+  const script = rec.script(o.seed !== undefined ? +o.seed : undefined);
+  const end = sample(game),
+    hash = game.hash(),
+    seconds = game.t;
+  // the script alone gives the same game
+  const replay = rt.runHeadless(def, freshInk(), sceneOf(def), JSON.parse(JSON.stringify(script)), seconds, { bones: 'cpu' }).game;
+  const same = replay.hash() === hash;
+  const dest = path.resolve(o.out || path.join(OUT, `${def.id}-recorded.json`));
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  const lines = script.events.map(e => '    ' + JSON.stringify(e));
+  const NL = String.fromCharCode(10);
+  const head = (script.seed !== undefined ? `  "seed": ${script.seed},` + NL : '') + `  "view": ${JSON.stringify(script.view)},` + NL;
+  fs.writeFileSync(dest, '{' + NL + head + '  "events": [' + NL + lines.join(',' + NL) + NL + '  ]' + NL + '}' + NL);
+  console.log(
+    `${def.id}: the bot played ${seconds.toFixed(2)} s (${game.steps} steps) in ${Date.now() - t0} ms; ${script.events.length} events recorded; ` +
+      `state ${JSON.stringify(end.state)}; the script alone ${same ? 'gives the same game' : 'DOES NOT give the same game'}`
+  );
+  console.log(JSON.stringify({ ok: same, script: dest, events: script.events.length, t: +seconds.toFixed(4), steps: game.steps, hash, game: end }));
+  if (!same) process.exitCode = 1;
+}
+
 // ---------------------------------------------------------------------------------------------------------- new
 
 const TEMPLATES = { blank: 'blank', walk: 'farol-walk', fight: 'farol-fight' };
@@ -433,7 +490,7 @@ export default defineGame({
 // ---------------------------------------------------------------------------------------------------------- main
 
 const o = parse(process.argv.slice(2));
-const commands = { shot, sheet, check, play, new: newGame };
+const commands = { shot, sheet, check, play, record, new: newGame };
 const run = commands[o._[0]];
 if (!run) die(USAGE);
 Promise.resolve(run(o)).catch(e => die(e && e.stack ? e.stack : String(e), { ok: false, error: String((e && e.message) || e) }));

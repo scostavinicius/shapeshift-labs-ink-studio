@@ -80,6 +80,7 @@ Ela está fixada em `engine/test/dmath.test.mjs`, e o harness de paridade (`npm 
 |---|---|
 | `farol-walk`, `walk.json`, 6 s | `ea152a96cb4fe1a9` |
 | `farol-fight`, `fight.json`, 8,3 s | `a9cdaa735cf7eda8` |
+| `arena`, `win.json`, 40 s | `368cabf9a6aee950` |
 
   A luta inteira (720 passos, 12 s) também foi comparada passo a passo: nenhuma diferença.
 

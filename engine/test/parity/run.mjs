@@ -46,7 +46,9 @@ export const CASES = [
 export const GAMES = [
   { name: 'farol-walk game', game: 'farol-walk', input: 'farol-walk/walk.json', t: 6 },
   // a moment with a grunt's pieces in the air and the grass on fire: debris and the ground's memory roll Math.random
-  { name: 'farol-fight game', game: 'farol-fight', input: 'farol-fight/fight.json', t: 8.3 }
+  { name: 'farol-fight game', game: 'farol-fight', input: 'farol-fight/fight.json', t: 8.3 },
+  // the arena in its third wave: the warden, darters, fire on the ground
+  { name: 'arena game', game: 'arena', input: 'arena/win.json', t: 40 }
 ];
 
 const args = process.argv.slice(2);
@@ -89,7 +91,7 @@ async function gameReference(g) {
   const def = (await loadTs(`examples/${g.game}/game.ts`)).default;
   const { runHeadless } = await loadTs('src/headless/run.ts');
   const script = JSON.parse(fs.readFileSync(path.join(HERE, '..', '..', 'examples', g.input), 'utf8'));
-  const { game } = runHeadless(def, loadInk(), sceneFn(def.scene), script, g.t, { bones: 'cpu' });
+  const { game } = runHeadless(def, loadInk(), typeof def.scene === 'string' ? sceneFn(def.scene) : def.scene, script, g.t, { bones: 'cpu' });
   const view = game.core.camera.view();
   return {
     hash: game.hash(),

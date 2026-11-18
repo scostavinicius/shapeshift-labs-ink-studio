@@ -8,10 +8,12 @@
 //   ?game=farol-walk               a game (engine/examples/<name>/game.ts), played: the player's character takes the input
 //   &input=farol-walk/walk.json&t=6   ...or that game run by a script to t (as `cli.js shot` runs it), the clock then stopped
 //   &fresh=1                       start the game over, forgetting its save
+//   &replay=arena/win.json         play the game in real time with a script's input (a recorded game, watched live)
 // A game shows its HUD and makes sound (M: music on or off, N: all sound off), saves itself every 2 seconds and when the
 // page is left (P: save now), and comes back where it was saved when the page is opened again.
 import { Core, DomInput, project, type Sample } from './core/index';
 import { forgetLocal, loadSave, readLocal, saveGame, saveProblem, storeLocal } from './game/save';
+import { ScriptPlayer } from './game/script';
 import { Sound } from './ui/audio';
 import { Hud, HudFeed, hudModel } from './ui/hud';
 import { createGame, type RunningGame } from './game/game';
@@ -36,6 +38,8 @@ async function start(): Promise<void> {
     id: string,
     // a game run by a script is shown at its last step, the clock stopped
     frozen = false,
+    // a game played live with a script's input
+    replay: ScriptPlayer | null = null,
     loadedFrom: ReturnType<typeof readLocal> = null;
   if (q.get('game')) {
     const loaded = await loadGame(q.get('game')!);
@@ -50,7 +54,8 @@ async function start(): Promise<void> {
     core = game.core;
     name = loaded.def.name || loaded.def.id;
     id = loaded.def.id;
-    if (!frozen) {
+    if (q.get('replay')) replay = new ScriptPlayer(await (await fetch('/examples/' + q.get('replay'))).json());
+    if (!frozen && !replay) {
       if (q.get('fresh')) forgetLocal(id);
       const saved = readLocal(id);
       const problem = saved && saveProblem(game, saved);
@@ -98,7 +103,7 @@ async function start(): Promise<void> {
   let savedAt = performance.now(),
     saves = 0;
   const save = (say: boolean) => {
-    if (!game || frozen) return false;
+    if (!game || frozen || replay) return false;
     const ok = storeLocal(saveGame(game));
     if (ok) saves++;
     if (say) {
@@ -127,7 +132,12 @@ async function start(): Promise<void> {
     const real = last < 0 ? 0 : (now - last) / 1000;
     last = now;
     if (game) {
-      if (!frozen) game.advance(real, dt => dom.poll(dt));
+      if (!frozen)
+        game.advance(real, (dt, step) => {
+          dom.poll(dt);
+          // the script's events for the step about to run (keyed by step, so a late frame changes nothing)
+          if (replay) replay.apply(step, game!.core.input);
+        });
     } else core.advance(real, dt => dom.poll(dt));
     view = core.view(canvas.clientWidth, canvas.clientHeight);
     renderer.upload(world);
@@ -138,7 +148,7 @@ async function start(): Promise<void> {
         sec = now / 1000;
       feed.feed(events, game, sec);
       sound?.events(events);
-      hud.render(hudModel(game, feed, sec), Math.max(2, view.px));
+      hud.render(hudModel(game, feed, sec), Math.max(2, Math.round(view.px * 0.6)));
       if (!frozen && now - savedAt >= 2000) {
         savedAt = now;
         save(false);
@@ -153,7 +163,7 @@ async function start(): Promise<void> {
       (info as Record<string, unknown>).upload = { ...renderer.lastUpload };
       const p = core.pokes[core.pokes.length - 1];
       status.textContent =
-        `${name} (${id})${frozen ? ' · scripted, stopped' : ''}\n${world.count} splats · ${info.fps} fps · ${info.frameMs} ms a frame · ` +
+        `${name} (${id})${frozen ? ' · scripted, stopped' : replay ? ' · replaying a script' : ''}\n${world.count} splats · ${info.fps} fps · ${info.frameMs} ms a frame · ` +
         `${renderer.lastUpload.rows} of ${Math.ceil(world.count / 512)} rows sent (${renderer.lastUpload.mode}) · ` +
         `sort: ${renderer.lastSort.by}` +
         (renderer.lastSort.by === 'worker' ? ` (${renderer.lastSort.workerMs.toFixed(1)} ms off-thread)` : '') +

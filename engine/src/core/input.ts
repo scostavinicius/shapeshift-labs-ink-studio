@@ -189,6 +189,8 @@ export class DomInput {
   private o: Required<Omit<DomInputOptions, 'keys' | 'pad'>>;
   private down = new Set<string>();
   private padHeld = new Set<Action>();
+  /** the pad is what set the stick (so only the pad lets go of it: a script or a test may hold it too) */
+  private padStick = false;
   private off: (() => void)[] = [];
 
   constructor(
@@ -275,7 +277,10 @@ export class DomInput {
     const g = Array.from(pads).find(p => p && p.connected);
     const now = new Set<Action>();
     if (g) {
-      this.state.stick(dead(g.axes[0] || 0), -dead(g.axes[1] || 0));
+      const sx = dead(g.axes[0] || 0),
+        sy = -dead(g.axes[1] || 0);
+      if (sx || sy || this.padStick) this.state.stick(sx, sy);
+      this.padStick = !!(sx || sy);
       const rx = dead(g.axes[2] || 0),
         ry = dead(g.axes[3] || 0);
       if (rx || ry) this.state.turn(-rx * this.o.padTurn * dt, ry * this.o.padTurn * dt);
@@ -283,7 +288,11 @@ export class DomInput {
         const a = this.pad[i];
         if (a && b.pressed) now.add(a);
       });
-    } else this.state.stick(0, 0);
+    } else if (this.padStick) {
+      // the pad went away while held: let go of what it held
+      this.state.stick(0, 0);
+      this.padStick = false;
+    }
     for (const a of now) if (!this.padHeld.has(a)) this.state.press(a);
     for (const a of this.padHeld) if (!now.has(a)) this.state.release(a);
     this.padHeld = now;

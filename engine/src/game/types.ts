@@ -115,6 +115,11 @@ export interface CombatOptions {
   respawnAt?: string;
   /** how hard a blow throws its target, as a factor on the kit's own knockback (default 1) */
   knock?: number;
+  /**
+   * aim assist for the player, in degrees (default 0: none): when the player starts a swing, it turns to the nearest foe
+   * within this angle of where it faces and within a step of its reach. 180 turns it to a foe on any side.
+   */
+  assist?: number;
 }
 
 /**

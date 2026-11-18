@@ -63,10 +63,14 @@ export class Core {
     return this.loop.t;
   }
 
-  /** Let `real` seconds pass (runs the steps that fit). Returns how far into the next step the remainder goes (0..1). */
-  advance(real: number, beforeStep?: (dt: number) => void): number {
+  /**
+   * Let `real` seconds pass (runs the steps that fit). beforeStep gets the step's dt and its index (0 for the first step:
+   * the numbering of scripts). Returns how far into the next step the remainder goes (0..1).
+   */
+  advance(real: number, beforeStep?: (dt: number, step: number) => void): number {
     return this.loop.advance(real, (dt, t) => {
-      beforeStep?.(dt);
+      // (the loop has counted this step already: its index is one less)
+      beforeStep?.(dt, this.loop.steps - 1);
       this.step(dt, t);
     });
   }

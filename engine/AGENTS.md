@@ -31,6 +31,7 @@ escreve → check → shot (ou sheet) → olha o PNG → corrige → repete
    - `check`: `{ ok, errors, warnings, stats, parity }`.
 5. **Jogue:** `node engine/cli.js play meu-jogo` abre o jogo no navegador. As teclas são WASD/setas para andar, Shift para correr, J golpe, K dash, Espaço pulo, M música, N sem som e P para salvar. Arrastar gira a câmera, a roda dá zoom e C troca o estilo.
 6. **Opcional:** `node engine/cli.js check meu-jogo --parity --input <roteiro> --t 3` também desenha o jogo num navegador headless (Edge ou Chrome) e confere que é a mesma partida do Node.
+7. **Para provar que dá para vencer:** escreva um **robô** e grave o que ele fez (seção 7, "Robôs"). No navegador, `play` com `&replay=<pasta>/<roteiro>.json` na URL assiste ao roteiro jogando em tempo real.
 
 Um teste é um roteiro mais asserções. Veja `engine/test/combat.test.mjs`, que roda uma luta inteira sem navegador e confere vida, mortes e estado.
 
@@ -71,6 +72,7 @@ Os três exemplos completos, do menor ao maior:
 | `engine/examples/farol-fight/` | combate, inimigos que perseguem, efeitos (faíscas, pedaços, chão queimado), linhas de HUD |
 | `engine/examples/yard/` | **um nível escrito do zero**, um gerador de inimigos durante a partida, um portão que dá a vitória, chão que congela, `def.brains` para o save |
 | `engine/examples/beacons/` | feito por uma IA **sem contexto, lendo só este guia**: acender três faróis com triggers, inimigos que acordam a cada farol aceso, vitória e derrota, e um roteiro (`win.json`) que vence |
+| `engine/examples/arena/` | **o jogo completo de demonstração**: arena circular, três ondas, dois tipos de inimigo, um chefe que chama reforços, cura entre ondas, vitória e derrota, mira assistida, e um **robô** (`bot.ts`) que vence e gravou o `win.json` |
 
 **Copie de um deles** em vez de começar de uma folha em branco.
 
@@ -86,7 +88,7 @@ Os três exemplos completos, do menor ao maior:
 | `init(game)` | põe o elenco em cena; devolve `game.state` (obrigatório) |
 | `step(game, dt)` | as regras, a cada passo |
 | `camera` | `{ stiffness, minPitch, maxPitch, minDist, maxDist, bounds }`: a câmera segue o jogador com mola |
-| `combat` | `{ invuln: 0.6, arc: 70, respawn: 1.5, respawnAt, knock }`, ou `false`; ligado por padrão |
+| `combat` | `{ invuln: 0.6, arc: 70, respawn: 1.5, respawnAt, knock, assist }`, ou `false`; ligado por padrão. `assist` (graus) é a mira assistida do jogador: ao golpear, ele se vira para o inimigo mais próximo dentro desse ângulo (180 = qualquer lado) |
 | `effects` | `true` ou `{ fx: 400, debris: 800, eco: true, fuel: 0.5, weather: { rain, winter } }` |
 | `hud` | `{ lines(game) => string[], message(evento, game) => string \| null \| undefined }` |
 | `sounds` | `{ evento: som }`. Sons: `swing`, `hit`, `death`, `respawn`, `blip`, `save` |
@@ -288,6 +290,30 @@ Um **roteiro** é o input como dado:
   3. ajuste quando virar e quanto andar, e repita. Postes e paredes no caminho pedem um desvio: o personagem desliza ao longo deles, mas não os atravessa;
   4. quando chegar, confira com `sheet` nos momentos-chave e olhe os quadros.
 
+### Robôs: um jogador de código que grava roteiros
+
+Contra inimigos que reagem, um roteiro escrito à mão quase nunca vence: os tempos mudam a cada ajuste. A saída é um **robô**: uma função chamada antes de cada passo, que olha o jogo e aperta botões, como uma pessoa faria. `record` grava o que ele apertou como um roteiro comum. Depois, **o roteiro sozinho reproduz a mesma partida para sempre**, e é ele que os testes guardam, não o robô.
+
+```ts
+// engine/examples/<nome>/bot.ts
+import type { BotApi } from '../../src/game/bot';
+export default function (api: BotApi) {
+  const { game } = api;                         // o jogo como está, entre dois passos: só leia
+  const p = game.player;
+  if (!p || game.state.won) return api.stop();
+  const foe = game.byTag('enemy')[0];
+  if (!foe) return api.walkTo([0, 0, 0], 0.5);  // vai até um ponto e para a 0,5 dele
+  api.walkTo(foe.pos, 1.0, true);               // corre até o inimigo
+  api.tap('attack');                            // aperta e solta o golpe neste passo
+}
+```
+
+- A `api` tem `walkTo(ponto, perto?, correr?)`, `walkAway(ponto, correr?)`, `stand()`, `tap(ação)`, `stop()`, o `game` e o `input`. A conversão de direção do mundo para o manche já é feita.
+- Grave com `node engine/cli.js record meu-jogo --bot engine/examples/meu-jogo/bot.ts --until won --t 120 --out engine/examples/meu-jogo/win.json`.
+  - O jogo para quando `game.state.won` fica verdadeiro, ou em `--t` segundos.
+  - Ele roda o roteiro de novo **sem o robô** e confere que dá o mesmo `hash` (`"ok": true` no JSON).
+- O robô da arena (`engine/examples/arena/bot.ts`) mostra uma tática: contra o chefe, ficar fora do alcance dele, entrar logo depois de ele golpear, bater e recuar.
+
 **Saves:**
 - `shot --save s.json` grava um save e `--load s.json` começa dele. A página salva sozinha (a cada 2 s, ao sair, e com P) e volta de onde parou; `&fresh=1` começa do zero.
 - Um save guarda o estado do jogo e o de cada entidade. **Não guarda o momento do mundo:** partículas, fogo e a animação da cena recomeçam.
@@ -328,6 +354,7 @@ Quando o `check` não explicar, rode `shot`/`sheet` e **olhe o PNG**.
 | `engine/src/game/save.ts`, `script.ts` | saves e roteiros |
 | `engine/src/ui/` | HUD (fonte própria), som |
 | `engine/cli.js` | os comandos |
+| `engine/src/game/bot.ts` | a `BotApi` dos robôs |
 | `src/kit/kk-character.js` | o `K.character` do kit (o `spec` completo está no topo) |
 | `README.md` (raiz) | o kit: formas, materiais, luz, animação |
 | `docs/engine-plan.md` | o plano da engine e o que cada etapa mediu |

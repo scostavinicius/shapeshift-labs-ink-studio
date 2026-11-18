@@ -18,6 +18,8 @@ export class Combat {
   readonly respawn: number | false;
   readonly respawnAt: string | undefined;
   readonly knock: number;
+  /** cosine of the aim assist's half-angle, or null for none */
+  readonly cosAssist: number | null;
 
   constructor(o: CombatOptions = {}) {
     this.invuln = o.invuln ?? 0.6;
@@ -25,6 +27,7 @@ export class Combat {
     this.respawn = o.respawn === undefined ? 1.5 : o.respawn;
     this.respawnAt = o.respawnAt;
     this.knock = o.knock ?? 1;
+    this.cosAssist = o.assist ? Math.cos(((Math.min(180, o.assist)) * Math.PI) / 180) : null;
   }
 
   /**
@@ -33,6 +36,30 @@ export class Combat {
    */
   step(game: Game<any>, actors: Actor[], dt: number, fx: Effects | null): void {
     for (const a of actors) if (a.invuln > 0) a.invuln = Math.max(0, a.invuln - dt);
+
+    // aim assist: a player who has just started a swing turns to the nearest foe in the assist's angle
+    if (this.cosAssist !== null)
+      for (const a of actors) {
+        if (a.brain !== 'player' || a.deadFor >= 0) continue;
+        const st = a.ch.st;
+        if (!(st.atk >= 0 && st.atk <= dt + 1e-9)) continue;
+        const fx0 = Math.cos(st.face),
+          fz0 = Math.sin(st.face),
+          reach = (a.ch.reach as number) + 1;
+        let best: Actor | null = null,
+          bd = Infinity;
+        for (const b of actors) {
+          if (b === a || b.team === a.team || b.deadFor >= 0) continue;
+          const dx = b.pos[0] - a.pos[0],
+            dz = b.pos[2] - a.pos[2],
+            d = Math.hypot(dx, dz);
+          if (d > reach + b.radius || d >= bd || Math.abs(b.pos[1] - a.pos[1]) > 1.5) continue;
+          if (d > 0.05 && (dx * fx0 + dz * fz0) / d < this.cosAssist) continue;
+          best = b;
+          bd = d;
+        }
+        if (best) st.face = Math.atan2(best.pos[2] - a.pos[2], best.pos[0] - a.pos[0]);
+      }
 
     // blows
     for (const a of actors) {
@@ -79,6 +106,7 @@ export class Combat {
       dmg = a ? a.damage : 1;
     b.ch.hurt(kx * this.knock, kz * this.knock); // a point off, thrown back, a flash
     if (dmg > 1) st.hp -= dmg - 1;
+    if (st.hp < 0) st.hp = 0;
     if (this.knock !== 1) {
       st.vx = kx * 4.5 * this.knock;
       st.vz = kz * 4.5 * this.knock;

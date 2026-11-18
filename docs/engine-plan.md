@@ -20,7 +20,7 @@ Fatos do código que moldam o plano:
 
 ## Como retomar em outro computador
 
-**Estado (2026-11-17):** etapas 0 a 9 concluídas (renderizador, núcleo do jogo, modelo de jogo com colisão, determinismo e modo sem navegador, combate e inimigos, HUD, áudio e save, camada para a IA). O determinismo vale **entre motores de JavaScript** (Math determinístico; ver [engine-determinism.md](engine-determinism.md)). **Próximo passo: a Etapa 10** (o jogo de demonstração, a arena), com o Opus 5.5. Os resultados medidos de cada etapa estão nas seções abaixo.
+**Estado (2026-11-17):** etapas 0 a 10 concluídas (renderizador, núcleo do jogo, modelo de jogo com colisão, determinismo e modo sem navegador, combate e inimigos, HUD, áudio e save, camada para a IA, jogo de demonstração). O determinismo vale **entre motores de JavaScript** (Math determinístico; ver [engine-determinism.md](engine-determinism.md)). **Próximo passo: a Etapa 11** (desempenho), com o **Fable 5.2**: medir antes de mexer e decidir, com números, o que vale levar para Worker ou WebAssembly. Os resultados medidos de cada etapa estão nas seções abaixo.
 
 **Preparar a máquina** (Node 18 ou mais novo, Git, e o Microsoft Edge ou o Chrome para o teste de paridade):
 ```bash
@@ -273,7 +273,21 @@ Plano original:
 - Três exemplos pequenos e completos.
 - **Pronto quando:** numa sessão nova, sem contexto, o Opus cria um nível jogável novo lendo só o `AGENTS.md`.
 
-### Etapa 10 — Jogo de demonstração · Opus 5.5
+### Etapa 10 — Jogo de demonstração · Opus 5.5 · ✅ concluída
+
+Resultado (`engine/examples/arena/`: `game.ts`, `bot.ts`, `win.json`):
+- **A arena:** um disco de areia de 20 de diâmetro sobre pedra, um muro em anel com quatro portões, pilares com tochas. **Três ondas** que entram pelos portões: três *grunts* (lentos, golpe pesado); dois grunts e três *darters* (rápidos, frágeis, entram e saem); e o **Warden**, o chefe (2,2 de altura, golpe giratório de alcance 1,9 que tira 2, 8 de vida), que **na metade da vida chama dois darters** e fica mais agressivo. Entre ondas, 2,5 s de respiro e +3 de vida. **Vitória** quando o Warden cai; **derrota** na terceira queda do jogador (e a arena se esvazia). HUD com onda, vidas e a barra de vida do Warden; mensagens e sons próprios; fogo no chão onde cada inimigo cai.
+- **Mira assistida** (`combat.assist`, graus): ao golpear, o jogador se vira para o inimigo mais próximo dentro do ângulo. Sem ela, nem uma pessoa nem um roteiro acertam inimigos que chegam de todos os lados.
+- **Robôs e o comando `record`** (`engine/src/game/bot.ts`): contra inimigos que reagem, um roteiro escrito à mão não vence (tentei: parado no meio golpeando, o jogador perde aos ~50 s). Um robô é uma função que olha o jogo **entre** os passos e aperta botões; `record` grava o que ele apertou como um roteiro comum e confere que **o roteiro sozinho dá o mesmo `hash`**. O robô da arena fica fora do alcance do Warden, entra logo depois de um golpe dele, bate e recua. O `win.json` gravado (1185 eventos, 43 KB) vence aos 56,2 s.
+- **Replay ao vivo** (`&replay=arena/win.json`): a página joga em tempo real com o input do roteiro, aplicado pelo número do passo.
+- **Dois bugs achados pelo replay ao vivo**, que a jogada com teclado escondia: o `DomInput` zerava o manche a cada passo quando não havia controle conectado (agora só solta o que o próprio controle segurava); e o gancho "antes do passo" da página recebia o índice do passo com um a mais (o `FixedLoop` já tinha contado o passo), então o roteiro entrava um passo atrasado e a partida divergia. Agora `Core.advance` entrega o índice certo, o mesmo dos roteiros.
+- Outras correções: a vida não fica mais negativa com dano maior que 1; as mensagens do HUD descem para um terço da tela (não cobrem as linhas do canto) e o HUD usa 60% do pixel de arte.
+
+Medido:
+- **Pronto quando (cumprido):** `npm run live` abre `?game=arena&replay=arena/win.json` no Edge e a partida vai **do início ao fim em tempo real: vitória aos 56,4 s, 11 inimigos derrubados, 1 queda, a 180 fps no mínimo** durante toda a luta (o mesmo desfecho do Node). E `test/arena.test.mjs`, sem navegador: o `win.json` vence (onda 1 aos 1,5 s, onda 2 aos 10,5 s, onda 3 aos 19,4 s, o chamado aos 36,0 s, a vitória aos 56,2 s), a mesma partida duas vezes é idêntica passo a passo, sem input o jogador perde, e a mira assistida acerta quem está do lado (sem ela, erra).
+- A arena passa no `check` sem erros nem avisos: 50 mil splats, construída em ~0,3 s, ~1,5 ms por passo.
+
+Plano original:
 - `examples/arena`: uma arena circular como a do vídeo, um jogador, 2 tipos de inimigo, um chefe simples, vitória e derrota.
 - **Pronto quando:** dá para jogar do início ao fim no navegador a 60 fps e o roteiro headless de "vitória" passa.
 
