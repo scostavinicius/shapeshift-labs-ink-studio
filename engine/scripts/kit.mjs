@@ -19,7 +19,9 @@ export function kitScript(o = {}) {
     'const SCENES = [];',
     studio.demos(),
     // the scene modules a page loads later add themselves here (see sceneScript)
-    'window.INK = { SCENES, makeBuilder, makeSculpt, KIT, PixelLook, PALETTES, PAL_HEX, extra: [], sceneFns: {} };',
+    // every name the toolkit defines at top level (index.js EXPORTS): the browser renderer (webgl.mjs) reads several of
+    // them besides KIT and PixelLook (RenderStages, StableDetail, DetailBudgets, FrameBudget...)
+    `window.INK = { SCENES, ${studio.EXPORTS}, extra: [], sceneFns: {} };`,
     ''
   ].join('\n');
 }

@@ -323,7 +323,7 @@ Em 2026-11-21 o `main` do original (828 commits: geração procedural, simulaç�
 |---|---|---|
 | 12 | Saúde depois do merge, `**` do kit, linha de base | ✅ |
 | 13 | Peso de carregamento: kit minificado e comprimido (cenas pré-montadas adiadas) | ✅ |
-| 14 | Trocar o renderizador próprio pelo do original (`webgl.mjs`), mantendo o Worker de ordenação | |
+| 14 | Trocar o renderizador próprio pelo do original (`webgl.mjs`) | ✅ |
 | 15 | Tamanho do pixel controlável (`&px=`, `[` `]`) e cobertura contínua (sem buracos) | |
 | 16 | Custo de render: recorte por visibilidade, ordem estática + móvel, menos splats no bake | |
 | 17 | Fases procedurais (salas e cavernas pela semente) | |
@@ -351,6 +351,21 @@ Medido no Edge, servidor local, 2026-11-21:
 
 - **Montagem do mundo no navegador:** 0,45 s na arena, 0,35 s no pátio e nos faróis, 1,4 a 1,5 s no farol e 1,8 s na arena densa.
 - **Cenas pré-montadas: adiadas.** O ganho máximo é esse tempo de montagem. O mundo pronto carrega sistemas vivos do kit (palco, personagens, pools de efeito, ossos) que são funções com estado e não viram arquivo. O `splatCodec` do kit só guarda os splats. Pré-montar exigiria refazer esses sistemas por cima dos splats carregados, com risco de quebrar o determinismo, para ganhar 0,4 s na maioria dos jogos. Volta a valer a pena se uma fase passar de uns 3 s para montar.
+
+### Etapa 14 — Renderizador do ink-studio · ✅ concluída
+
+- [`engine/src/render/upstream.ts`](../engine/src/render/upstream.ts) põe o `createRenderer` do kit atrás da mesma interface do renderizador antigo (`upload`, `draw`, `read`, `timeGpu`, `lastSort`, `lastUpload`). Por isso `main.ts`, `parity.ts` e os harnesses quase não mudaram.
+- **A vista continua sendo da engine.** `makeView` escolhe o tamanho do pixel e a grade, e o clique usa essa vista. O renderizador recebe a órbita pronta com `lockCamera`, para não aplicar de novo o zoom e o tranco da cena.
+- `kit.js` agora expõe em `window.INK` todos os nomes de topo do kit, porque o renderizador lê vários além de `KIT` e `PixelLook`.
+- **Ordenação:** o renderizador do kit ordena na página por padrão, porque sai mais barato que o Worker (números em [engine-performance.md](engine-performance.md), seção 6). `&sort=worker` e `&renderer=old` continuam para comparar.
+- **Alteração local no kit:** o shader de resolve completo passou a ser compilado só quando usado. Antes ele travava o primeiro quadro por cerca de 110 s no Direct3D. Ver [engine-kit-patches.md](engine-kit-patches.md).
+- **Paridade com `cli/render.js`:** o original não promete pixel exato entre CPU e GPU. Medido:
+  - jogos de 97,5% a 99,5% (o `check --parity` avisa abaixo de 95%);
+  - cenas de demonstração de 85,9% a 99,6%;
+  - o `idol` em t = 0 no estilo `colored` dá 75,7%, mas sobre só ~100 pixels de primeiro plano, todos com 1 nível de diferença.
+
+  As diferenças são o padrão do dither em superfícies escuras e pixels de contorno. Use `npm run parity -- --min 75`.
+- `npm test` (58), `npm run live` e `npm run perf` passam.
 
 ### O que fica de fora (e por quê)
 

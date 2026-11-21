@@ -114,3 +114,22 @@ node test/perf/profile.mjs arena  # o perfil de CPU de uma partida inteira (engi
 ```
 
 Na página: `?game=arena&replay=arena/win.json&perf=1`. Depois, `ENGINE.perf` e `ENGINE.gpuTimes` no console.
+
+## 6. Etapa 14: o renderizador do ink-studio (2026-11-21)
+
+A engine passou a desenhar com o renderizador WebGL2 do próprio ink-studio (`webgl.mjs`), por meio de [`engine/src/render/upstream.ts`](../engine/src/render/upstream.ts). O renderizador antigo continua disponível com `&renderer=old` para comparar. Mesma máquina e mesmo método da seção 1.
+
+| | antigo | ink-studio, ordem do Worker | ink-studio, ordena na página (padrão) |
+|---|---|---|---|
+| arena: GPU por desenho | 0,18 ms | 0,42 ms | 0,42 ms |
+| arena: desenho + ordenação na thread da página | 0,2 ms | 1,0 ms | 0,8 ms |
+| arena densa: GPU por desenho | 1,73 ms | 3,58 ms | 3,67 ms |
+| arena densa: desenho + ordenação na thread da página | 0,3 ms | 4,2 ms | 3,1 ms |
+| arena densa, `colored`: GPU por desenho | 3,74 ms | 3,81 ms | 3,81 ms |
+| fps (placa) | 175–180 | 158–180 | 166–180 |
+| SwiftShader, arena: por desenho | 303 ms | 300 ms | — |
+
+- **A GPU custa cerca de 2 vezes mais no estilo padrão.** O shader do ink-studio faz mais trabalho por splat. No estilo `colored` os dois empatam.
+- **A ordenação fica na página.** O renderizador do ink-studio ordena com um counting sort de 16 bits e reaproveita a ordem quando nada se moveu. Entregar a ordem pronta do Worker sai mais caro, porque ele confere e reenvia o `Int32Array` inteiro a cada quadro. O Worker continua para o renderizador antigo e com `&sort=worker`.
+- **Primeiro quadro:** sem a alteração listada em [engine-kit-patches.md](engine-kit-patches.md), o primeiro quadro levava **cerca de 110 s** no Edge do Windows (Direct3D), só para ligar um shader que os jogos nem usam. Com ela, menos de 3 s.
+- Todos os casos ficam bem dentro dos 16,7 ms de um quadro a 60 fps. A etapa 16 procura cortar esse custo de volta.

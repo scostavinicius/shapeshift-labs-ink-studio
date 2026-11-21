@@ -5,6 +5,7 @@
 //   npm run perf                                  every case
 //   npm run perf -- --only dense                  cases whose name contains "dense"
 //   npm run perf -- --seconds 12                  how long to measure each (default 10, starting 6 s in)
+//   npm run perf -- --query '&sort=page'         added to every page address (compare variants: &renderer=old, &sort=page)
 //
 // Two graphics back-ends: the machine's graphics card ("hw"), and SwiftShader ("sw"), Chromium's software renderer on the
 // CPU: much slower than any integrated graphics card, so a case that holds 60 fps there holds it anywhere.
@@ -24,7 +25,8 @@ const opt = n => {
 };
 const only = opt('only'),
   seconds = +(opt('seconds') || 10),
-  browserName = opt('browser') || 'msedge';
+  browserName = opt('browser') || 'msedge',
+  query = opt('query') || '';
 
 const CASES = [];
 for (const backend of ['hw', 'sw'])
@@ -42,7 +44,7 @@ async function measure(browser, server, c, mode) {
   const page = await browser.newPage({ viewport: { width: 1280, height: 720 } });
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
-  await page.goto(`${server.url}?game=${c.game}&replay=arena/win.json&perf=${mode}${c.look === 'colored' ? '&look=colored' : ''}`);
+  await page.goto(`${server.url}?game=${c.game}&replay=arena/win.json&perf=${mode}${c.look === 'colored' ? '&look=colored' : ''}${query}`);
   await page.waitForFunction(() => window.ENGINE && window.ENGINE.info.fps > 0, null, { timeout: 120000 });
   // into the fight (wave 1 has come in), then a clean window
   await page.waitForFunction(() => window.ENGINE.game.t > 6, null, { timeout: 120000 });

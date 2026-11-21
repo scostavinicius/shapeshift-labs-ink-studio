@@ -110,7 +110,11 @@ function createBackend(gl, toolkit, specialize, reuseOrder) {
     const pixelSources = options => pixelShaderSources(toolkit.PixelLook, { packedTone: true, ...options });
     const sources = pixelSources();
     const program = source => resources.program(sources.POST_VS, source);
-    const post = program(sources.POST_FS), clean = program(sources.CLEAN_FS);
+    // (ink-engine patch, docs/engine-kit-patches.md: the full resolve is compiled on first use, not up front. On
+    // Direct3D through ANGLE its link takes about 100 s, and a scene without patterns, glass, AO, tone or grading
+    // never uses it: it gets the specialized resolve below.)
+    let post;
+    const fullPost = () => (post ??= program(sources.POST_FS)), clean = program(sources.CLEAN_FS);
     // Rebirth hosts can opt into geometry specialization through the lower
     // level pipeline. The canvas path specializes its own fullscreen resolve.
     const motionAPI = toolkit.ArtDirection ?? toolkit.KIT?.artDirection;
@@ -268,14 +272,14 @@ function createBackend(gl, toolkit, specialize, reuseOrder) {
     }
 
     function resolveProgram(patterned, glass, ao, definition, grade) {
-      if (!specialize || simpleUnavailable || patterned || glass || ao || definition || grade) return post;
+      if (!specialize || simpleUnavailable || patterned || glass || ao || definition || grade) return fullPost();
       if (!simple) {
         try {
           simple = program(simpleResolve(sources.POST_FS));
         } catch (error) {
           if (gl.isContextLost()) throw error;
           simpleUnavailable = true;
-          return post;
+          return fullPost();
         }
       }
       return simple;

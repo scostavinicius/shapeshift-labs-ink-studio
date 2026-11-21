@@ -265,7 +265,7 @@ console.log('scene           sort    fps  page ms/frame  rows sent   worker sort
 try {
   for (const s of SCENES) {
     if (only && !s.name.includes(only)) continue;
-    await open(s.q);
+    await open(s.q + '&sort=worker'); // (the toolkit's renderer sorts on the page unless asked)
     const w = await sample();
     const checks = [];
     for (let k = 0; k < 3; k++) {

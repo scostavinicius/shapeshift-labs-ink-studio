@@ -4,7 +4,10 @@
 //   ?scene=burn                    a built-in demo by id
 //   ?file=showcase/farol.js        a scene module from the repository
 //   &look=colored                  start in the colored look (soft body-coloured contours)
-//   &sort=page                     sort on the page's own thread every frame (exact) instead of in the worker
+//   &sort=worker / &sort=page      where the splats are sorted. Default: the toolkit's renderer sorts on the page (its
+//                                  counting sort reuses the order when nothing moved, and costs less than handing it a
+//                                  worker's order: docs/engine-performance.md, stage 14); the old renderer sorts in a worker
+//   &renderer=old                  the engine's first renderer (splat-renderer.ts) instead of the toolkit's (webgl.mjs)
 //   ?game=farol-walk               a game (engine/examples/<name>/game.ts), played: the player's character takes the input
 //   &input=farol-walk/walk.json&t=6   ...or that game run by a script to t (as `cli.js shot` runs it), the clock then stopped
 //   &fresh=1                       start the game over, forgetting its save
@@ -21,7 +24,7 @@ import { Hud, HudFeed, hudModel } from './ui/hud';
 import { createGame, type RunningGame } from './game/game';
 import { runHeadless } from './headless/run';
 import { buildWorld, findScene, ink, loadGame, loadSceneFile } from './kit';
-import { rendererFor } from './render/index';
+import { rendererFor, UpstreamRenderer } from './render/index';
 import { makeScratch, sortSplats } from './render/order';
 import type { Look } from './render/splat-renderer';
 import type { View } from './render/view';
@@ -89,7 +92,8 @@ async function start(): Promise<void> {
   const info = { scene: id, splats: world.count, buildMs: Math.round(performance.now() - t0), palette: world.pal.length, fps: 0, frameMs: 0, steps: 0 };
   console.log('ink-engine', info);
   const renderer = rendererFor(canvas);
-  const sorter = q.get('sort') === 'page' ? null : renderer.useSortWorker('sort-worker.js');
+  const sortIn = q.get('sort') || (renderer instanceof UpstreamRenderer ? 'page' : 'worker');
+  const sorter = sortIn === 'page' ? null : renderer.useSortWorker('sort-worker.js');
   let look: Look = q.get('look') === 'colored' ? 'colored' : 'default';
   addEventListener('keydown', e => {
     if (e.code === 'KeyC' && !e.repeat) look = look === 'colored' ? 'default' : 'colored';
