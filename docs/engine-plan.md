@@ -324,7 +324,7 @@ Em 2026-11-21 o `main` do original (828 commits: geração procedural, simulaç�
 | 12 | Saúde depois do merge, `**` do kit, linha de base | ✅ |
 | 13 | Peso de carregamento: kit minificado e comprimido (cenas pré-montadas adiadas) | ✅ |
 | 14 | Trocar o renderizador próprio pelo do original (`webgl.mjs`) | ✅ |
-| 15 | Tamanho do pixel controlável (`&px=`, `[` `]`) e cobertura contínua (sem buracos) | |
+| 15 | Tamanho do pixel controlável (`&px=`, `[` `]`) e cobertura contínua (sem buracos) | ✅ |
 | 16 | Custo de render: recorte por visibilidade, ordem estática + móvel, menos splats no bake | |
 | 17 | Fases procedurais (salas e cavernas pela semente) | |
 | 18 | IA dos inimigos: rotas, percepção, `hunter()` | |
@@ -366,6 +366,18 @@ Medido no Edge, servidor local, 2026-11-21:
 
   As diferenças são o padrão do dither em superfícies escuras e pixels de contorno. Use `npm run parity -- --min 75`.
 - `npm test` (58), `npm run live` e `npm run perf` passam.
+
+### Etapa 15 — Pixels: controle e cobertura contínua · ✅ concluída
+
+- **Tamanho do pixel de arte:**
+  - `makeView` aceita o tamanho pedido (`Core.px`) e o `look.pixelSize` da cena, como o `cli/render.js`;
+  - na página, `&px=N` fixa o tamanho, `[` e `]` diminuem e aumentam, e `\` volta ao automático. A linha de status mostra o pixel, a grade e a cobertura;
+  - na CLI, `shot` e `sheet` aceitam `--px N` e `--coverage`.
+- **Cobertura contínua:** os jogos usam `look.splatCoverage = 'continuous'`, a menos que a cena diga outra coisa ou o jogo peça `coverage: 'legacy'`. Fica no `look` do mundo, então o navegador e o `cli/render.js` desenham igual. `&coverage=` troca na página.
+- **O que se mediu:**
+  - a cobertura contínua quase não custa: arena 0,42 ms de GPU nos dois modos; arena densa 3,67 → 3,82 ms;
+  - um pixel menor também sai barato: a arena densa com px 3 (grade 427 × 240, 5 vezes mais pixels que com px 7) gastou 2,1 ms de GPU;
+  - **mas abaixo do tamanho automático aparece pouco detalhe novo.** O automático já põe mais ou menos um splat por pixel de arte. Com pixels menores, cada splat (um disco sólido) só ocupa mais pixels. O detalhe real vem de mais splats (`res` menor ao esculpir, como na arena densa), e o que custa é o número de splats: ordenação e GPU.
 
 ### O que fica de fora (e por quê)
 

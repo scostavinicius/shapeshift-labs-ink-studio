@@ -43,6 +43,8 @@ export class Core {
   readonly pokes: PokeRecord[] = [];
   /** the view last drawn: clicks are worked out through it, since it is what the player saw */
   shown: View | null = null;
+  /** the art-pixel size asked for (screen pixels per art pixel), or null: worked out from the scene (makeView) */
+  px: number | null = null;
   private bones: 'gpu' | 'cpu';
 
   constructor(
@@ -104,6 +106,6 @@ export class Core {
 
   /** The view of the camera now, on a stage of w x h screen pixels (what makeView would give the renderer). */
   view(w: number, h: number): View {
-    return makeView(this.world, { t: this.t, ...this.camera.view(), w, h });
+    return makeView(this.world, { t: this.t, ...this.camera.view(), w, h, px: this.px ?? undefined });
   }
 }

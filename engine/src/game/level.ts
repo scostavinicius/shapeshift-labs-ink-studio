@@ -140,6 +140,11 @@ export function buildLevel(def: GameDef<any>, ink: Ink, sceneFn: SceneFn, seed: 
   if (!collision) throw new Error(`${def.id}: the scene's world was not made by B.finish`);
   // the engine marks rows and runs systems: a world with no stage gets one
   if (!world.anim) K.stage(world);
+  // splat coverage (stage 15): games draw with 'continuous' unless the scene or the game says otherwise. Opaque
+  // neighbours join, so small art pixels show no holes. It is part of the world's look, so the browser and
+  // cli/render.js (shot, sheet, parity) draw it alike; it changes nothing in the simulation.
+  const look = ((world as { look?: Record<string, unknown> }).look ??= {});
+  if (look.splatCoverage === undefined) look.splatCoverage = def.coverage ?? 'continuous';
   for (const s of slots) hideSlot(world, s);
   return { world, B, S, collision, bakes: cb.stats, slots, reserved, built, pools, ms: now() - t0 };
 }

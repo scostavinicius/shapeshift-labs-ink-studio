@@ -110,6 +110,21 @@ function sceneOf(def) {
 // the toolkit with `**` lowered for determinism (scripts/kit-node.cjs)
 const freshInk = () => ({ ...require('./scripts/kit-node.cjs').loadKit(), extra: [] });
 
+/** drawing options shared by shot and sheet: --px N (art-pixel size) and --coverage legacy|continuous|soft */
+function drawOpts(o) {
+  const out = {};
+  if (o.px !== undefined) {
+    const px = +o.px;
+    if (!Number.isInteger(px) || px < 1) die('--px wants a whole number of screen pixels per art pixel: --px 2');
+    out.px = px;
+  }
+  if (o.coverage !== undefined) {
+    if (!['legacy', 'continuous', 'soft'].includes(o.coverage)) die('--coverage wants legacy, continuous or soft');
+    out.splatCoverage = o.coverage;
+  }
+  return out;
+}
+
 function readScript(o) {
   const script = o.input ? JSON.parse(fs.readFileSync(path.resolve(o.input), 'utf8')) : { events: [] };
   if (o.seed !== undefined) script.seed = +o.seed;
@@ -152,7 +167,7 @@ async function shot(o) {
     game.core.shown = game.core.view(w, h);
   }
   const ms = Date.now() - t0;
-  const img = R.render(game.world, { t: game.t, ...game.core.camera.view(), w, h, colored: !!o.colored });
+  const img = R.render(game.world, { t: game.t, ...game.core.camera.view(), w, h, colored: !!o.colored, ...drawOpts(o) });
   const big = R.upscale(img, img.px);
   if (!o['no-hud']) rt.overlayText(big, rt.hudLines(game), Math.max(2, Math.round(img.px / 2)), game.world.pal);
   const png = writePng(path.resolve(o.out || path.join(OUT, `${def.id}-${String(t).replace('.', '_')}.png`)), big);
@@ -217,7 +232,7 @@ async function sheet(o) {
       game.core.shown = game.core.view(script.view.w, script.view.h);
       game.runSteps(1, k => player.apply(k, game.core.input));
     }
-    const img = R.render(game.world, { t: game.t, ...game.core.camera.view(), w, h, colored: !!o.colored });
+    const img = R.render(game.world, { t: game.t, ...game.core.camera.view(), w, h, colored: !!o.colored, ...drawOpts(o) });
     const big = R.upscale(img, img.px);
     if (!o['no-hud']) rt.overlayText(big, rt.hudLines(game), Math.max(2, Math.round(img.px / 2)), game.world.pal);
     imgs.push(big);

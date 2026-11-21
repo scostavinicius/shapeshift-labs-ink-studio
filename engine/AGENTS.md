@@ -24,12 +24,13 @@ escreve → check → shot (ou sheet) → olha o PNG → corrige → repete
    - `sheet ... --times 0,1,2,4` grava vários instantes da **mesma** partida lado a lado;
    - `shot ... --trace 0.5` também anota onde o jogador está (posição, vida, `game.state`) a cada 0,5 s: é o jeito de **ajustar um roteiro** (seção 7);
    - os PNGs trazem o **texto do HUD** no canto (`HP 4/5` e as suas `hud.lines`; `--no-hud` tira). Corações, barra de habilidades e mensagens só aparecem no navegador (`play`);
+   - `--px N` fixa o tamanho do pixel de arte (o padrão vem do `detail` da cena), e `--coverage legacy|continuous|soft` troca a cobertura dos splats (o padrão nos jogos é `continuous`, sem buracos entre splats vizinhos);
    - **abra o PNG e olhe de verdade.** O estado impresso não mostra um personagem dentro de uma parede ou uma câmera apontando para o vazio.
 4. **Leia a última linha:** todo comando termina com **uma linha de JSON**. Use-a em vez de interpretar o texto acima dela.
    - `shot`: `{ png, hash, t, steps, game: { t, player: { pos, hp, down }, state, entities, enemies }, trace? }`. (Ali, `state` e `save` são os caminhos dos arquivos de `--state` e `--save`, ou `null`.)
    - `sheet`: `{ png, times: [{ t, hash, player, state }] }`.
    - `check`: `{ ok, errors, warnings, stats, parity }`.
-5. **Jogue:** `node engine/cli.js play meu-jogo` abre o jogo no navegador. As teclas são WASD/setas para andar, Shift para correr, J golpe, K dash, Espaço pulo, M música, N sem som e P para salvar. Arrastar gira a câmera, a roda dá zoom e C troca o estilo.
+5. **Jogue:** `node engine/cli.js play meu-jogo` abre o jogo no navegador. As teclas são WASD/setas para andar, Shift para correr, J golpe, K dash, Espaço pulo, M música, N sem som e P para salvar. Arrastar gira a câmera, a roda dá zoom e C troca o estilo. `[` e `]` diminuem e aumentam o pixel de arte, e `\` volta ao tamanho da cena (`&px=N` na URL fixa um). Pixels menores que o espaço entre os splats não trazem detalhe novo: para isso, a cena precisa de `res` menor (mais splats).
 6. **Opcional:** `node engine/cli.js check meu-jogo --parity --input <roteiro> --t 3` também desenha o jogo num navegador headless (Edge ou Chrome) e confere que é a mesma partida do Node.
 7. **Para provar que dá para vencer:** escreva um **robô** e grave o que ele fez (seção 7, "Robôs"). No navegador, `play` com `&replay=<pasta>/<roteiro>.json` na URL assiste ao roteiro jogando em tempo real.
 

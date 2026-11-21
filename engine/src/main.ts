@@ -95,8 +95,21 @@ async function start(): Promise<void> {
   const sortIn = q.get('sort') || (renderer instanceof UpstreamRenderer ? 'page' : 'worker');
   const sorter = sortIn === 'page' ? null : renderer.useSortWorker('sort-worker.js');
   let look: Look = q.get('look') === 'colored' ? 'colored' : 'default';
+  // the art-pixel size (stage 15): &px=N fixes it; [ and ] make pixels smaller or bigger; \ goes back to the scene's own
+  const pxAsked = Number(q.get('px'));
+  if (Number.isInteger(pxAsked) && pxAsked >= 1) core.px = Math.min(pxAsked, 18);
+  // splat coverage: 'continuous' joins neighbouring opaque splats, so small art pixels show no holes between them.
+  // Games are built with it (createGame); &coverage=legacy|continuous|soft overrides it for any page
+  const coverage = q.get('coverage');
+  if (renderer instanceof UpstreamRenderer && (coverage === 'legacy' || coverage === 'continuous' || coverage === 'soft'))
+    renderer.frame.splatCoverage = coverage;
   addEventListener('keydown', e => {
     if (e.code === 'KeyC' && !e.repeat) look = look === 'colored' ? 'default' : 'colored';
+    if (e.code === 'BracketLeft' || e.code === 'BracketRight') {
+      const now = core.px ?? view.px;
+      core.px = Math.max(1, Math.min(18, now + (e.code === 'BracketLeft' ? -1 : 1)));
+    }
+    if (e.code === 'Backslash') core.px = null;
   });
 
   // what shows the game: the HUD and the sound, fed with its events between steps; and its saves
@@ -230,7 +243,9 @@ async function start(): Promise<void> {
         (p ? ` · last tap at ${p.t.toFixed(2)} s: ${p.hit ? 'hit (' + p.hit.p.map(v => v.toFixed(2)).join(', ') + ')' : 'nothing'}` : '') +
         (game ? ` · hash ${game.hash()}` + (game.player ? ` · player (${game.player.pos.map(v => v.toFixed(2)).join(', ')})` : '') : '') +
         '\n' +
-        `look: ${look} (C) · drag: turn · wheel: zoom · click: tap · WASD: move (Shift runs)` +
+        `look: ${look} (C) · pixel ${view.px} (${core.px === null ? 'auto' : 'set'}; [ ] \\) · grid ${view.W}x${view.H}` +
+        (renderer instanceof UpstreamRenderer ? ` · coverage ${renderer.frame.splatCoverage ?? (world as { look?: { splatCoverage?: string } }).look?.splatCoverage ?? 'legacy'}` : '') +
+        ` · drag: turn · wheel: zoom · click: tap · WASD: move (Shift runs)` +
         (game
           ? ` · J hit · K dash
 sound: ${sound!.ctx ? sound!.ctx.state : 'waits for a key'} · music ${sound!.volumes.musicOn ? 'on' : 'off'} (M) · ` +

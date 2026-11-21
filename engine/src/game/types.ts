@@ -242,6 +242,12 @@ export interface GameDef<State = unknown> {
   seed?: number;
   scene: SceneSource;
   collision?: CollisionOptions;
+  /**
+   * How splats cover the art grid (docs/continuous-splat-coverage.md). Default 'continuous': neighbouring opaque splats
+   * join, so there are no holes even at small art pixels. 'legacy' is the toolkit's original coverage; 'soft' is
+   * Gaussian. A scene that sets look.splatCoverage itself keeps its own.
+   */
+  coverage?: 'legacy' | 'continuous' | 'soft';
   actors?: Record<string, ActorDef>;
   /** named places. Give y as null to stand it on the ground there. */
   spawns?: Record<string, [number, number | null, number]>;

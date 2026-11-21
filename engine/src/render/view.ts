@@ -96,8 +96,11 @@ export function makeView(world: World, o: ViewOptions = {}): View {
     cw = o.w || 900,
     ch = o.h || 620,
     rel = c.dist / dist0,
-    rho = world.detail * Math.pow(rel, rel > 1 ? 0.5 : 0.25),
-    px = o.px || clamp(Math.round(ch / (2 * Math.tan(FOV / 2) * rho * dist0)), 1, 18),
+    rho = (world.detail ?? 12) * Math.pow(rel, rel > 1 ? 0.5 : 0.25),
+    // the art-pixel size: asked for (o.px), or the scene's own (look.pixelSize), or worked out from its splat density
+    // (detail) and the camera's distance, as cli/render.js does
+    pixelSize = (world as { look?: { pixelSize?: number } }).look?.pixelSize,
+    px = o.px || pixelSize || clamp(Math.round(ch / (2 * Math.tan(FOV / 2) * rho * dist0)), 1, 18),
     W = Math.ceil(cw / px),
     H = Math.ceil(ch / px);
   return {
