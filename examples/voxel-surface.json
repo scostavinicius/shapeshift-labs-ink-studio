@@ -1,0 +1,67 @@
+{
+  "format": "ink-studio/graph-project",
+  "version": 1,
+  "nodes": {
+    "shape": {
+      "op": "sdf.shape",
+      "inputs": {
+        "kind": "torus",
+        "options": {
+          "major": 0.7,
+          "minor": 0.28
+        }
+      }
+    },
+    "blocks": {
+      "op": "sdf.voxels",
+      "inputs": {
+        "source": {
+          "node": "shape",
+          "port": "value"
+        },
+        "options": {
+          "size": 0.16,
+          "mode": "cubes"
+        }
+      }
+    },
+    "world": {
+      "op": "voxels.world",
+      "inputs": {
+        "source": {
+          "node": "blocks",
+          "port": "value"
+        },
+        "options": {
+          "appearance": {
+            "color": "#64a5aa"
+          },
+          "camera": {
+            "dist": 4,
+            "yaw": 0.4,
+            "pitch": 0.3
+          }
+        }
+      }
+    },
+    "render": {
+      "op": "scene.render",
+      "inputs": {
+        "source": {
+          "node": "world",
+          "port": "value"
+        },
+        "options": {
+          "width": 480,
+          "height": 480
+        }
+      }
+    }
+  },
+  "outputs": {
+    "image": {
+      "node": "render",
+      "port": "value"
+    }
+  }
+}

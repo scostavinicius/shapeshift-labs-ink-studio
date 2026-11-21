@@ -2,13 +2,21 @@
 // The sources are plain scripts (they are concatenated into a web page as they stand), so this file offers them three ways:
 //   files()   the library's source files, in the order they must be loaded
 //   bundle()  those files as one piece of text, to put in a page or in front of your own scripts
-//   load()    the same compiled for Node, with the demo dioramas: { makeBuilder, makeSculpt, KIT, SCENES, ... }
+//   load()    the prebuilt Node toolkit and demos, or a source build in a development checkout
 const fs = require('fs'),
-  path = require('path');
+  path = require('path'),
+  { createHash, randomUUID } = require('crypto');
 const KIT_DIR = path.join(__dirname, 'src', 'kit'),
   read = f => fs.readFileSync(f, 'utf8').replace(/\nif \(typeof module[^\n]*\n?$/, '\n');
 const files = () =>
-  ['src/pixel-look.js', 'src/builder.js', 'src/sculpt.js']
+  [
+    'src/stippling.js', 'src/splat-footprints.js', 'src/surface-brush.js', 'src/brushwork.js', 'src/screen-print.js', 'src/engraving.js', 'src/render-grid.js', 'src/randomness.js', 'src/fft.js', 'src/math-fields.js', 'src/typography-truetype.js', 'src/typography.js', 'src/frame-budget.js', 'src/target-inspection.js', 'src/drawing-primitives.js', 'src/palette-cycles.js', 'src/raster-schedule.js', 'src/texture-address.js', 'src/view-annotations.js', 'src/frame-composite.js', 'src/frame-bank.js', 'src/motion-smear.js', 'src/ink-veil.js', 'src/textured-surface.js', 'src/sprite-surface.js', 'src/camera-atlas.js', 'src/sprite-cels.js', 'src/atlas-sprites.js', 'src/target-selectors.js', 'src/camera-lens.js', 'src/camera-impulses.js', 'src/camera-staging.js', 'src/splat-provenance.js',
+    'src/art-passes.js', 'src/art-direction.js', 'src/art-ink.js', 'src/art-effects.js', 'src/art-stability.js', 'src/color-clusters.js', 'src/stable-detail.js', 'src/edge-filter.js', 'src/translucent-silhouettes.js', 'src/material-pixel-style.js', 'src/glitter-burst-cels.js', 'src/pixel-stamp-presets.js', 'src/pixel-stamps.js',
+    'src/color-space.js', 'src/paint-corrections.js', 'src/color-curves.js', 'src/color-lut.js', 'src/color-stack.js', 'src/pixel-look.js', 'src/palette-fields.js', 'src/palette-extract.js', 'src/palette-distributions.js', 'src/reflection-plane.js', 'src/reflection-detail.js', 'src/airflow.js', 'src/wind-field.js', 'src/light-schedule.js', 'src/geometric-caustics.js', 'src/light-cookies.js', 'src/area-lights.js', 'src/emissive-finishes.js',
+    'src/route-visibility.js', 'src/sample-coverage.js', 'src/contribution-rules.js', 'src/sample-visibility.js', 'src/swept-disc.js', 'src/splat-order.js', 'src/cutaway.js', 'src/splat-codec.js', 'src/ripple-field.js',
+    'src/volume-field.js', 'src/field-bands.js', 'src/atmosphere-palette.js', 'src/geometry-density.js', 'src/volume-cutouts.js', 'src/cloud-recipes.js', 'src/cloud-detail.js', 'src/cloud-field.js', 'src/lightning.js', 'src/volume-light.js', 'src/celestial-tracks.js', 'src/sky-environment.js', 'src/environment-frame.js', 'src/weather-front.js', 'src/material-history.js', 'src/weather-binding.js', 'src/optical-materials.js', 'src/atmosphere-depth-bands.js', 'src/scene-optics.js', 'src/scene-exposure.js', 'src/splat-effects.js',
+    'src/look-inputs.js', 'src/render-effects.js', 'src/render-graph.js', 'src/render-stages.js', 'src/render-contract.js', 'src/programmable-exposure.js', 'src/effect-palettes.js', 'src/silhouette-protection.js', 'src/pass-quality.js', 'src/detail-budgets.js', 'src/shadow-art.js', 'src/shot-lighting.js', 'src/reflection-probes.js', 'src/contact-shadows.js', 'src/bounce-probes.js', 'src/horizon-bands.js', 'src/surface-detail-kits.js', 'src/surface-look.js', 'src/material-controls.js', 'src/splat-frames.js', 'src/splat-relighting.js', 'src/sdf-assist.js', 'src/sculpt-sampling.js', 'src/builder.js', 'src/sculpt.js'
+  ]
     .map(f => path.join(__dirname, f))
     .concat(
       fs
@@ -20,19 +28,58 @@ const files = () =>
 const demoFiles = () => [path.join(__dirname, 'demos', 'labscenes.js')];
 // the names the bundle defines at top level (add them to your own module.exports)
 const EXPORTS =
-  'makeBuilder, makeSculpt, basis, flame, motes, pondMat, lilies, courses, PALETTES, PAL_HEX, KIT, PixelLook, VOX';
+  'Typography, Stippling, ScreenPrint, Engraving, SurfaceBrush, SplatFootprints, RenderGrid, Randomness, MathFields, MaterialControls, CameraLens, CameraImpulses, makeBuilder, makeSculpt, basis, flame, motes, pondMat, lilies, courses, PALETTES, PAL_HEX, KIT, FrameBudget, InkVeil, TexturedSurface, SpriteSurface, TargetSelectors, SplatProvenance, ColorSpace, PaintCorrections, ColorCurves, ColorLUT, ColorStack, PixelLook, PaletteFields, LookInputs, RenderStages, ContributionRules, SurfaceDetailKits, SurfaceLook, SceneOptics, ReflectionProbes, SceneExposure, SkyEnvironment, AtmospherePalette, EnvironmentFrame, CelestialTracks, CloudField, Lightning, VOX, SplatEffects, ArtPasses, ArtDirection, ArtInk, EffectPalettes, SilhouetteProtection, DetailBudgets, ContactShadows, BounceProbes, LightCookies, AreaLights, EmissiveFinishes, HorizonBands, ArtStability, ColorClusters, StableDetail, EdgeFilter, ArtEffects, VolumeField, VolumeLight';
+const prebuiltNode = path.join(__dirname, 'dist', 'ink-studio.node.cjs');
+const playbackSource = path.join(__dirname, 'src', 'scene-replay.js');
+const playbackExports = 'mountSceneReplay, sampleReplayFrame, validateSceneReplay';
+
+function bundle({ format = 'script', profile = 'development' } = {}) {
+  if (!['script', 'module', 'commonjs'].includes(format)) throw Error('Ink bundle format must be script, module or commonjs');
+  if (profile === 'playback') {
+    const source = read(playbackSource);
+    if (format === 'module') return source + '\nexport { ' + playbackExports + ' };\n';
+    if (format === 'commonjs') return source + '\nmodule.exports = { ' + playbackExports + ' };\n';
+    return 'const InkScenePlayer = (() => {\n' + source + '\nreturn { ' + playbackExports + ' };\n})();\n';
+  }
+  if (profile !== 'development') throw Error('Ink bundle profile must be development or playback');
+  const sources = files().map(read).join('\n');
+  if (format === 'module') return sources + '\nexport { ' + EXPORTS + ' };\n';
+  if (format === 'commonjs')
+    return sources + '\nconst SCENES = [];\n' + demoFiles().map(read).join('\n') +
+      '\nmodule.exports = { SCENES, ' + EXPORTS + ' };\n';
+  return sources;
+}
+
+function nodeBundlePath() {
+  if (process.env.INK_STUDIO_DEVELOPMENT !== '1' && fs.existsSync(prebuiltNode)) return prebuiltNode;
+  const out = path.join(__dirname, 'dist', 'standalone.js');
+  const newest = Math.max(...files().concat(demoFiles(), [__filename]).map(f => fs.statSync(f).mtimeMs));
+  if ((fs.statSync(out, { throwIfNoEntry: false })?.mtimeMs ?? -1) < newest) {
+    fs.mkdirSync(path.dirname(out), { recursive: true });
+    // Parallel consumers may compile together. Publish only complete bundles.
+    const temporary = out + '.' + randomUUID() + '.tmp';
+    try {
+      fs.writeFileSync(temporary, bundle({ format: 'commonjs' }));
+      fs.renameSync(temporary, out);
+    } finally {
+      if (fs.existsSync(temporary)) fs.unlinkSync(temporary);
+    }
+  }
+  return out;
+}
+
 module.exports = {
   files,
   demoFiles,
   EXPORTS,
   version: require('./package.json').version,
-  bundle: () => files().map(read).join('\n'),
+  bundle,
   // the seven built-in demo dioramas. They push onto an array called SCENES, which must already exist
   demos: () => demoFiles().map(read).join('\n'),
   // refuse-to-build check: code written after a // comment on the same line never runs. Returns the offending lines
   lint: require('./scripts/lint.js'),
   // a mesh file from disk, by its ending: .obj (with the .mtl beside it), .gltf (with its .bin files), .glb
-  readMesh(file) {
+  readMesh(file, { attributes = false } = {}) {
     const K = module.exports.load().KIT,
       ext = path.extname(file).toLowerCase(),
       dir = path.dirname(file);
@@ -40,7 +87,24 @@ module.exports = {
       const text = fs.readFileSync(file, 'utf8'),
         m = /^mtllib\s+(.+)$/m.exec(text),
         mf = m && path.join(dir, m[1].trim());
-      return K.mesh.obj(text, mf && fs.existsSync(mf) ? fs.readFileSync(mf, 'utf8') : null);
+      const mtl = mf && fs.existsSync(mf) ? fs.readFileSync(mf, 'utf8') : null;
+      const mesh = K.mesh.obj(text, mtl, { attributes });
+      if (attributes && mtl && mesh.uvs) {
+        let name;
+        const textures = new Map();
+        for (const raw of mtl.split('\n')) {
+          const entry = /^(newmtl|map_Kd)\s+(.+)$/.exec(raw.trim());
+          if (!entry) continue;
+          if (entry[1] === 'newmtl') name = entry[2];
+          else if (name && !entry[2].startsWith('-')) {
+            const image = path.resolve(path.dirname(mf), entry[2].replace(/^["']|["']$/g, ''));
+            const mimeType = { '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg' }[path.extname(image).toLowerCase()];
+            if (mimeType && fs.existsSync(image)) textures.set(name, { bytes: fs.readFileSync(image), mimeType });
+          }
+        }
+        mesh.mats = mesh.mats.map(m => ({ ...m, texture: textures.get(m.name) }));
+      }
+      return mesh;
     }
     if (ext === '.glb') return K.mesh.glb(fs.readFileSync(file));
     if (ext === '.gltf') {
@@ -54,22 +118,108 @@ module.exports = {
     }
     throw new Error('do not know how to read ' + ext + ' (obj, gltf and glb are read)');
   },
-  load() {
-    const out = path.join(__dirname, 'dist', 'standalone.js'),
-      srcs = files().concat(demoFiles()),
-      newest = Math.max(...srcs.map(f => fs.statSync(f).mtimeMs));
-    if (!fs.existsSync(out) || fs.statSync(out).mtimeMs < newest) {
-      fs.mkdirSync(path.dirname(out), { recursive: true });
-      fs.writeFileSync(
-        out,
-        module.exports.bundle() +
-          '\nconst SCENES = [];\n' +
-          module.exports.demos() +
-          '\nmodule.exports = { SCENES, ' +
-          EXPORTS +
-          ' };\n'
-      );
-    }
-    return require(out);
-  }
+  async readAsset(file, options = {}) {
+    if (path.extname(file).toLowerCase() !== '.glb') throw Error('Portable asset import expects a GLB file');
+    const decodeImage = options.decodeImage || ((bytes, mime) => {
+      if (mime !== 'image/png') throw Error('Supply decodeImage to import embedded JPEG images');
+      const image = require('./cli/png.js').raster(Buffer.from(bytes));
+      return { width: image.w, height: image.h,
+        pixels: image.max === 255 ? image.data : Uint8Array.from(image.data, v => Math.round(v * 255 / image.max)) };
+    });
+    return module.exports.load().KIT.authoring.assetMeshes.importGLB(
+      new Uint8Array(fs.readFileSync(file)), { ...options, decodeImage });
+  },
+  readDataInputs(file) {
+    const { KIT } = module.exports.load(), api = KIT.dataInputs;
+    const input = JSON.parse(fs.readFileSync(file, 'utf8')), bundles = KIT.authoring.projectBundles;
+    const { dataInputs } = input?.format === bundles.format ? bundles.open(input).scene() : input;
+    if (dataInputs === undefined) throw new TypeError('Expected a dataInputs catalog in ' + file);
+    return api.prepare(require('./cli/data-inputs.js').embed(api, dataInputs, file));
+  },
+  exportGlb: require('./cli/export-glb.js'),
+  ...require('./cli/gltf-asset.js'),
+  render: require('./cli/render.js').render,
+  createGraphProject: require('./cli/graph-project.js').createGraphProject,
+  createGraphWorkers: require('./cli/graph-workers.js').createGraphWorkers,
+  readGraphProject: require('./cli/graph-project.js').readGraphProject,
+  findGraphGroupUsers: require('./cli/graph-groups.js').findGraphGroupUsers,
+  diffGraphs: require('./cli/graph-diff.js').diffGraphs,
+  listGraphNodes: require('./cli/graph-catalog.js').listGraphNodes,
+  describeGraphNode: require('./cli/graph-catalog.js').describeGraphNode,
+  createTake: require('./cli/take.js').createTake,
+  readTake: require('./cli/take.js').readTake,
+  ...require('./cli/graph-host.js'),
+  readWav: require('./cli/wav.js').read,
+  decodeWav: require('./cli/wav.js').decode,
+  encodeWav: require('./cli/wav.js').encode,
+  ...require('./cli/graph-render.js'),
+  paletteUsage: require('./cli/palette-usage.js').paletteUsage,
+  reviewRampShot: require('./cli/ramp-review.js').reviewRampShot,
+  comparePaletteDistributions: require('./cli/palette-distributions.js').comparePaletteDistributions,
+  measureQuantizationError: require('./cli/palette-error.js').measureQuantizationError,
+  reviewQuantizationError: require('./cli/palette-error.js').reviewQuantizationError,
+  inspectPalettePixel: require('./cli/palette-pixel.js').inspectPalettePixel,
+  reviewPaletteShimmer: require('./cli/palette-shimmer.js').reviewPaletteShimmer,
+  reviewSubjectReadability: require('./cli/readability-review.js').reviewSubjectReadability,
+  reviewShadowReadability: require('./cli/shadow-readability.js').reviewShadowReadability,
+  reviewPaletteWeather: require('./cli/palette-weather.js').reviewPaletteWeather,
+  reviewPaletteStages: require('./cli/palette-stages.js').reviewPaletteStages,
+  compareShotPalettes: require('./cli/palette-compare.js').compareShotPalettes,
+  checkPaletteShot: require('./cli/palette-checks.js').checkPaletteShot,
+  approveShot: require('./cli/shot-approval.js').approveShot,
+  exportLayers: require('./cli/export-layers.js').exportLayers,
+  exportScene: require('./cli/scene-export.js').exportScene,
+  ...require('./cli/scene-audio.js'),
+  readSceneReplay: require('./cli/scene-replay.js').readSceneReplay,
+  sampleSceneReplay: require('./cli/scene-replay.js').sampleSceneReplay,
+  writeSceneEmbed: require('./cli/scene-replay.js').writeSceneEmbed,
+  packProject: require('./cli/project-bundle.js').packProject,
+  readProjectBundle: require('./cli/project-bundle.js').readProjectBundle,
+  writeProjectBundle: require('./cli/project-bundle.js').writeProjectBundle,
+  unpackProject: require('./cli/project-bundle.js').unpackProject,
+  describeRenderFrame: (world, frame) => require('./src/render-contract.js').describe(world, frame),
+  createCameraAtlas(options) {
+    return module.exports.load().KIT.cameraAtlas.raster(options, (world, frame) => {
+      const { width: w, height: h, time: t, camera, cameraSnapshot, ...settings } = frame;
+      if (cameraSnapshot !== undefined || camera?.pose !== undefined)
+        throw new TypeError('Headless camera atlas views use orbit camera settings');
+      const ortho = camera?.ortho ?? (camera?.projection === undefined ? settings.ortho :
+        camera.projection === 'orthographic');
+      return module.exports.render(world, { ...settings, ...camera, ortho, w, h, t, px: 1 });
+    });
+  },
+  bakeBounceProbes: (world, settings) => module.exports.load().KIT.bounceProbes.bake(world, settings),
+  inspectEnvironment: require('./cli/environment-inspector.js').inspectEnvironment,
+  silhouetteReview: require('./cli/silhouette-review.js').silhouetteReview,
+  transitionReview: require('./cli/transition-review.js').transitionReview,
+  spriteAtlas: require('./cli/sprite-atlas.js').spriteAtlas,
+  readSpriteAtlas: require('./cli/sprite-atlas.js').readSpriteAtlas,
+  writeSpriteAtlas: require('./cli/sprite-atlas.js').writeSpriteAtlas,
+  readHorizonBands: require('./cli/horizon-bands.js').readHorizonBands,
+  readEnvironmentImage: require('./cli/horizon-bands.js').readEnvironmentImage,
+  previewTimeline: require('./cli/animation-timeline.js').previewTimeline,
+  readRasterAsset(file) {
+    return require('./cli/raster-asset.js').readRasterAsset(file, module.exports.load().KIT.procedural.graph.raster);
+  },
+  readReferencePalette(file, options) {
+    return require('./src/palette-extract.js').extract(require('./cli/png.js').paletteSource(file), options);
+  },
+  writeRasterAsset: require('./cli/raster-asset.js').writeRasterAsset,
+  createSceneEditor(source, options) {
+    return module.exports.load().KIT.authoring.sceneEditor.create(source, options);
+  },
+  createSplatPicker(world, options = {}) {
+    const K = module.exports.load().KIT;
+    const time = options.time ?? world.lookSnapshot?.time ?? 0;
+    const posed = K.reconstruction.frame(world, time, options.reconstruction ?? world.look?.reconstruction);
+    return K.procedural.contributions.create(posed, options);
+  },
+  createSimulationWorkers: require('./src/simulation-worker-pool.js'),
+  openCheckpointStore: require('./src/simulation-checkpoint-store.js').openCheckpointStore,
+  nodeBundlePath,
+  toolkitBuildHash(kit) {
+    const file = nodeBundlePath();
+    if (require.cache[file]?.exports === kit) return createHash('sha256').update(fs.readFileSync(file)).digest('hex');
+  },
+  load() { return require(nodeBundlePath()); }
 };

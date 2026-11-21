@@ -26,7 +26,8 @@
                            the start). Every dab of each is paired with the nearest of the other (by where it lies in its own shape's
                            box), and over o.dur (2) seconds each travels to its pair while those of a fade out and those of b fade in.
                            .go(toB) starts it, or o.loop: [hold a, hold b] seconds, and it goes back and forth for ever. o.swirl: they
-                           wheel about the middle on the way (a summons). */
+                           wheel about the middle on the way (a summons). Authored point and rigid feature tracks use
+                           o.correspondence: 'geometry' and o.geometry. */
 (function (K) {
   const norm = v => {
     const l = Math.hypot(v[0], v[1], v[2]) || 1;
@@ -85,6 +86,17 @@
     };
   };
 
+  K.xpbd.ropeLinks = (count,compliance,tear,bend,guardBends=false) => {
+    const links=[], spans=[];
+    for(let a=0;a<count-1;a++){
+      spans.push(links.length);
+      links.push({a,b:a+1,compliance,ratio:tear,kind:'stretch'});
+      if(bend&&a+2<count)links.push({a,b:a+2,compliance:bend,ratio:0,kind:'bend'});
+    }
+    if(guardBends)for(const link of links)if(link.kind==='bend')link.guards=spans.slice(link.a,link.b);
+    return links;
+  };
+
   K.xpbd.rope = (B, o) => {
     o = o || {};
     const sim = o.sim || K.xpbd.sim(o),
@@ -117,10 +129,8 @@
       }
       ids.push(sim.point(p, 1 / (o.mass || 0.05), w));
     }
-    for (let k = 0; k < n; k++) {
-      sim.link(ids[k], ids[k + 1], o.comp || 0, o.tear || 0);
-      if (k + 2 <= n && o.bend) sim.link(ids[k], ids[k + 2], o.bend, 0);
-    }
+    for(const {a,b,compliance,ratio} of K.xpbd.ropeLinks(n+1,o.comp||0,o.tear||0,o.bend))
+      sim.link(ids[a],ids[b],compliance,ratio);
     const X0 = sim.X;
     const pinTo = (i, f) => {
       const p0 = [X0[i * 3], X0[i * 3 + 1], X0[i * 3 + 2]];
@@ -712,6 +722,34 @@
   };
 
   // ---- morphing
+  function morphTimeline(st, o, draw, initiallyAtTarget) {
+    const dur = o.dur || 2, wrap = o.correspondence === 'geometry';
+    const geometryLoop = wrap && o.loop ? o.loop.slice() : null;
+    let from = 0, t0 = -1e9, toB = initiallyAtTarget, cur = 0;
+    return {
+      go(b2) {
+        toB = b2 === undefined ? !toB : b2;
+        from = cur;
+        t0 = st.time;
+      },
+      update(_dt, t) {
+        const loop = geometryLoop ?? o.loop;
+        if (loop) {
+          const per = loop[0] + loop[1] + dur * 2, remainder = t % per;
+          const u = wrap && remainder < 0 ? remainder + per : remainder;
+          cur = u < loop[0] ? 0
+            : u < loop[0] + dur ? (u - loop[0]) / dur
+              : u < loop[0] + dur + loop[1] ? 1
+                : 1 - (u - loop[0] - dur - loop[1]) / dur;
+        } else {
+          const k = Math.min(1, (t - t0) / dur);
+          cur = from + ((toB ? 1 : 0) - from) * k;
+        }
+        draw(Math.max(0, Math.min(1, cur)));
+      }
+    };
+  }
+
   K.morph = (B, st, a0, b0, o) => {
     o = o || {};
     // (each side: { first, count }, or a list of dab ids)
@@ -723,6 +761,18 @@
       LB = asList(b0),
       a = { ids: LA, count: LA.length },
       b = { ids: LB, count: LB.length };
+    if (!a.count || !b.count || [...LA, ...LB].some(i => !Number.isSafeInteger(i) || i < 0 || i * 16 >= st.base.length))
+      throw new Error('Morphs need nonempty sets of valid splat indices');
+    if (o.correspondence !== undefined && !['nearest', 'transport', 'geometry'].includes(o.correspondence))
+      throw new Error('Unknown morph correspondence mode');
+    if (o.correspondence === 'geometry') {
+      if (o.swirl || (o.dur !== undefined && (!Number.isFinite(o.dur) || o.dur <= 0)) ||
+          (o.loop && !(Array.isArray(o.loop) && o.loop.length === 2 && o.loop.every(t => Number.isFinite(t) && t >= 0))) ||
+          !Number.isFinite(2 * (o.dur ?? 2) + (o.loop ? o.loop[0] + o.loop[1] : 0)))
+        throw new RangeError('Geometry morphs need valid timing and authored paths');
+      const { geometry, draw, post } = SplatGeometryMorph(st, LA, LB, o.geometry);
+      return { geometry, post, ...morphTimeline(st, o, draw, false) };
+    }
     const D = st.D,
       base = st.base,
       box = r => {
@@ -776,26 +826,33 @@
         }
         return out;
       },
-      ab = pairOf(a, ba, b, bb),
-      bA = pairOf(b, bb, a, ba),
-      dur = o.dur || 2,
+      transportSamples = r => r.ids.map(i => {
+        const offset = i * 16, c = base[offset + 7];
+        return { id: String(i), position: [base[offset], base[offset + 1], base[offset + 2]],
+          color: [c & 255, (c >> 8) & 255, (c >> 16) & 255].map(v => v / 255) };
+      }),
+      transport = o.correspondence === 'transport'
+        ? K.procedural.motion.transportSplats(transportSamples(a), transportSamples(b), { normalize: 'bounds', ...o.transport })
+        : null,
+      ab = transport ? transport.forward : pairOf(a, ba, b, bb),
+      bA = transport ? transport.reverse : pairOf(b, bb, a, ba),
       mid = [0, 1, 2].map(k => (ba.lo[k] + ba.hi[k] + bb.lo[k] + bb.hi[k]) / 4),
       ease = x => (x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2);
-    let from = 0,
-      t0 = -1e9,
-      toB = true,
-      cur = 0;
     const alphaA = Float32Array.from(a.ids, i => base[i * 16 + 3]),
       alphaB = Float32Array.from(b.ids, i => base[i * 16 + 3]);
     // b starts hidden
-    for (const i of b.ids) D[i * 16 + 3] = 0;
+    for (const i of b.ids) if(!st.physicsOwned?.[i])D[i * 16 + 3] = 0;
     const place = (i, j, s, alpha) => {
       // dab i (made where it is) travels toward where dab j was made, s of the way
+      if(st.physicsOwned?.[i])return;
       const o2 = i * 16,
         sw = o.swirl ? o.swirl * Math.sin(Math.PI * s) : 0;
-      let x = base[o2] + (base[j * 16] - base[o2]) * s,
-        y = base[o2 + 1] + (base[j * 16 + 1] - base[o2 + 1]) * s,
-        z = base[o2 + 2] + (base[j * 16 + 2] - base[o2 + 2]) * s;
+      const tx = transport ? j[0] : base[j * 16],
+        ty = transport ? j[1] : base[j * 16 + 1],
+        tz = transport ? j[2] : base[j * 16 + 2];
+      let x = base[o2] + (tx - base[o2]) * s,
+        y = base[o2 + 1] + (ty - base[o2 + 1]) * s,
+        z = base[o2 + 2] + (tz - base[o2 + 2]) * s;
       if (sw) {
         const dx = x - mid[0],
           dz = z - mid[2],
@@ -811,36 +868,16 @@
       D[o2 + 3] = alpha;
       st.rows[i >> 9] = 1;
     };
-    const sys = {
-      go(b2) {
-        toB = b2 === undefined ? !toB : b2;
-        from = cur;
-        t0 = st.time;
-      },
-      update(dt, t) {
-        if (o.loop) {
-          const per = o.loop[0] + o.loop[1] + dur * 2,
-            u = t % per;
-          cur =
-            u < o.loop[0]
-              ? 0
-              : u < o.loop[0] + dur
-                ? (u - o.loop[0]) / dur
-                : u < o.loop[0] + dur + o.loop[1]
-                  ? 1
-                  : 1 - (u - o.loop[0] - dur - o.loop[1]) / dur;
-        } else {
-          const k = Math.min(1, (t - t0) / dur);
-          cur = from + ((toB ? 1 : 0) - from) * k;
-        }
-        const s = ease(Math.max(0, Math.min(1, cur)));
-        // those of a go out toward b, fading as they arrive; those of b come in from a, showing as they come
+    return {
+      transport,
+      ...morphTimeline(st, o, progress => {
+        const s = ease(progress);
+        // Those of a go out toward b, fading as they arrive. Those of b come in from a.
         for (let k = 0; k < a.count; k++)
-          place(a.first + k, ab[k], s, alphaA[k] * Math.max(0, 1 - s * 1.6 + 0.3 * (1 - s)));
+          place(a.ids[k], ab[k], s, alphaA[k] * Math.max(0, 1 - s * 1.6 + 0.3 * (1 - s)));
         for (let k = 0; k < b.count; k++)
-          place(b.first + k, bA[k], 1 - s, alphaB[k] * Math.max(0, Math.min(1, (s - 0.25) * 1.6)));
-      }
+          place(b.ids[k], bA[k], 1 - s, alphaB[k] * Math.max(0, Math.min(1, (s - 0.25) * 1.6)));
+      }, true)
     };
-    return sys;
   };
 })(KIT);

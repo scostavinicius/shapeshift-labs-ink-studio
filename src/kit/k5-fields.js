@@ -177,6 +177,10 @@
       arr = new Float32Array(144),
       base = pal.map(h => [((h >> 16) & 255) / 255, ((h >> 8) & 255) / 255, (h & 255) / 255]);
     return {
+      setRemap(definition, amount = 1) {
+        const remap = PixelLook.prepareRemap(definition, pal, st.W.paletteRoles);
+        st.grade = remap && amount !== 0 ? remap.grade(null, amount) : null;
+      },
       set(fn, amount) {
         if (!amount) {
           st.grade = null;

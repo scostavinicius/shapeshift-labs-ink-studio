@@ -1,0 +1,372 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /><title>
+    Pigment Coast · Ink Studio
+  </title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      background: #080f25;
+      color: #d3d8d4;
+      font-family: system-ui, sans-serif;
+    }
+    main {
+      max-width: 1480px;
+      margin: auto;
+      padding: 35px 44px;
+    }
+    .eyebrow {
+      display: flex;
+      justify-content: space-between;
+      color: #8495ae;
+      font: 10px monospace;
+      letter-spacing: 2px;
+      border-bottom: 1px solid #26324c;
+      padding-bottom: 17px;
+    }
+    h1 {
+      font-family: Georgia, serif;
+      font-size: 62px;
+      font-weight: 400;
+      margin: 20px 0 12px;
+      letter-spacing: -2px;
+    }
+    h1 em {
+      color: #efb970;
+      font-weight: 400;
+    }
+    .intro {
+      color: #8c9cb3;
+      font-size: 13px;
+      line-height: 1.7;
+      max-width: 780px;
+      margin: 0 0 25px;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 248px;
+      gap: 26px;
+    }
+    .stage {
+      position: relative;
+      border: 1px solid #2b3650;
+      min-width: 0;
+      background: #080f25;
+    }
+    .tabs {
+      display: flex;
+      align-items: center;
+      border-bottom: 1px solid #2b3650;
+      padding: 9px;
+      gap: 7px;
+    }
+    button,
+    select {
+      background: #15213b;
+      border: 1px solid #34415c;
+      color: #cbd4dc;
+      padding: 9px 12px;
+      font: 11px monospace;
+      cursor: pointer;
+    }
+    button.active {
+      color: #ffe0a2;
+      border-color: #a97843;
+      background: #352d32;
+    }
+    .hint {
+      margin-left: auto;
+      font: 9px monospace;
+      color: #758ba7;
+      padding: 0 8px;
+    }
+    canvas {
+      display: block;
+      width: 100%;
+      aspect-ratio: 1.6;
+      touch-action: none;
+    }
+    .bar {
+      padding: 14px;
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      border-top: 1px solid #2b3650;
+      color: #879cb9;
+      font: 9px monospace;
+      letter-spacing: 0.3px;
+    }
+    .panel {
+      padding-top: 5px;
+    }
+    h2 {
+      font:
+        13px Georgia,
+        serif;
+      color: #eed4aa;
+      margin: 0 0 20px;
+    }
+    .label {
+      font: 10px monospace;
+      color: #6e88a7;
+      letter-spacing: 1px;
+      margin: 22px 0 8px;
+    }
+    .panel select {
+      width: 100%;
+    }
+    label {
+      display: block;
+      font: 11px monospace;
+      color: #a2b1c4;
+      margin: 18px 0;
+    }
+    input[type='range'] {
+      width: 100%;
+      accent-color: #e6a956;
+      margin-top: 12px;
+    }
+    .check {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .check input {
+      accent-color: #e6a956;
+    }
+    .note {
+      font: 11px/1.8 monospace;
+      color: #7086a3;
+      border-top: 1px solid #283650;
+      margin-top: 24px;
+      padding-top: 18px;
+    }
+    .note b {
+      color: #b6c4d1;
+      font-weight: 400;
+    }
+    #reset {
+      width: 100%;
+      margin-top: 10px;
+    }
+    #loading {
+      position: absolute;
+      inset: 50px 0 0;
+      display: grid;
+      place-items: center;
+      background: #080f25;
+      font: 12px monospace;
+      color: #e6a956;
+    }
+    footer {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 22px;
+      color: #6e84a0;
+      font: 10px monospace;
+    }
+    @media (max-width: 900px) {
+      main {
+        padding: 20px;
+      }
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      .panel {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px 24px;
+      }
+      .hint {
+        display: none;
+      }
+      .note,
+      #reset {
+        grid-column: 1/-1;
+      }
+      h1 {
+        font-size: 45px;
+      }
+    }
+  </style>
+  <main>
+    <div class="eyebrow"><span>INK STUDIO / REPRESENTATIONS 03</span><span>PAINT IN SURFACE SPACE</span></div>
+    <h1>Pigment <em>Coast</em></h1>
+    <p class="intro">
+      Ultramarine shadows. Sun-warmed ochre. Paint follows the cliffs, drags through the clouds, and bends with a
+      swimming koi. Orbit either scene to see every mark hold its place.
+    </p>
+    <div class="layout">
+      <section class="stage">
+        <div class="tabs">
+          <button class="active" data-view="coast">01 / Gouache coast</button
+          ><button data-view="koi">02 / Painted koi</button
+          ><span class="hint">DRAG · ORBIT &nbsp; SHIFT–DRAG · PAN &nbsp; SCROLL · ZOOM</span>
+        </div>
+        <canvas id="view" width="1120" height="700"></canvas>
+        <div class="bar">
+          <span id="caption">CURVATURE / CLIFFS · CONTOURS / TERRACES · FLOW FIELD / CLOUDS</span
+          ><span id="stats">—</span>
+        </div>
+        <div id="loading">Grinding pigments…</div>
+      </section>
+      <aside class="panel">
+        <div>
+          <h2>Change the brush, keep the form</h2>
+          <div class="label">PAINT PROFILE</div>
+          <select id="style">
+            <option value="original">Artist's mix</option>
+            <option value="gouache">Gouache / broken edges</option>
+            <option value="bristle">Dry bristle / split hairs</option>
+            <option value="wash">Wash / feathered pigment</option>
+            <option value="ink">Ink / tapered stroke</option>
+          </select>
+        </div>
+        <div>
+          <label
+            >Stroke length <span id="lengthValue">1.00×</span
+            ><input id="length" type="range" min=".5" max="1.6" step=".05" value="1" /></label
+          ><label
+            >Stroke width <span id="widthValue">1.00×</span
+            ><input id="width" type="range" min=".45" max="1.7" step=".05" value="1"
+          /></label>
+        </div>
+        <div>
+          <label class="check"><input type="checkbox" id="native" />Compare Gaussian marks</label
+          ><label class="check"><input type="checkbox" id="pause" />Pause animation</label
+          ><label class="check"><input type="checkbox" id="turntable" />Slow camera orbit</label
+          ><button id="reset">Reset brush & camera</button>
+        </div>
+        <p class="note">
+          <b id="detail">Cliff marks follow the least bending direction. Cloud strokes follow a curved wind field.</b
+          ><br /><br />These are painted SDF surfaces. Bristle gaps reveal the space behind them. Each mark keeps its
+          surface orientation as the camera turns.
+        </p>
+      </aside>
+    </div>
+    <footer><span>OPTIONAL SURFACE BRUSHES / NATIVE SDFs + SPLATS</span><span>ULTRAMARINE × OCHRE</span></footer>
+  </main>
+  <script src="../dist/ink-studio.browser.js"></script>
+  <script src="./surface-brush.js"></script>
+  <script type="module">
+    import { createRenderer } from '../webgl.mjs';
+    const $ = id => document.getElementById(id),
+      canvas = $('view');
+    try {
+      const kit = {
+        KIT,
+        PixelLook,
+        makeBuilder,
+        makeSculpt,
+        SpriteSurface,
+        ContributionRules,
+        RenderStages,
+        TargetSelectors,
+        SplatProvenance
+      };
+      const demo = surfaceBrushDemo(kit),
+        renderer = createRenderer(canvas, { toolkit: kit });
+      demo.state.view = 'coast';
+      function sync() {
+        document
+          .querySelectorAll('[data-view]')
+          .forEach(b => b.classList.toggle('active', b.dataset.view === demo.state.view));
+        $('style').value = demo.state.style;
+        for (const key of ['length', 'width']) {
+          $(key).value = demo.state[key];
+          $(key + 'Value').textContent = demo.state[key].toFixed(2) + '×';
+        }
+        $('caption').textContent =
+          demo.state.view === 'coast'
+            ? 'CURVATURE / CLIFFS · CONTOURS / TERRACES · FLOW FIELD / CLOUDS'
+            : '32 BONE SECTIONS · SURFACE MARKS BEND WITH THE SWIM';
+        $('detail').textContent =
+          demo.state.view === 'coast'
+            ? 'Cliff marks follow the least bending direction. Cloud strokes follow a curved wind field.'
+            : 'Longitudinal body strokes and radial fin bristles travel with the koi’s bones. Pause and orbit to inspect the painted surface.';
+      }
+      document.querySelectorAll('[data-view]').forEach(
+        b =>
+          (b.onclick = () => {
+            demo.state.view = b.dataset.view;
+            sync();
+          })
+      );
+      $('style').onchange = e => {
+        demo.state.style = e.target.value;
+        demo.paint();
+        sync();
+      };
+      for (const key of ['length', 'width'])
+        $(key).oninput = e => {
+          demo.state[key] = +e.target.value;
+          demo.paint();
+          sync();
+        };
+      for (const key of ['native', 'pause', 'turntable'])
+        $(key).onchange = e => (demo.state[key === 'pause' ? 'paused' : key] = e.target.checked);
+      $('reset').onclick = () => {
+        demo.reset();
+        $('native').checked = $('turntable').checked = false;
+        sync();
+      };
+      let drag,
+        last,
+        frames = 0,
+        stamp;
+      canvas.onpointerdown = e => {
+        drag = [e.clientX, e.clientY];
+        canvas.setPointerCapture(e.pointerId);
+        demo.control.take();
+      };
+      canvas.onpointermove = e => {
+        if (!drag) return;
+        const dx = e.clientX - drag[0],
+          dy = e.clientY - drag[1];
+        drag = [e.clientX, e.clientY];
+        demo.control.input(e.shiftKey ? { pan: [-dx * 0.012, dy * 0.012] } : { yaw: -dx * 0.004, pitch: dy * 0.004 });
+      };
+      canvas.onpointerup = canvas.onpointercancel = () => (drag = null);
+      canvas.addEventListener(
+        'wheel',
+        e => {
+          e.preventDefault();
+          demo.control.input({ dolly: e.deltaY * 0.001 });
+        },
+        { passive: false }
+      );
+      window.brushQA = { demo, renderer, kit, sync };
+      sync();
+      $('loading').remove();
+      function tick(now) {
+        const dt = last === undefined ? 0 : Math.min(0.05, (now - last) / 1000);
+        last = now;
+        demo.update(dt);
+        renderer.render(demo.world, {
+          width: canvas.width,
+          height: canvas.height,
+          time: demo.state.time,
+          camera: demo.control.read().camera,
+          splatFootprints: !demo.state.native,
+          changedRows: []
+        });
+        frames++;
+        stamp ??= now;
+        if (now - stamp > 700) {
+          $('stats').textContent =
+            Math.round((frames * 1000) / (now - stamp)) + ' FPS · ' + demo.world.count.toLocaleString() + ' MARKS';
+          frames = 0;
+          stamp = now;
+        }
+        requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    } catch (e) {
+      $('loading').textContent = e.message;
+      throw e;
+    }
+  </script>
+</html>

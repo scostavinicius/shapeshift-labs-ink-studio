@@ -56,6 +56,7 @@
           rad = Math.max(rad, Math.hypot(loc[k * 9], loc[k * 9 + 1], loc[k * 9 + 2]));
         const ch = {
           ids,
+          footprints: SplatFootprints.captureFrames(st.W, ids),
           loc,
           c,
           R: M.id(),
@@ -73,6 +74,7 @@
       },
       update(dt) {
         dt = Math.min(dt, 0.033);
+        const frames = chunks.some(ch => ch.footprints) ? st.W.splatFootprints.frames.slice() : null;
         for (let n = chunks.length - 1; n >= 0; n--) {
           const ch = chunks[n];
           ch.v[1] -= g * dt;
@@ -151,6 +153,8 @@
             D[q + 8] = m10 * d + m11 * e + m12 * f;
             D[q + 9] = m10 * gg + m11 * h + m12 * ii;
             D[q + 10] = m20 * gg + m21 * h + m22 * ii;
+            if (frames && ch.footprints && i * 6 + 6 <= frames.length)
+              SplatFootprints.carryFrame(frames, i * 6, ch.footprints, m * 6, R, k);
             st.rows[i >> 9] = 1;
           }
           if (ch.life <= 0) {
@@ -163,6 +167,7 @@
             chunks.splice(n, 1);
           }
         }
+        if (frames) SplatFootprints.setFrames(st.W, frames);
       },
       paint(i, c) {
         if (gone[i]) c[3] = 0;
@@ -673,6 +678,7 @@
         const mass = Math.max(1, ids.length * 0.02),
           body = {
             ids,
+            footprints: SplatFootprints.captureFrames(st.W, ids),
             loc,
             pts,
             c,
@@ -855,6 +861,7 @@
         }
       },
       write() {
+        const frames = bodies.some(b => b.footprints && (!b.asleep || b.dirty)) ? st.W.splatFootprints.frames.slice() : null;
         for (const b of bodies) {
           if (b.asleep && !b.dirty) continue;
           b.dirty = false;
@@ -900,9 +907,12 @@
             D[q + 8] = m10 * d + m11 * ee + m12 * f;
             D[q + 9] = m10 * gg + m11 * h + m12 * ii;
             D[q + 10] = m20 * gg + m21 * h + m22 * ii;
+            if (frames && b.footprints && i * 6 + 6 <= frames.length)
+              SplatFootprints.carryFrame(frames, i * 6, b.footprints, m * 6, R);
             st.rows[i >> 9] = 1;
           }
         }
+        if (frames) SplatFootprints.setFrames(st.W, frames);
       }
     };
     return sys;

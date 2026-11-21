@@ -32,7 +32,38 @@
       };
     const flag = new Uint8Array(N),
       queue = new Int32Array(N);
-    let qn = 0;
+    let qn = 0,
+      atmosphereProgram,
+      atmosphereHistory,
+      domains = null,
+      advanceDomains = true,
+      domainFrame = -1,
+      domainEpoch = -1;
+    const routed = new WeakMap();
+    let previousDirection, preparedDirection;
+    st.motionSettings = () => {
+      const source = W.look?.artDirection;
+      if (source !== previousDirection) {
+        preparedDirection = ArtDirection.prepare(source);
+        previousDirection = source;
+      }
+      return Object.hasOwn(st, 'motionDirection') ? st.motionDirection : preparedDirection;
+    };
+    st.sceneWind = () => {
+      const options = st.motionEnvironment ?? {};
+      const sampled = EnvironmentFrame.timeline(W, options, 0, null, K.weather.tracks);
+      const weather = EnvironmentFrame.opticalWeather(W, options, sampled, options.weatherFronts !== false);
+      const exposure = SceneExposure.settings(W.sceneExposure, options.sceneExposure);
+      const field = EnvironmentFrame.wind(W, options, {
+        ...sampled,
+        weather,
+        exposure
+      });
+      return (x, y, z, t) => {
+        const [vx, vz] = field.airAt(x, y, z, options.skyTime ?? t + (st.t0 ?? 0)).velocity;
+        return [vx, 0, vz];
+      };
+    };
     const rgba = [0, 0, 0, 0];
     st.touch = i => {
       rows[i >> 9] = 1;
@@ -46,20 +77,131 @@
     st.repaintAll = ids => {
       for (let k = 0; k < ids.length; k++) st.repaint(ids[k]);
     };
-    st.add = sys => {
+    const clothSystems = [];
+    st.useTimeDomains = (clocks, { advance = true } = {}) => {
+      if (!clocks?.read || typeof advance !== 'boolean') throw new TypeError('Expected shared time domains');
+      for (const sys of st.systems) {
+        const route = routed.get(sys) ?? clothRoutes.get(sys);
+        if (route && !clocks.has(route.domain)) throw new Error('Unknown clock ' + route.domain);
+      }
+      for (const sys of st.systems) {
+        const route = routed.get(sys) ?? clothRoutes.get(sys);
+        if (route) {
+          route.epoch = -1;
+          route.time = null;
+        }
+      }
+      domains = clocks;
+      advanceDomains = advance;
+      domainFrame = domainEpoch = -1;
+      st.t0 = 0;
+      W.timeDomains = clocks;
+      return st;
+    };
+    st.clockFor = sys => domains?.read(routed.get(sys)?.domain ?? 'animation');
+    st.setTimeDomain = (sys, domain) => {
+      if (!st.systems.includes(sys)) throw new Error('System must be installed on this stage');
+      if (domain === null) {
+        routed.delete(sys);
+        clothRoutes.delete(sys);
+      } else {
+        if (typeof domain !== 'string' || (domains && !domains.has(domain))) throw new Error('Unknown system clock');
+        routed.set(sys, { domain, epoch: -1, time: null });
+      }
+      return sys;
+    };
+    st.add = (sys, options = {}) => {
+      if (options.domain !== undefined) {
+        if (typeof options.domain !== 'string' || (domains && !domains.has(options.domain)))
+          throw new Error('Unknown system clock');
+        routed.set(sys, { domain: options.domain, epoch: -1, time: null });
+      }
       st.systems.push(sys);
+      if (sys.independentCloth) clothSystems.push(sys);
       if (sys.paint) st.painters.push(sys);
       if (sys.bind) sys.bind(st);
       return sys;
     };
-    st.update = (dt, t) => {
-      if (st.t0 === undefined) st.t0 = t;
-      t -= st.t0;
-      dt = dt < 0 ? 0 : dt > 0.05 ? 0.05 : dt;
+    // A route cursor belongs to the system, so repeated draws never replay fixed ticks.
+    function runSystem(sys, c) {
+      if (!sys.update) return;
+      const r = c.route;
+      if (!domains || !r) {
+        sys.update(c.dt, c.time, st, c.clock);
+        return;
+      }
+      if (r.epoch !== domains.epoch) {
+        r.epoch = domains.epoch;
+        r.time = null;
+      }
+      if (c.clock.step !== null) {
+        if (c.clock.steps.length) {
+          for (const step of c.clock.steps)
+            if (r.time === null || step.time > r.time) {
+              sys.update(step.dt, step.time, st, c.clock);
+              r.time = step.time;
+            }
+        } else if (r.time === null) {
+          sys.update(0, c.time, st, c.clock);
+          r.time = c.time;
+        }
+      } else if (r.time === null || c.time !== r.time) {
+        sys.update(r.time === null ? c.clock.sampleDt : Math.max(0, c.time - r.time), c.time, st, c.clock);
+        r.time = c.time;
+      }
+    }
+    const clothRoutes = new WeakMap();
+    st.hasIndependentCloth = () => clothSystems.length > 0;
+    st.advanceCloth = (dt, time) => {
+      for (const system of clothSystems) {
+        if (!domains) {
+          system.update(dt, time - st.t0, st);
+          continue;
+        }
+        let route = routed.get(system) ?? clothRoutes.get(system);
+        if (!route) {
+          route = { domain: 'animation', epoch: -1, time: null };
+          clothRoutes.set(system, route);
+        }
+        const clock = domains.read(route.domain);
+        runSystem(system, {
+          route,
+          clock,
+          dt: clock.sampleDt,
+          time: clock.sampleTime
+        });
+      }
+    };
+    st.update = (dt, t, { separateCloth = false } = {}) => {
+      const sceneTime = t;
+      if (domains) {
+        if (advanceDomains) domains.advance(dt);
+        const clock = domains.read('animation');
+        t = clock.sampleTime;
+        dt = domainFrame === domains.frameId && domainEpoch === domains.epoch ? 0 : clock.sampleDt;
+      } else {
+        if (st.t0 === undefined) st.t0 = t;
+        t -= st.t0;
+        dt = dt < 0 ? 0 : dt > 0.05 ? 0.05 : dt;
+      }
       st.time = t;
       st.dt = dt;
-      for (let k = st.systems.length - 1; k >= 0; k--) if (st.systems[k].pre) st.systems[k].pre(dt, t, st);
-      for (const s of st.systems) if (s.update) s.update(dt, t, st);
+      const context = sys => {
+        const route = routed.get(sys) ?? (domains && sys.independentCloth ? clothRoutes.get(sys) : undefined),
+          clock = domains && domains.read(route?.domain ?? 'animation');
+        return {
+          route,
+          clock,
+          dt: clock ? (domainFrame === domains.frameId && domainEpoch === domains.epoch ? 0 : clock.sampleDt) : dt,
+          time: clock?.sampleTime ?? t
+        };
+      };
+      for (let k = st.systems.length - 1; k >= 0; k--) {
+        const sys = st.systems[k],
+          c = context(sys);
+        if (sys.pre) sys.pre(c.dt, c.time, st, c.clock);
+      }
+      for (const sys of st.systems) if (!(separateCloth && sys.independentCloth)) runSystem(sys, context(sys));
       for (let k = 0; k < qn; k++) {
         const i = queue[k],
           o = i * 16,
@@ -78,6 +220,16 @@
         rows[i >> 9] = 1;
       }
       qn = 0;
+      for (const system of st.systems)
+        if (system.post) {
+          const c = context(system);
+          system.post(c.dt, c.time, st, c.clock);
+        }
+      atmosphereHistory?.capture(domains ? domains.read('animation').sampleTime : sceneTime, socketPose);
+      if (domains) {
+        domainFrame = domains.frameId;
+        domainEpoch = domains.epoch;
+      }
       return true;
     };
     st.poke = (o, d) => {
@@ -91,7 +243,7 @@
     };
     st.partOf = i => (st.rig ? st.rig.bid[i] : 0);
     // named points to hang things on (an eye, a pipe's mouth): given where they are at rest and which rig part carries them; where() says where one is now
-    const sockets = (st.sockets = {});
+    const sockets = (st.sockets = Object.create(null));
     st.socket = (name, p, part, dir) => {
       sockets[name] = { p, part: part || null, dir: dir || [0, 1, 0] };
     };
@@ -99,6 +251,21 @@
       const s = sockets[name];
       return !s ? null : s.part && st.rig && st.rig.has(s.part) ? st.rig.at(s.part, s.p) : s.p;
     };
+    function socketPose({ socket: name }) {
+      const s = sockets[name];
+      if (!s) return null;
+      const p = st.where(name);
+      const dir = s.part && st.rig?.has(s.part) ? V.sub(st.rig.at(s.part, V.add(s.p,s.dir)),p) : s.dir;
+      return { p, dir };
+    }
+    st.trackAtmosphere = program => {
+      if (atmosphereProgram === program) return;
+      atmosphereProgram = program;
+      const targets = program?.targets?.filter(target => target.entity === undefined);
+      atmosphereHistory = targets?.length ? K.atmosphere.emitters.history(targets,program.lifetime) : null;
+    };
+    st.atmosphereSocket = (target,time) => atmosphereHistory?.has(target) ? atmosphereHistory.at(target,time) : socketPose(target);
+    st.trackAtmosphere(W.atmosphereEmitters);
     W.anim = st;
     return st;
   };
@@ -130,6 +297,7 @@
       },
       // write one splat: a round one (s) or a long one (axis, half-length sl, half-width sw); col is a packed colour (B.P[i]); alpha 0 hides it
       put(st, i, x, y, z, s, col, alpha, ax, sl) {
+        if (st.physicsOwned?.[i]) return;
         const D = st.D,
           o = i * 16;
         D[o] = x;
@@ -137,6 +305,7 @@
         D[o + 2] = z;
         D[o + 3] = alpha;
         D[o + 7] = col;
+        if (st.base) { st.base[o + 3] = alpha; st.base[o + 7] = col; }
         if (ax) {
           const p = s * s,
             d = sl * sl - p;
@@ -158,7 +327,9 @@
         st.rows[i >> 9] = 1;
       },
       hide(st, i) {
+        if (st.physicsOwned?.[i]) return;
         st.D[i * 16 + 3] = 0;
+        if (st.base) st.base[i * 16 + 3] = 0;
         st.D[i * 16 + 1] = -99;
         st.rows[i >> 9] = 1;
       }
@@ -168,7 +339,7 @@
   // ---- rig
   K.rig = (B, S) => {
     const names = ['still'],
-      ids = {},
+      ids = Object.create(null),
       owner = [],
       rig = { names, resolve: null };
     rig.part = name => ids[name] || (names.push(name), (ids[name] = names.length - 1));
@@ -188,10 +359,20 @@
       fn();
       for (let i = n0; i < B.count(); i++) owner[i] = b;
     };
+    rig.assign = (name, indices) => {
+      if (!Array.isArray(indices) && !ArrayBuffer.isView(indices)) throw new TypeError('Rig ownership needs splat indices');
+      const selected = Array.from(indices);
+      if (!selected.every(i => Number.isSafeInteger(i) && i >= 0)) throw new RangeError('Invalid rig splat index');
+      if(typeof name!=='string'&&!(Number.isSafeInteger(name)&&name>=0&&name<names.length))throw new TypeError('Invalid rig part');
+      if(B?.count&&!selected.every(i=>i<B.count()))throw new RangeError('Invalid rig splat index');
+      const b=typeof name==='number'?name:rig.part(name); for(const i of selected)owner[i]=b;
+      return rig;
+    };
     rig.bind = st => {
       const N = st.N,
         bid = (rig.bid = new Uint16Array(N)),
-        NP = names.length;
+        initialParts = names.length;
+      let NP = initialParts;
       for (let i = 0; i < N; i++) bid[i] = owner[i] > 0 ? owner[i] : 0;
       const cnt = new Int32Array(NP);
       for (let i = 0; i < N; i++) cnt[bid[i]]++;
@@ -202,13 +383,30 @@
         const b = bid[i];
         if (b) list[b][cnt[b]++] = i;
       }
-      const Mx = (rig.M = new Float32Array(NP * 12)),
+      let Mx = (rig.M = new Float32Array(NP * 12)),
         dirty = (rig.dirty = new Uint8Array(NP));
       for (let b = 0; b < NP; b++) {
         Mx[b * 12] = 1;
         Mx[b * 12 + 4] = 1;
         Mx[b * 12 + 8] = 1;
       }
+      rig.assign = (name, indices) => {
+        if (!Array.isArray(indices) && !ArrayBuffer.isView(indices)) throw new TypeError('Rig ownership needs splat indices');
+        const selected=Array.from(indices);
+        if(!selected.every(i=>Number.isSafeInteger(i)&&i>=0&&i<N))throw new RangeError('Invalid rig splat index');
+        if(typeof name!=='string'&&!(Number.isSafeInteger(name)&&name>=0&&name<names.length))throw new TypeError('Invalid rig part');
+        const b=typeof name==='number'?name:rig.part(name);
+        if(!Number.isSafeInteger(b)||b<0||b>=names.length)throw new RangeError('Invalid rig part');
+        if(names.length>65535)throw new RangeError('Rig part budget exceeded');
+        if(names.length>NP){
+          const next=new Float32Array(names.length*12);next.set(Mx);const flags=new Uint8Array(names.length);flags.set(dirty);
+          for(let i=NP;i<names.length;i++){next[i*12]=next[i*12+4]=next[i*12+8]=1;list.push(new Int32Array(0));}
+          NP=names.length;Mx=rig.M=next;dirty=rig.dirty=flags;
+        }
+        const affected=new Set([b]);for(const i of selected){affected.add(bid[i]);bid[i]=b;}
+        for(const part of affected)if(part)list[part]=Int32Array.from(Array.from({length:N},(_,i)=>i).filter(i=>bid[i]===part));
+        dirty[b]=1;return rig;
+      };
       st.rig = rig;
       st.parts = names;
       rig.st = st;
@@ -224,14 +422,14 @@
         dirty[b] = 1;
       };
       // the same for a child: A and where its joint has gone are worked out from the parent's matrix
-      rig.child = (b, parent, A, o) => {
+      rig.child = (b, parent, A, o, local = o) => {
         if (typeof parent === 'string') parent = ids[parent];
         const k = parent * 12,
           P = Mx.subarray(k, k + 9),
           q = [
-            P[0] * o[0] + P[1] * o[1] + P[2] * o[2] + Mx[k + 9],
-            P[3] * o[0] + P[4] * o[1] + P[5] * o[2] + Mx[k + 10],
-            P[6] * o[0] + P[7] * o[1] + P[8] * o[2] + Mx[k + 11]
+            P[0] * local[0] + P[1] * local[1] + P[2] * local[2] + Mx[k + 9],
+            P[3] * local[0] + P[4] * local[1] + P[5] * local[2] + Mx[k + 10],
+            P[6] * local[0] + P[7] * local[1] + P[8] * local[2] + Mx[k + 11]
           ];
         rig.set(b, K.M.mul(P, A), o, q);
       };
@@ -245,7 +443,10 @@
         ];
       };
       rig.free = new Uint8Array(N); // splats that have left their part (broken off): the rig no longer moves them
+      const restBrushFrames=st.W.splatFootprints?.frames?.slice();
       rig.apply = () => {
+        let brushFrames;
+        if(restBrushFrames&&dirty.some(Boolean))brushFrames=st.W.splatFootprints.frames.slice();
         const D = st.D,
           R = st.base,
           rows = st.rows,
@@ -269,7 +470,7 @@
             tz = Mx[k + 11];
           for (let n = 0; n < L.length; n++) {
             const i = L[n];
-            if (fr[i]) continue;
+            if (fr[i] || st.physicsOwned?.[i]) continue;
             const o = i * 16,
               x = R[o],
               y = R[o + 1],
@@ -280,6 +481,7 @@
               c11 = R[o + 8],
               c12 = R[o + 9],
               c22 = R[o + 10];
+            if(brushFrames&&i*6+6<=brushFrames.length)SplatFootprints.carryFrame(brushFrames,i*6,restBrushFrames,i*6,Mx.subarray(k,k+9));
             D[o] = a * x + bb * y + c * z + tx;
             D[o + 1] = d * x + e * y + f * z + ty;
             D[o + 2] = g * x + h * y + ii * z + tz;
@@ -301,6 +503,7 @@
             rows[i >> 9] = 1;
           }
         }
+        if(brushFrames)SplatFootprints.setFrames(st.W,brushFrames);
       };
       // where a part's splats sit at rest: middle and extent
       rig.box = b => {
@@ -319,6 +522,15 @@
       return rig;
     };
     return rig;
+  };
+  K.rig.fromGroups = (stage, groups) => {
+    if(stage.rig)throw new Error('Stage already has a rig; assign groups on the existing rig');
+    const rig=K.rig({count:()=>stage.N},{});
+    for(const [name,indices]of Object.entries(groups)){
+      if(!Array.from(indices).every(i=>Number.isSafeInteger(i)&&i>=0&&i<stage.N))throw new RangeError('Invalid rig splat index');
+      rig.assign(name,indices);
+    }
+    rig.bind(stage);return rig;
   };
   // ---- pick: splats are binned into cells once (at rest); a line is walked through the cells until it passes close to one
   K.grid = (st, cell) => {
@@ -609,6 +821,7 @@
               c11 = rest[r + 6],
               c12 = rest[r + 7],
               c22 = rest[r + 8];
+            if(W.anim?.physicsOwned?.[ids[j]])continue;
             D[q] = a * x + b * y + c * z + Mx[k + 9];
             D[q + 1] = d * x + e * y + f * z + Mx[k + 10];
             D[q + 2] = g * x + h * y + i * z + Mx[k + 11];
@@ -650,8 +863,10 @@
       const out = W.posedBuf && W.posedBuf.length === D.length ? W.posedBuf : (W.posedBuf = new Float32Array(D.length));
       out.set(D);
       for (let j = 0; j < bd.length; j++) {
-        const o = bd[j] * 16,
-          k = D[o + 12] * 12,
+        const o = bd[j] * 16;
+        const kind=Math.round(D[o+11])%16;
+        if(kind!==12&&kind!==13)continue;
+        const k = D[o + 12] * 12,
           x = D[o],
           y = D[o + 1],
           z = D[o + 2],

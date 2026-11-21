@@ -87,26 +87,53 @@
         op = JOIN[kind],
         r = o.r === undefined ? 0.2 : o.r,
         n = o.n || 3,
-        bd = bound(A.concat(Bl));
+        left = o.mask && bound(A), right = o.mask && kind === 'common' && bound(Bl),
+        bd = left ? right && right.br < left.br ? right : left : bound(A.concat(Bl));
       if (!op) throw new Error('no join called ' + kind);
       const ma = A[0].mat,
         mb = Bl[0].mat,
-        mat =
+        base =
           o.mat ||
           (kind.startsWith('cut') || kind === 'engrave' || kind === 'groove'
             ? Object.assign({}, ma, o.inner ? { rf: (x, y, z) => (fb(x, y, z) < 0.06 ? o.inner : null) } : {})
             : Object.assign({}, ma, { rf: (x, y, z) => (fb(x, y, z) < fa(x, y, z) ? mb.r : null) }));
+      const chart = A.concat(Bl).find(solid => solid.mat.surfaceState)?.mat.surfaceState;
+      let mat = base;
+      if (!o.mat?.surfaceState && chart) {
+        const cut = kind.startsWith('cut') || kind === 'engrave' || kind === 'groove';
+        const common = kind.startsWith('common');
+        mat = { ...base, surfaceState: { ...chart, locate(point, normal) {
+          const left = fa(...point), right = fb(...point);
+          if (cut && -right >= left) return null;
+          const sources = cut || (common ? left >= right : left <= right) ? A : Bl;
+          const solid = sources.reduce((best, row) => !best || S.psd(row, ...point) < S.psd(best, ...point) ? row : best, null);
+          return solid?.mat.surfaceState?.locate(point, normal);
+        } } };
+      }
       const p = {
         bc: bd.bc,
         br: bd.br + r,
         sd: (x, y, z) => op(fa(x, y, z), fb(x, y, z), r, n),
         sample(f) {
-          for (const q of A.concat(Bl)) {
-            const keep = q.res;
-            q.res = this.res;
-            q.sample(f);
-            q.res = keep;
-          }
+          const res = this.res;
+          const sample = (list, rejected) => {
+            for (const q of list) {
+              const keep = q.res, margin = res + q.reach;
+              q.res = res;
+              try {
+                q.sample(rejected ? (x, y, z) => {
+                  if (rejected(x, y, z) <= margin) f(x, y, z);
+                } : f);
+              } finally {
+                q.res = keep;
+              }
+            }
+          };
+          if (o.mask) {
+            // The opposite field clips candidate points before refinement can pull them onto a cap.
+            sample(A, kind === 'cut' ? (x, y, z) => -fb(x, y, z) : fb);
+            sample(Bl, fa);
+          } else sample(A.concat(Bl));
         }
       };
       return S.add(p, mat, Object.assign({ reach: r * 1.1 }, o));
@@ -193,7 +220,13 @@
             p0.res = keep;
           }
         };
-      return S.add(p, o.mat || p0.mat, o);
+      const mat = o.mat?.surfaceState ? o.mat : S.mapSurfaceState(
+        o.mat && p0.mat.surfaceState ? { ...o.mat, surfaceState: p0.mat.surfaceState } : o.mat || p0.mat,
+        point => f0(...point), (normal, rest, point) => {
+          const inverse = K.deform.jac(q => f0(...q), point), { M } = K;
+          return Math.abs(M.det(inverse)) > 1e-8 ? V.norm(M.app(M.tr(M.inv(inverse)), normal), normal) : normal;
+        });
+      return S.add(p, mat, o);
     };
     S.poly = (c, planes, mat, o) => {
       o = o || {};
@@ -420,13 +453,21 @@
             p0.res = keep;
           }
         };
-      return S.add(p, o.mat || p0.mat, Object.assign({ reach: 0.06 }, o));
+      const mat = o.mat?.surfaceState ? o.mat : S.mapSurfaceState(
+        o.mat && p0.mat.surfaceState ? { ...o.mat, surfaceState: p0.mat.surfaceState } : o.mat || p0.mat,
+        inv, (normal, rest) => V.norm(K.M.app(K.M.tr(K.deform.jac(fwd, rest)), normal), normal));
+      return S.add(p, mat, Object.assign({ reach: 0.06 }, o));
     };
     const gradOf = (p0, x, y, z) => {
       const e = 0.01,
         d = S.psd(p0, x, y, z);
       return V.norm([S.psd(p0, x + e, y, z) - d, S.psd(p0, x, y + e, z) - d, S.psd(p0, x, y, z + e) - d]);
     };
+    function projectSkin(p0, material) {
+      if (material?.surfaceState) return material;
+      const base = material && p0.mat.surfaceState ? { ...material, surfaceState: p0.mat.surfaceState } : material || p0.mat;
+      return S.mapSurfaceState(base, point => V.mad(point, gradOf(p0, ...point), -S.psd(p0, ...point)));
+    }
     // a hollow skin of thickness t on a held solid's surface (cut it open with a join to see inside), and the same solid grown by r all round
     S.shell = (p0, t, o) => {
       const h = t / 2,
@@ -445,7 +486,7 @@
             p0.res = keep;
           }
         };
-      return S.add(p, (o && o.mat) || p0.mat, Object.assign({ reach: h * 0.5 }, o));
+      return S.add(p, projectSkin(p0, o?.mat), Object.assign({ reach: h * 0.5 }, o));
     };
     S.swell = (p0, r, o) => {
       const p = {
@@ -462,7 +503,7 @@
           p0.res = keep;
         }
       };
-      return S.add(p, (o && o.mat) || p0.mat, Object.assign({ reach: Math.abs(r) * 0.3 }, o));
+      return S.add(p, projectSkin(p0, o?.mat), Object.assign({ reach: Math.abs(r) * 0.3 }, o));
     };
     // a held solid with its surface pushed in and out by fn(x, y, z) (at most amp either way): ripples, scales, wear
     S.rough = (p0, fn, amp, o) => {
@@ -477,7 +518,7 @@
           p0.res = keep;
         }
       };
-      return S.add(p, (o && o.mat) || p0.mat, Object.assign({ reach: amp * 1.2 }, o));
+      return S.add(p, projectSkin(p0, o?.mat), Object.assign({ reach: amp * 1.2 }, o));
     };
     // ---- flat outlines made solid. An outline is a list of closed loops of [x, y] points (K.poly2 makes them; holes are loops inside loops).
     const sd2 = (loops, x, y) => {
@@ -795,6 +836,8 @@
         );
       return ball;
     };
+    S.stroke = (spec, mat, o) => K.drawing.solid(S, { ...spec, kind: 'stroke' }, mat, o);
+    S.fill = (spec, mat, o) => K.drawing.solid(S, { ...spec, kind: 'fill' }, mat, o);
     return S;
   };
   // outlines for S.extrude and S.revolve. Each gives a list of loops

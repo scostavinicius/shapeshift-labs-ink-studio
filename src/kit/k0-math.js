@@ -1,6 +1,17 @@
 // KIT: the lab's shared modules. Everything hangs off one name so nothing here can collide with the game's own code.
 // k0-math: vectors, 3x3 matrices, easing, keyed values, springs.
 const KIT = {};
+KIT.material = MaterialControls;
+KIT.detailBudgets = DetailBudgets;
+KIT.passQuality = PassQuality;
+KIT.renderContract = RenderContract;
+KIT.colorClusters = ColorClusters;
+KIT.shadowArt = ShadowArt;
+KIT.shotLighting = ShotLighting;
+KIT.splatFrames = SplatFrames;
+KIT.splatRelighting = SplatRelighting;
+KIT.areaLights = AreaLights;
+KIT.lightCookies = LightCookies;
 (function (K) {
   const V = (K.V = {
     add: (a, b) => [a[0] + b[0], a[1] + b[1], a[2] + b[2]],
@@ -58,6 +69,19 @@ const KIT = {};
       R[6] * v[0] + R[7] * v[1] + R[8] * v[2]
     ],
     tr: A => [A[0], A[3], A[6], A[1], A[4], A[7], A[2], A[5], A[8]],
+    axisAngle: m => {
+      const skew = [m[7] - m[5], m[2] - m[6], m[3] - m[1]];
+      const cos = Math.max(-1, Math.min(1, (m[0] + m[4] + m[8] - 1) / 2));
+      const angle = Math.acos(cos);
+      if (angle < 1e-7) return { axis: [1, 0, 0], angle: 0 };
+      if (cos > -0.9999) return { axis: V.norm(skew), angle };
+      const diagonal = [m[0], m[4], m[8]];
+      const i = diagonal.indexOf(Math.max(...diagonal)), axis = [0, 0, 0];
+      axis[i] = Math.sqrt((m[i * 3 + i] - cos) / (1 - cos));
+      for (let j = 0; j < 3; j++) if (j !== i)
+        axis[j] = (m[i * 3 + j] + m[j * 3 + i]) / (2 * (1 - cos) * axis[i]);
+      return { axis: V.norm(V.dot(axis, skew) < 0 ? V.mul(axis, -1) : axis), angle };
+    },
     // the least turn that carries direction u onto direction v
     aim: (u, v) => {
       const w = V.cross(u, v),
@@ -213,6 +237,9 @@ const KIT = {};
     },
     step: x => (x < 1 ? 0 : 1)
   });
+  // A signed offset for squash and stretch that starts and ends at zero.
+  K.wobble = (t, cycles = 2) => (t > 0 && t < 1 ? Math.sin(K.TAU * cycles * t) * (1 - t) ** 2 : 0);
+
   // a value that passes through (when, what) pairs, easing between them. K.kf(p, [0, 0, 0.5, 1, 1, 0]) ; an ease name may follow any pair: [0, 0, 0.5, 1, 'back', 1, 0]
   K.kf = (p, keys) => {
     let pt = keys[0],

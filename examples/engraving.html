@@ -1,0 +1,405 @@
+<!doctype html>
+<html lang="en">
+  <meta charset="utf-8" /><meta name="viewport" content="width=device-width,initial-scale=1" /><title>
+    The Copperplate Cabinet · Ink Studio</title
+  ><style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      background: #0c1729;
+      color: #d3c9b7;
+      font-family: system-ui, sans-serif;
+    }
+    main {
+      max-width: 1500px;
+      margin: auto;
+      padding: 32px 40px;
+    }
+    .eyebrow {
+      display: flex;
+      justify-content: space-between;
+      font: 10px monospace;
+      color: #79909f;
+      letter-spacing: 1.8px;
+      border-bottom: 1px solid #344252;
+      padding-bottom: 16px;
+    }
+    h1 {
+      font:
+        58px Georgia,
+        serif;
+      color: #f0dbb2;
+      margin: 22px 0 12px;
+      font-weight: 400;
+      letter-spacing: -1.5px;
+    }
+    h1 em {
+      color: #d09352;
+      font-weight: 400;
+    }
+    .intro {
+      color: #8f9e9f;
+      font-size: 13px;
+      line-height: 1.7;
+      max-width: 790px;
+      margin-bottom: 25px;
+    }
+    .layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 255px;
+      gap: 26px;
+    }
+    .stage {
+      position: relative;
+      min-width: 0;
+      border: 1px solid #344252;
+    }
+    .tabs {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      padding: 9px;
+      border-bottom: 1px solid #344252;
+    }
+    button,
+    select {
+      background: #17273b;
+      color: #d3c9b7;
+      border: 1px solid #344252;
+      font: 11px monospace;
+      padding: 10px;
+      cursor: pointer;
+    }
+    button.active {
+      background: #3b302b;
+      border-color: #a8663c;
+      color: #f2bb70;
+    }
+    .hint {
+      margin-left: auto;
+      color: #718796;
+      font: 9px monospace;
+    }
+    canvas#view {
+      display: block;
+      width: 100%;
+      aspect-ratio: 1.6;
+      touch-action: none;
+    }
+    .bar {
+      border-top: 1px solid #344252;
+      padding: 13px;
+      display: flex;
+      justify-content: space-between;
+      color: #79909f;
+      font: 9px monospace;
+      gap: 10px;
+    }
+    .panel h2 {
+      font:
+        15px Georgia,
+        serif;
+      color: #f0dbb2;
+      margin: 5px 0 20px;
+    }
+    .label {
+      font: 10px monospace;
+      color: #79909f;
+      letter-spacing: 1px;
+      margin: 15px 0 8px;
+    }
+    select {
+      width: 100%;
+    }
+    label {
+      display: block;
+      font: 11px monospace;
+      margin: 17px 0;
+      color: #9eaeae;
+    }
+    input[type='range'] {
+      width: 100%;
+      accent-color: #d09352;
+      margin-top: 10px;
+    }
+    .check {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin: 12px 0;
+    }
+    .check input {
+      accent-color: #d09352;
+    }
+    .swatches {
+      display: flex;
+      gap: 18px;
+    }
+    .swatches label {
+      margin: 12px 0;
+    }
+    .swatches input {
+      width: 80px;
+      height: 25px;
+      border: 1px solid #344252;
+      background: none;
+      margin-top: 7px;
+      display: block;
+    }
+    .note {
+      font: 10px/1.7 monospace;
+      color: #718796;
+      border-top: 1px solid #344252;
+      padding-top: 15px;
+      margin-top: 17px;
+    }
+    #atlas {
+      display: block;
+      width: 100%;
+      image-rendering: pixelated;
+      border: 1px solid #344252;
+    }
+    #reset {
+      width: 100%;
+      margin-top: 15px;
+    }
+    footer {
+      display: flex;
+      justify-content: space-between;
+      font: 10px monospace;
+      color: #718796;
+      margin-top: 20px;
+    }
+    #loading {
+      position: absolute;
+      inset: 50px 0 0;
+      background: #0c1729;
+      display: grid;
+      place-items: center;
+      font: 12px monospace;
+      color: #d09352;
+    }
+    @media (max-width: 900px) {
+      main {
+        padding: 20px;
+      }
+      .layout {
+        grid-template-columns: 1fr;
+      }
+      .hint {
+        display: none;
+      }
+      h1 {
+        font-size: 40px;
+      }
+      .panel {
+        max-width: 600px;
+      }
+    }
+  </style>
+  <main>
+    <div class="eyebrow"><span>INK STUDIO / REPRESENTATIONS 04</span><span>ETCHED LIGHT · RETAINED FORM</span></div>
+    <h1>The <em>Copperplate</em> Cabinet</h1>
+    <p class="intro">
+      A moving specimen and an imaginary observatory, engraved in ink and warm copper. Light adds lines, crosses and
+      points; the marks hold to the surface as it turns.
+    </p>
+    <div class="layout">
+      <section class="stage">
+        <div class="tabs">
+          <button class="active" data-view="moth">01 / Atlas moth</button
+          ><button data-view="city">02 / Observatory</button
+          ><span class="hint">DRAG · ORBIT &nbsp; SHIFT–DRAG · PAN &nbsp; SCROLL · ZOOM</span>
+        </div>
+        <canvas id="view" width="1120" height="700" aria-label="Interactive engraved native-splat scene"></canvas>
+        <div class="bar">
+          <span id="caption">RETAINED WING COORDINATES · LIVE LIGHT · EIGHT NESTED TONES</span><span id="stats">—</span>
+        </div>
+        <div id="loading">Preparing the plates…</div>
+      </section>
+      <aside class="panel">
+        <h2>Print the light</h2>
+        <div class="label">TECHNIQUE</div>
+        <select id="style">
+          <option value="original">The engraver's mix</option>
+          <option value="engraving">Cross engraving</option>
+          <option value="hatching">Parallel hatching</option>
+          <option value="woodcut">Woodcut / white cuts</option>
+          <option value="stippling">Stippled plate</option></select
+        ><label
+          >Ink density <span id="densityValue">1.00×</span
+          ><input id="density" type="range" min=".45" max="1.8" step=".05" value="1" /></label
+        ><label
+          >Mark spacing <span id="scaleValue">1.00×</span
+          ><input id="scale" type="range" min=".5" max="1.8" step=".05" value="1"
+        /></label>
+        <div class="swatches">
+          <label>Ink<input type="color" id="ink" value="#15263b" /></label
+          ><label>Paper<input type="color" id="paper" value="#f0dbb2" /></label>
+        </div>
+        <label class="check"><input id="light" type="checkbox" checked />Move the light</label
+        ><label class="check"><input id="pause" type="checkbox" />Pause the specimen</label
+        ><label class="check"><input id="native" type="checkbox" />Compare native materials</label
+        ><label class="check"><input id="turntable" type="checkbox" />Slow camera orbit</label>
+        <div class="label">TONAL MAP / LIGHT → DARK</div>
+        <canvas id="atlas" width="512" height="64"></canvas><button id="reset">Reset plate & camera</button>
+        <p class="note">
+          Eight related tone maps and three scale levels. Earlier marks survive in darker tones.<br /><br />These are
+          SDFs and native splats with an optional surface pass. Animation reuses the baked plates.
+        </p>
+      </aside>
+    </div>
+    <footer><span>NESTED TONAL ART MAPS / NATIVE SDFs + SPLATS</span><span>INK × COPPER</span></footer>
+  </main>
+  <script src="../dist/ink-studio.browser.js"></script>
+  <script src="./engraving.js"></script>
+  <script type="module">
+    import { createRenderer } from '../webgl.mjs';
+    const $ = id => document.getElementById(id),
+      canvas = $('view');
+    try {
+      const kit = {
+          KIT,
+          PixelLook,
+          makeBuilder,
+          makeSculpt,
+          SpriteSurface,
+          ContributionRules,
+          RenderStages,
+          TargetSelectors,
+          SplatProvenance
+        },
+        demo = engravingDemo(kit),
+        renderer = createRenderer(canvas, { toolkit: kit });
+      demo.state.view = 'moth';
+      function preview() {
+        const p = demo.world.engraving.styles[0],
+          m = KIT.engraving.maps(p).levels[0],
+          ctx = $('atlas').getContext('2d'),
+          im = ctx.createImageData(512, 64);
+        for (let y = 0; y < 64; y++)
+          for (let x = 0; x < 512; x++) {
+            const tone = x >> 6,
+              u = x % 64,
+              ix = Math.min(m.size - 1, Math.floor((u * m.size) / 64)),
+              iy = Math.min(m.size - 1, Math.floor((y * m.size) / 64)),
+              a = m.data[tone * m.size * m.size + iy * m.size + ix],
+              at = (y * 512 + x) * 4;
+            for (let c = 0; c < 3; c++) im.data[at + c] = Math.round((p.paper[c] * (1 - a) + p.ink[c] * a) * 255);
+            im.data[at + 3] = 255;
+          }
+        ctx.putImageData(im, 0, 0);
+      }
+      function sync() {
+        document
+          .querySelectorAll('[data-view]')
+          .forEach(b => b.classList.toggle('active', b.dataset.view === demo.state.view));
+        $('style').value = demo.state.style;
+        for (const k of ['density', 'scale']) {
+          $(k).value = demo.state[k];
+          $(k + 'Value').textContent = demo.state[k].toFixed(2) + '×';
+        }
+        $('caption').textContent =
+          demo.state.view === 'moth'
+            ? 'RETAINED WING COORDINATES · LIVE LIGHT · EIGHT NESTED TONES'
+            : 'SURFACE ENGRAVING · ETCHED STONE · COPPER LINEWORK';
+        preview();
+      }
+      document.querySelectorAll('[data-view]').forEach(
+        b =>
+          (b.onclick = () => {
+            demo.state.view = b.dataset.view;
+            sync();
+          })
+      );
+      $('style').onchange = e => {
+        demo.state.style = e.target.value;
+        demo.edit();
+        sync();
+      };
+      for (const k of ['density', 'scale'])
+        $(k).oninput = e => {
+          demo.state[k] = +e.target.value;
+          demo.edit();
+          sync();
+        };
+      for (const [id, key] of [
+        ['pause', 'paused'],
+        ['native', 'native'],
+        ['turntable', 'turntable'],
+        ['light', 'movingLight']
+      ])
+        $(id).onchange = e => (demo.state[key] = e.target.checked);
+      for (const k of ['ink', 'paper'])
+        $(k).oninput = e => {
+          demo.state[k] = e.target.value;
+          demo.edit();
+          preview();
+        };
+      $('reset').onclick = () => {
+        demo.reset();
+        $('ink').value = '#15263b';
+        $('paper').value = '#f0dbb2';
+        $('native').checked = $('turntable').checked = false;
+        sync();
+      };
+      let drag,
+        last,
+        stamp,
+        frames = 0;
+      canvas.onpointerdown = e => {
+        drag = [e.clientX, e.clientY];
+        canvas.setPointerCapture(e.pointerId);
+        demo.control.take();
+      };
+      canvas.onpointermove = e => {
+        if (!drag) return;
+        const dx = e.clientX - drag[0],
+          dy = e.clientY - drag[1];
+        drag = [e.clientX, e.clientY];
+        demo.control.input(e.shiftKey ? { pan: [-dx * 0.012, dy * 0.012] } : { yaw: -dx * 0.004, pitch: dy * 0.004 });
+      };
+      canvas.onpointerup = canvas.onpointercancel = () => (drag = null);
+      canvas.addEventListener(
+        'wheel',
+        e => {
+          e.preventDefault();
+          demo.control.input({ dolly: e.deltaY * 0.001 });
+        },
+        { passive: false }
+      );
+      window.engravingQA = { demo, renderer, kit, sync };
+      sync();
+      $('loading').remove();
+      function tick(now) {
+        const dt = last === undefined ? 0 : Math.min(0.05, (now - last) / 1000);
+        last = now;
+        demo.update(dt);
+        renderer.render(demo.world, {
+          width: canvas.width,
+          height: canvas.height,
+          time: demo.state.time,
+          camera: demo.control.read().camera,
+          engraving: !demo.state.native,
+          engravingLight: demo.light,
+          changedRows: []
+        });
+        frames++;
+        stamp ??= now;
+        if (now - stamp > 700) {
+          $('stats').textContent =
+            Math.round((frames * 1000) / (now - stamp)) + ' FPS · ' + demo.world.count.toLocaleString() + ' SPLATS';
+          frames = 0;
+          stamp = now;
+        }
+        requestAnimationFrame(tick);
+      }
+      requestAnimationFrame(tick);
+    } catch (error) {
+      $('loading').textContent = error.message;
+      throw error;
+    }
+  </script>
+</html>

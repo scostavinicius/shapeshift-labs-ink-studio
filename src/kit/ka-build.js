@@ -17,7 +17,8 @@
   };
   const H = { hold: true },
     withTag = (o, extra) =>
-      Object.assign({}, extra, o && o.tag ? { tag: o.tag } : {}, o && o.res ? { res: o.res } : {});
+      Object.assign({}, extra, o?.tag ? { tag: o.tag } : {}, o?.res ? { res: o.res } : {},
+        o?.objectId !== undefined ? { objectId: o.objectId } : {}, o?.target ? { target: o.target } : {});
   K.build = {
     pillar(S, base, height, o) {
       o = o || {};

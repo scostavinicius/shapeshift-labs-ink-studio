@@ -1,0 +1,10 @@
+{
+  "targets": [
+    {
+      "select": {"material": "stone", "tag": "coastal-rock"},
+      "minPixels": 12,
+      "grain": {"angle": -15, "strength": 0.8},
+      "protect": {"swatches": ["#222e34", "#e4cea5"]}
+    }
+  ]
+}

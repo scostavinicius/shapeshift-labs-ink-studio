@@ -595,12 +595,16 @@
   // Water freezes over when winter comes and thaws after; frost magic freezes a patch for a while, and fire melts ice near it.
   // The renderer reads the same grid as a small texture, so scenery changes where it stands without being rebuilt.
   // =====================================================================
-  K.play.eco = function makeEco() {
-    const N = 160,
-      NZ = 288,
-      OFF = 80,
-      OFZ = 208,
-      NN = N * NZ,
+  K.play.eco = function makeEco(options = {}) {
+    const N = options.width ?? 160,
+      NZ = options.height ?? 288,
+      origin = options.origin ?? [-80, -208],
+      cellSize = options.cellSize ?? 1,
+      random = options.random ?? Math.random;
+    if (!Number.isSafeInteger(N) || N < 1 || !Number.isSafeInteger(NZ) || NZ < 1 || N * NZ > 100000 ||
+      !Array.isArray(origin) || origin.length !== 2 || !origin.every(Number.isFinite) || !(cellSize > 0) || !Number.isFinite(cellSize) || typeof random !== 'function')
+      throw new RangeError('Invalid ecology fire grid');
+    const NN = N * NZ,
       tex = new Uint8Array(NN * 4),
       burn = new Float32Array(NN),
       heat = new Float32Array(NN),
@@ -627,18 +631,21 @@
       iceW = -1,
       acc = 0;
     const at = (x, z) => {
-      const ix = Math.floor(x) + OFF,
-        iz = Math.floor(z) + OFZ;
+      const ix = Math.floor((x - origin[0]) / cellSize),
+        iz = Math.floor((z - origin[1]) / cellSize);
       return ix < 0 || iz < 0 || ix >= N || iz >= NZ ? -1 : iz * N + ix;
     };
     const fuelOf = i => {
       if (fuel[i] < 0) {
-        const x = (i % N) - OFF + 0.5,
-          z = Math.floor(i / N) - OFZ + 0.5;
+        const x = origin[0] + (i % N + 0.5) * cellSize,
+          z = origin[1] + (Math.floor(i / N) + 0.5) * cellSize;
         fuel[i] = realm && realm.fuel ? realm.fuel(x, z) : 0;
       }
       return fuel[i];
     };
+    const center = i => [origin[0] + (i % N + .5) * cellSize, origin[1] + (Math.floor(i / N) + .5) * cellSize];
+    const available = i => realm?.available ? Math.max(0, realm.available(...center(i))) : fuelOf(i);
+    const moisture = i => realm?.moisture ? Math.max(0, Math.min(1, realm.moisture(...center(i)))) : 0;
     const ice = i => (frost[i] > 0 ? 1 : frost[i] < 0 ? 0 : iceG);
     const write = i => {
       const o = i * 4;
@@ -659,11 +666,11 @@
       return true;
     };
     const disc = (x, z, r, f) => {
-      const R = Math.ceil(r);
+      const R = Math.ceil(r / cellSize);
       for (let dz = -R; dz <= R; dz++)
         for (let dx = -R; dx <= R; dx++) {
-          if (Math.hypot(dx, dz) > r + 0.3) continue;
-          const i = at(x + dx, z + dz);
+          if (Math.hypot(dx, dz) * cellSize > r + 0.3 * cellSize) continue;
+          const i = at(x + dx * cellSize, z + dz * cellSize);
           if (i >= 0) f(i);
         }
     };
@@ -680,7 +687,7 @@
         return iceG;
       },
       reset(r) {
-        realm = r;
+        realm = r; acc = 0; iceG = 0; api.events.length = 0;
         burn.fill(0);
         heat.fill(0);
         frost.fill(0);
@@ -694,7 +701,7 @@
         api.dirty = true;
         const bed = r && (r.bed || r.raw);
         for (let i = 0; i < NN; i++) {
-          gh[i] = bed ? bed((i % N) - OFF + 0.5, Math.floor(i / N) - OFZ + 0.5) : 0;
+          gh[i] = bed ? bed(origin[0] + (i % N + 0.5) * cellSize, origin[1] + (Math.floor(i / N) + 0.5) * cellSize) : 0;
           tex[i * 4 + 3] = Math.max(0, Math.min(255, Math.round((gh[i] + 8) * 10)));
         }
       },
@@ -706,7 +713,7 @@
             timed.add(i);
             write(i);
           }
-          if (fuelOf(i) > 0.05 && burn[i] < 0.85 && Math.random() > (rain || 0) * 0.8 && light(i)) n++;
+          if (fuelOf(i) > 0.05 && available(i) > 0.0001 && moisture(i) < .95 && burn[i] < 0.85 && random() > Math.max(rain || 0, moisture(i)) * 0.8 && light(i)) n++;
         });
         return n;
       },
@@ -721,6 +728,44 @@
           }
           write(i);
         });
+      },
+      sampleCell(i) {
+        if (!Number.isSafeInteger(i) || i < 0 || i >= NN) throw new RangeError('Invalid fire cell');
+        return { burn: burn[i], heat: heat[i], burning: burning.has(i), ice: ice(i), fuel: fuelOf(i) };
+      },
+      setCell(i, values) {
+        if (!Number.isSafeInteger(i) || i < 0 || i >= NN || !values ||
+          Object.keys(values).some(k => !['heat', 'burn', 'fuel'].includes(k) || !Number.isFinite(values[k]) || values[k] < 0 || values[k] > 1))
+          throw new RangeError('Invalid fire cell edit');
+        if (values.fuel !== undefined) fuel[i] = values.fuel;
+        if (values.burn !== undefined) { burn[i] = values.burn; if (burn[i] > 0) scar.add(i); else scar.delete(i); }
+        if (values.heat !== undefined) {
+          heat[i] = values.heat;
+          if (heat[i] >= 1 && available(i) > .0001 && fuelOf(i) > .05) light(i);
+          else if (heat[i] < .25 && burning.delete(i)) warm.add(i);
+          else if (heat[i] > 0 && !burning.has(i)) warm.add(i);
+        }
+        write(i);
+      },
+      capture() {
+        return { width: N, height: NZ, origin: origin.slice(), cellSize, iceG, iceW, acc,
+          burn: burn.slice(), heat: heat.slice(), frost: frost.slice(), fuel: fuel.slice(), gh: gh.slice(), gen: gen.slice(),
+          burning: [...burning], warm: [...warm], scar: [...scar], timed: [...timed] };
+      },
+      restore(s) {
+        const arrays = { burn, heat, frost, fuel, gh, gen }, sets = { burning, warm, scar, timed };
+        if (!s || s.width !== N || s.height !== NZ || s.cellSize !== cellSize || !Array.isArray(s.origin) || s.origin.length !== 2 || !s.origin.every((v, i) => v === origin[i]) ||
+          ![s.iceG, s.iceW, s.acc].every(Number.isFinite) || s.iceG < 0 || s.iceG > 1 || s.iceW < -1 || s.iceW > 1 || s.acc < 0 ||
+          !Array.from(s.burn ?? []).every(v => v >= 0 && v <= 1) || !Array.from(s.heat ?? []).every(v => v >= 0 && v <= 1e6) ||
+          !Array.from(s.gen ?? []).every(v => Number.isInteger(v) && v >= 0 && v <= 255) ||
+          Object.keys(arrays).some(k => s[k]?.length !== NN || !Array.from(s[k]).every(Number.isFinite)) ||
+          Object.keys(sets).some(k => !Array.isArray(s[k]) || s[k].length > NN || !s[k].every(i => Number.isSafeInteger(i) && i >= 0 && i < NN)))
+          throw new RangeError('Invalid fire snapshot');
+        for (const [key, array] of Object.entries(arrays)) array.set(s[key]);
+        for (const [key, set] of Object.entries(sets)) { set.clear(); for (const i of s[key]) set.add(i); }
+        iceG = s.iceG; iceW = s.iceW; acc = s.acc;
+        api.events.length = 0;
+        for (let i = 0; i < NN; i++) write(i);
       },
       heatAt(x, z) {
         const i = at(x, z);
@@ -738,8 +783,8 @@
       near(x, z, R, max) {
         const out = [];
         for (const i of burning) {
-          const cx = (i % N) - OFF + 0.5,
-            cz = Math.floor(i / N) - OFZ + 0.5,
+          const cx = origin[0] + (i % N + 0.5) * cellSize,
+            cz = origin[1] + (Math.floor(i / N) + 0.5) * cellSize,
             d = Math.hypot(cx - x, cz - z);
           if (d < R) out.push({ i, x: cx, z: cz, y: gh[i], tree: fuel[i] > 0.9, d });
         }
@@ -767,13 +812,13 @@
           const tree = fuelOf(i) > 0.9;
           burn[i] += h * (tree ? 0.1 : 0.34) * (0.6 + 0.4 * wet);
           heat[i] = 1;
-          if (burn[i] >= 1 || (env.rain > 0.7 && Math.random() < h * 0.4)) {
+          if (burn[i] >= 1 || available(i) <= 0.0001 || moisture(i) > .95 || (env.rain > 0.7 && random() < h * 0.4)) {
             const out = burn[i] >= 1;
             burn[i] = Math.min(1, burn[i]);
             burning.delete(i);
             heat[i] = 0.3;
             warm.add(i);
-            if (out && tree) api.events.push(['burnt', (i % N) - OFF + 0.5, Math.floor(i / N) - OFZ + 0.5]);
+            if (out && tree) api.events.push(['burnt', origin[0] + (i % N + 0.5) * cellSize, origin[1] + (Math.floor(i / N) + 0.5) * cellSize]);
             write(i);
             continue;
           }
@@ -789,14 +834,14 @@
               timed.add(j);
               write(j);
             } // ice beside a fire melts (frosted grass has to thaw first)
-            if (burning.has(j) || burn[j] > 0.6 || fuelOf(j) < 0.05 || frost[j] > 0) continue;
+            if (burning.has(j) || burn[j] > 0.6 || fuelOf(j) < 0.05 || available(j) <= 0.0001 || moisture(j) > .95 || frost[j] > 0) continue;
             heat[j] +=
               h *
               w *
               0.7 *
-              wet *
-              (0.3 + 1.4 * Math.random()) *
-              (1 + 0.6 * (dx * wx + dz * wz)) *
+              wet * (1 - moisture(j)) *
+              (0.3 + 1.4 * random()) *
+              Math.max(0, 1 + 0.6 * (dx * wx + dz * wz)) *
               Math.max(0, 1 - gen[i] / 14) *
               (fuelOf(j) > 0.7 ? 1.6 : 1);
             if (heat[j] >= 1) light(j, gen[i] + 1);

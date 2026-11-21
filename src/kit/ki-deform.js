@@ -17,6 +17,11 @@
      K.deform.morph(o)       o.base, up, height; inflate (swell the middle), taper (wider at the top), arc (bend into an arc of that many
                              radians), twist (radians, top against bottom)
      K.deform.smear(o)       the trailing side left behind along the way it is going: o.dir, len, front, extent, power; .from(velocity)
+     K.deform.burst(o)       loose pieces thrown out from a centre, falling (or rising) and shrinking away, each keeping its shape: a splash,
+                             a puff of petals or spores. o.pieces (each one's middle), from, speed (1.6), up (0.8), gravity (-4), drag (1.2),
+                             shrink (what is left of a piece's size at the end, 0), life (1), vary (how much pieces differ in speed and
+                             rise, 1; 0 for a ring of ripples going out evenly); set .t (seconds since it burst). Give the part
+                             a skin of the same pieces or sample an indexed piece with .piece(index, seconds)
      K.deform.emote(o)       the 21 reaction fields (shiver, spring, curl, heartbeat, ...) over a box: o.center, width, height, right, up; set
                              .motion, .t, .k
      K.deform.foliage(o)     grass, bush or tree in wind, and brushed or struck: o.kind, base, height, width, phase; set .t, .bend, .impact
@@ -27,9 +32,10 @@
      K.deform.jac(map, p)    how the map stretches and turns space at p (3x3 by rows)
      K.deform.rest(W, ids)   remember splats as they are;  K.deform.apply(W, ids, rest, map)   put them where the map says, exactly
      K.deform.tags(S)        (before the bake) which splats each tagged solid becomes: tags.head, tags.of('ear-l', 'ear-r')
-     K.deform.skin(W, ids, o)   cut into o.slices along o.axis (or o.grid [nx, ny, nz] cells), each a bone; neighbours share splats near
+     K.deform.skin(W, ids, o)   cut into o.slices along o.axis (or o.grid [nx, ny, nz] cells, or o.pieces: loose pieces, each splat going
+                             with the nearest piece's middle and sharing with none), each a bone; neighbours share splats near
                              their border. -> { bid, bid2, w2, cells, n }; skin.fill(M, first, map) writes the bones for a map
-   K.puppet(W, def)          a creature of parts: def.parts { name: { ids, pivot, parent, axis, slices | grid } }, def.pose(t, dt, pup).
+   K.puppet(W, def)          a creature of parts: def.parts { name: { ids, pivot, parent, axis, slices | grid | pieces } }, def.pose(t, dt, pup).
                              (def.react: true makes it flinch when tapped; left out, a tap does nothing.)
                              Each frame set pup.pose (see kh-animate for channels: pos, rot, scale, turn, stretch, waist, bend, inflate,
                              taper, arc, twist, fold, show), add maps with pup.deform(part, map), and constraints, in this order:
@@ -427,6 +433,65 @@
     return map;
   };
 
+  /* loose pieces thrown out from a centre, each keeping its own shape while it flies, falls (or rises) and shrinks away. The map is
+     the same all through a piece, so give the part a skin of pieces (K.puppet's parts take pieces: the same list) */
+  D.burst = o => {
+    const pcs = o.pieces.map(c => c.slice(0, 3)),
+      from = o.from || pcs.reduce((a, c) => V.mad(a, c, 1 / pcs.length), [0, 0, 0]),
+      speed = o.speed === undefined ? 1.6 : o.speed,
+      up = o.up === undefined ? 0.8 : o.up,
+      g = o.gravity === undefined ? -4 : o.gravity,
+      drag = o.drag === undefined ? 1.2 : o.drag,
+      shrink = o.shrink === undefined ? 0 : o.shrink,
+      life = o.life || 1,
+      vary = o.vary === undefined ? 1 : o.vary,
+      vel = pcs.map((c, i) => {
+        const h = Math.abs(Math.sin(i * 12.9898 + 4.1) * 43758.5453) % 1,
+          h2 = Math.abs(Math.sin(i * 78.233 + 1.7) * 12543.123) % 1,
+          out = V.sub(c, from),
+          flat =
+            Math.hypot(out[0], out[2]) > 1e-6
+              ? V.norm([out[0], 0, out[2]])
+              : [Math.cos(h2 * 6.283), 0, Math.sin(h2 * 6.283)];
+        return V.mul(
+          V.norm([flat[0], up + 0.4 * vary * (h2 - 0.5), flat[2]]),
+          speed * (1 - 0.4 * vary + 0.8 * vary * h)
+        );
+      });
+    const travel = t => drag > 0 ? (1 - Math.exp(-drag * t)) / drag : t;
+    const scaleAt = t => Math.max(0, 1 - (1 - shrink) * Math.pow(Math.min(1, t / life), 1.5));
+    const fall = t => 0.5 * g * t * t;
+    const map = p => {
+      const t = map.t;
+      if (!(t > 0)) return p.slice();
+      let best = 0,
+        bd = 1e18;
+      for (let i = 0; i < pcs.length; i++) {
+        const c = pcs[i],
+          dd = (p[0] - c[0]) ** 2 + (p[1] - c[1]) ** 2 + (p[2] - c[2]) ** 2;
+        if (dd < bd) {
+          bd = dd;
+          best = i;
+        }
+      }
+      const c = pcs[best], v = vel[best], k = travel(t), s = scaleAt(t);
+      return [
+        c[0] + (p[0] - c[0]) * s + v[0] * k,
+        c[1] + (p[1] - c[1]) * s + v[1] * k + fall(t),
+        c[2] + (p[2] - c[2]) * s + v[2] * k
+      ];
+    };
+    map.t = 0;
+    map.pieces = pcs;
+    map.piece = (index, seconds = map.t) => {
+      if (!Number.isInteger(index) || !pcs[index] || !Number.isFinite(seconds))
+        throw new RangeError('Burst sampling needs a piece index and a finite time');
+      const t = Math.max(0, seconds), [x, y, z] = V.mad(pcs[index], vel[index], travel(t));
+      return { point: [x, y + fall(t), z], scale: scaleAt(t) };
+    };
+    return map;
+  };
+
   /* the reaction fields. x across (-0.5..0.5), y up (-0.5..0.5), top = how far up (0 at the base, 1 at the top): what they return is a
      displacement in parts of the drawing's size */
   D.EMOTES = [
@@ -660,6 +725,12 @@
         };
   };
   D.jac = (map, p, e) => {
+    if(typeof map.jacobian==='function'){
+      const J=map.jacobian(p);
+      if(!(Array.isArray(J)||ArrayBuffer.isView(J))||J.length!==9||!Array.from(J).every(Number.isFinite))
+        throw new TypeError('A deformation Jacobian must contain nine finite values');
+      return Array.from(J);
+    }
     e = e || 1e-3;
     const a = map([p[0] + e, p[1], p[2]]),
       b = map([p[0] - e, p[1], p[2]]),
@@ -695,6 +766,7 @@
       r[j * 9 + 7] = d[q + 9];
       r[j * 9 + 8] = d[q + 10];
     }
+    if(W.splatFootprints?.frames)r.footprintFrames=Float32Array.from(Array.from(ids).flatMap(i=>i*6+6<=W.splatFootprints.frames.length?Array.from(W.splatFootprints.frames.subarray(i*6,i*6+6)):[0,0,0,0,0,0]));
     return r;
   };
   /* a splat's shape through a 3x3: J S J' (S kept as its six different numbers) */
@@ -727,6 +799,7 @@
     const d = W.data,
       rows = W.anim && W.anim.rows,
       shape = !o || o.shape !== false;
+    const frames=shape&&rest.footprintFrames&&W.splatFootprints?.frames?.slice();
     for (let j = 0; j < ids.length; j++) {
       const r = j * 9,
         q = ids[j] * 16,
@@ -735,9 +808,10 @@
       d[q] = n[0];
       d[q + 1] = n[1];
       d[q + 2] = n[2];
-      if (shape) carry(D.jac(map, p), rest, r, d, q);
+      if (shape) {const J=D.jac(map,p);carry(J,rest,r,d,q);if(frames)SplatFootprints.carryFrame(frames,ids[j]*6,rest.footprintFrames,j*6,J);}
       if (rows) rows[ids[j] >> 9] = 1;
     }
+    if(frames)SplatFootprints.setFrames(W,frames);
   };
 
   /* cut splats into bones. o.axis and o.slices: slabs across an axis; o.grid [nx, ny, nz]: boxes. A splat near the border of its slab or
@@ -751,7 +825,24 @@
       bid2 = new Uint16Array(NA),
       w2 = new Float32Array(NA),
       cells = [];
-    if (o.grid) {
+    let weightsAt;
+    if (o.pieces) {
+      /* loose pieces: each its own bone, a splat going with the piece whose middle is nearest it, shared with none */
+      for (const c of o.pieces) cells.push(c.slice(0, 3));
+      weightsAt = point => {
+        let best = 0,
+          bd = 1e18;
+        for (let i = 0; i < cells.length; i++) {
+          const c = cells[i],
+            dd = (point[0] - c[0]) ** 2 + (point[1] - c[1]) ** 2 + (point[2] - c[2]) ** 2;
+          if (dd < bd) {
+            bd = dd;
+            best = i;
+          }
+        }
+        return [best, best, 0];
+      };
+    } else if (o.grid) {
       const g = o.grid,
         lo = [1e9, 1e9, 1e9],
         hi = [-1e9, -1e9, -1e9];
@@ -770,13 +861,13 @@
               lo[1] + ((hi[1] - lo[1]) * (j + 0.5)) / g[1],
               lo[2] + ((hi[2] - lo[2]) * (k + 0.5)) / g[2]
             ]);
-      for (let j = 0; j < NA; j++) {
+      weightsAt = point => {
         const c = [0, 0, 0],
           f = [0, 0, 0];
         let best = -1,
           bf = 0;
         for (let a = 0; a < 3; a++) {
-          const s = clamp(((d[ids[j] * 16 + a] - lo[a]) / (hi[a] - lo[a] || 1)) * g[a], 0, g[a] - 1e-6);
+          const s = clamp(((point[a] - lo[a]) / (hi[a] - lo[a] || 1)) * g[a], 0, g[a] - 1e-6);
           c[a] = Math.floor(s);
           f[a] = s - c[a] - 0.5;
           const nb = c[a] + Math.sign(f[a]);
@@ -785,14 +876,11 @@
             best = a;
           }
         }
-        bid[j] = at(c[0], c[1], c[2]);
-        if (best >= 0) {
-          const n = c.slice();
-          n[best] += Math.sign(f[best]);
-          bid2[j] = at(n[0], n[1], n[2]);
-          w2[j] = bf;
-        }
-      }
+        const primary = at(...c);
+        if (best < 0) return [primary, 0, 0];
+        c[best] += Math.sign(f[best]);
+        return [primary, at(...c), bf];
+      };
     } else {
       const n = Math.max(1, o.slices || 1),
         ax = V.norm(o.axis || [0, 1, 0]);
@@ -813,19 +901,21 @@
       for (let a = 0; a < 3; a++) cen[a] /= NA || 1;
       const mid = V.dot(cen, ax);
       for (let i = 0; i < n; i++) cells.push(V.mad(cen, ax, lo + ((hi - lo) * (i + 0.5)) / n - mid));
-      for (let j = 0; j < NA; j++) {
-        const q = ids[j] * 16,
-          s = ((d[q] * ax[0] + d[q + 1] * ax[1] + d[q + 2] * ax[2] - lo) / (hi - lo || 1)) * n - 0.5,
+      weightsAt = point => {
+        const s = ((V.dot(point, ax) - lo) / (hi - lo || 1)) * n - 0.5,
           i0 = Math.floor(s),
           f = s - i0,
           a = clamp(f < 0.5 ? i0 : i0 + 1, 0, n - 1),
           b = clamp(f < 0.5 ? i0 + 1 : i0, 0, n - 1);
-        bid[j] = a;
-        bid2[j] = b;
-        w2[j] = a === b ? 0 : f < 0.5 ? f : 1 - f;
-      }
+        return [a, b, a === b ? 0 : f < 0.5 ? f : 1 - f];
+      };
+    }
+    for (let j = 0; j < NA; j++) {
+      const q = ids[j] * 16;
+      [bid[j], bid2[j], w2[j]] = weightsAt([d[q], d[q + 1], d[q + 2]]);
     }
     const skin = {
+      weightsAt,
       bid,
       bid2,
       w2,
@@ -873,7 +963,35 @@
     return M.mul(M.rot([1, 0, 0], r[0] * k), M.mul(M.rot([0, 1, 0], r[1] * k), M.rot([0, 0, 1], r[2] * k)));
   };
   D.euler = eulerDeg;
+  D.angles = (matrix, near) => {
+    const degrees = 180 / Math.PI, y = Math.asin(K.clamp(matrix[2], -1, 1));
+    const normal = Math.abs(matrix[2]) < 1 - 1e-12;
+    const z = normal ? Math.atan2(-matrix[1], matrix[0]) : (near?.[2] ?? 0) / degrees;
+    const x = normal ? Math.atan2(-matrix[5], matrix[8]) : Math.atan2(matrix[7], matrix[4]) - Math.sign(y) * z;
+    const primary = [x * degrees, y * degrees, z * degrees];
+    if (!near) return primary;
+    const closest = a => a.map((angle, i) => near[i] + K.anim.shortAngle(near[i], angle));
+    const first = closest(primary), second = closest([primary[0] + 180, 180 - primary[1], primary[2] + 180]);
+    return V.dist(near, first) <= V.dist(near, second) ? first : second;
+  };
   const ID = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+  /* Inspect authored poses without changing the puppet's live pose, frame maps, or bone buffer. */
+  D.inspectPoses = (puppet, read) => {
+    const previous = puppet.pose;
+    const maps = Object.values(puppet.parts).map(part => [part, part.frame]);
+    try {
+      for (const [part] of maps) part.frame = [];
+      return read(pose => {
+        puppet.pose = pose;
+        puppet.solve();
+        return puppet;
+      });
+    } finally {
+      puppet.pose = previous;
+      for (const [part, frame] of maps) part.frame = frame;
+      puppet.solve();
+    }
+  };
   K.puppet = (W, def) => {
     const d = W.data,
       names = Object.keys(def.parts),
@@ -885,7 +1003,7 @@
       const s = def.parts[name],
         ids = Array.from(s.ids),
         axis = V.norm(s.axis || [0, 1, 0]),
-        skin = D.skin(W, ids, { slices: s.slices, grid: s.grid, axis, from: s.from, to: s.to });
+        skin = D.skin(W, ids, { slices: s.slices, grid: s.grid, pieces: s.pieces, axis, from: s.from, to: s.to });
       let lo = 1e9,
         hi = -1e9;
       const cen = [0, 0, 0];
@@ -915,6 +1033,7 @@
         first: nb,
         maps: (s.maps || []).slice(),
         frame: [],
+        visual: [],
         A: ID.slice(),
         t: [0, 0, 0],
         P: ID.slice(),
@@ -940,6 +1059,12 @@
     all.sort((a, b) => a[0] - b[0]);
     const Mx = new Float32Array(nb * 12),
       pup = { parts, names, order, pose: {}, bones: Mx, count: nb, time: 0 };
+    let poseSampler;
+    pup.setPoseSampler = sample => {
+      if (typeof sample !== 'function') throw new TypeError('A puppet pose sampler must be a function');
+      poseSampler = sample;
+      return pup;
+    };
     const ch = (name, c, fb) => {
       const p = pup.pose[name];
       return p && p[c] !== undefined ? p[c] : fb;
@@ -1032,6 +1157,11 @@
       po.turn = po.turn ? M.mul(loc, po.turn) : loc;
       pup.solve();
     };
+    pup.rotate = (name, worldTurn) => {
+      pup.solve();
+      turnWorld(name, worldTurn);
+      return pup;
+    };
     const moveWorld = (name, dw) => {
       const p = parts[name],
         dl = M.app(M.inv(p.P), dw),
@@ -1048,6 +1178,10 @@
     };
     pup.deform = (name, map) => {
       parts[name].frame.push(map);
+      return pup;
+    };
+    pup.deformVisual = (name, map) => {
+      parts[name].visual.push(map);
       return pup;
     };
     pup.look = (name, target, o) => {
@@ -1074,9 +1208,10 @@
       o = o || {};
       pup.solve();
       const w = o.w === undefined ? 1 : o.w,
+        effector = o.effector ?? lower,
         a = pup.point(upper, parts[upper].pivot),
         b = pup.point(lower, parts[lower].pivot),
-        e = pup.point(lower, tip),
+        e = pup.point(effector, tip),
         goal = V.lerp(e, target, w),
         l1 = V.dist(a, b),
         l2 = V.dist(b, e),
@@ -1085,10 +1220,10 @@
       const Q1 = limited(V.norm(V.sub(b, a)), V.norm(V.sub(elbow, a)), Math.PI, 1);
       if (Q1) turnWorld(upper, Q1);
       const b2 = pup.point(lower, parts[lower].pivot),
-        e2 = pup.point(lower, tip),
+        e2 = pup.point(effector, tip),
         Q2 = limited(V.norm(V.sub(e2, b2)), V.norm(V.sub(ik.tip, b2)), Math.PI, 1);
       if (Q2) turnWorld(lower, Q2);
-      return V.dist(pup.point(lower, tip), goal);
+      return V.dist(pup.point(effector, tip), goal);
     };
     pup.distance = (name, target, dist, o) => {
       o = o || {};
@@ -1118,7 +1253,10 @@
     };
     pup.clear = () => {
       for (const k in pup.pose) delete pup.pose[k];
-      for (const n of names) parts[n].frame.length = 0;
+      for (const n of names) {
+        parts[n].frame.length = 0;
+        parts[n].visual.length = 0;
+      }
       return pup;
     };
     /* write the bones */
@@ -1135,7 +1273,8 @@
           }
           continue;
         }
-        p.skin.fill(Mx, p.first, p.D, { A: p.A, t: p.t });
+        const shape = p.visual.length ? D.chain(p.D, ...p.visual) : p.D;
+        p.skin.fill(Mx, p.first, shape, { A: p.A, t: p.t });
       }
       return pup;
     };
@@ -1152,7 +1291,8 @@
       pose(t, dt) {
         pup.time = t;
         pup.clear();
-        if (def.pose) def.pose(t, dt, pup);
+        const sample = poseSampler ?? def.pose;
+        if (sample) sample(t, dt, pup);
         pup.flush();
       }
     });
@@ -1163,7 +1303,7 @@
       W.anim = stage;
       stage.bones = own.bones;
       stage.boned = own.boned;
-      stage.add({
+      pup.system = stage.add({
         update(dt, t) {
           own.update(dt, t);
           for (let r = 0; r < own.rows.length; r++)

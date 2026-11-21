@@ -82,7 +82,13 @@ function makeNoise(seed) {
 }
 
 // ---------------- shared builder: splat storage plus shape helpers ----------------
-function makeBuilder(seed, hex) {
+function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 15, detailBudgets, shadowArt: shadowSettings } = {}) {
+  const detailBudget = DetailBudgets.prepare(detailBudgets);
+  const shadowArt = ShadowArt.prepare(shadowSettings);
+  if (shadowArt?.cast || shadowArt?.receive) renderMetadata = true;
+  if (detailBudget?.affectsCleanup || detailBudget?.fineOn || detailBudget?.fineOff) renderMetadata = true;
+  if (!Number.isSafeInteger(initialCapacity) || initialCapacity < 1 || initialCapacity > Number.MAX_SAFE_INTEGER / 16)
+    throw new RangeError('Initial splat capacity must be a positive integer');
   seed = seed >>> 0;
   let gen = mulberry32(seed ^ 0x5bd1e995);
   const R = () => gen(),
@@ -121,14 +127,147 @@ function makeBuilder(seed, hex) {
     return [r * Math.cos(a), y, r * Math.sin(a)];
   };
 
-  let cap = 1 << 15,
+  let cap = initialCapacity,
     n = 0,
     data = new Float32Array(cap * 16);
+  function reserveRow() {
+    if (n < cap) return;
+    cap *= 2;
+    const expanded = new Float32Array(cap * 16);
+    expanded.set(data);
+    data = expanded;
+  }
+  let colorOverride;
   const moving = [],
     back = [],
     cidx = [],
     nrms = [];
-  let curN = null;
+  let footprintRecorder, engravingRanges;
+  function describeEngraving(first,end,spec,frame) {
+    if(first>=end||spec===undefined)return;
+    const prepared=Engraving.prepare(spec);engravingRanges??=[];const last=engravingRanges.at(-1);
+    if (!frame && last && !last[3] && last[1] === first && last[2] === prepared) last[1] = end;
+    else engravingRanges.push([first, end, prepared, frame]);
+  }
+  let ownerRows, materialRows, targetRows, muteEmission, materialAlbedo, materialPixelStyles, opticalSplats;
+  let unnamedOwners = new WeakMap(), unnamedMaterials = new WeakMap();
+  const ownerIds = new Map(), materialIds = new Map();
+  const ownerNames = [null], materialNames = [null];
+  const targetKeys = new Map(), targetNames = [null];
+  let targetValues = new WeakMap();
+  function renderId(value, labels, unnamed, names) {
+    if (value == null) return 0;
+    const hasLabel = typeof value === 'string' || typeof value === 'number';
+    const ids = hasLabel ? labels : unnamed;
+    let id = ids.get(value);
+    if (id === undefined) {
+      id = names.length;
+      ids.set(value, id);
+      names.push(hasLabel ? value : null);
+    }
+    return id;
+  }
+  function describeAlbedo(first, end, color) {
+    if (!Number.isSafeInteger(first) || !Number.isSafeInteger(end) || first < 0 || end < first || end > n)
+      throw new RangeError('Albedo range must belong to the builder');
+    if (first === end) return;
+    const rgb = RenderStages.albedo(color, hex || PAL_HEX);
+    if (!materialAlbedo || materialAlbedo.length < cap) {
+      const next = new Uint32Array(cap);
+      if (materialAlbedo) next.set(materialAlbedo);
+      materialAlbedo = next;
+    }
+    materialAlbedo.fill(rgb + 1, first, end);
+  }
+  function describeFootprint(first, end, definition, frame) {
+    if (first >= end || definition === undefined) return;
+    footprintRecorder ??= SplatFootprints.recorder();
+    footprintRecorder.record(first,end,definition,frame);
+  }
+  function describePixelStyle(first, end, style, pair) {
+    if (first === end || !style.edge && !style.mode && !style.steps) return;
+    if (!materialPixelStyles || materialPixelStyles.length < cap * 4) {
+      const next = new Float32Array(cap * 4);
+      if (materialPixelStyles) next.set(materialPixelStyles);
+      materialPixelStyles = next;
+    }
+    const pack = index => {
+      const [r, g, b] = P[index];
+      return r + 256 * g + 65536 * b;
+    };
+    const low = pair ? pack(pair[0]) : 0, high = pair ? pack(pair[1]) : 0;
+    const key = style.mode + style.steps * 8 + (pair ? MaterialPixelStyle.PAIR + pair[2] * .5 : 0);
+    for (let i = first; i < end; i++) {
+      const j = i * 4;
+      materialPixelStyles[j] = style.edge;
+      materialPixelStyles[j + 1] = key + (pix?.[i * 8] ? MaterialPixelStyle.PATTERN : 0);
+      materialPixelStyles[j + 2] = low;
+      materialPixelStyles[j + 3] = high;
+    }
+  }
+  // Labels can be shared across several solids or supplied for splats built directly.
+  function describeOptical(first, end, profile) {
+    if (first >= end) return;
+    const packed = OpticalMaterials.pack(profile), stride = OpticalMaterials.STRIDE;
+    if (!opticalSplats || opticalSplats.length < end * stride) {
+      const next = new Float32Array(Math.max(end * stride, opticalSplats ? opticalSplats.length * 2 : 256 * stride));
+      if (opticalSplats) next.set(opticalSplats);
+      opticalSplats = next;
+    }
+    for (let i = first; i < end; i++) opticalSplats.set(packed, i * stride);
+  }
+
+  function describeSplats(first, end, { object, material, target } = {}) {
+    if (!renderMetadata || first === end) return;
+    if (!Number.isSafeInteger(first) || !Number.isSafeInteger(end) || first < 0 || end < first || end > n)
+      throw new RangeError('Splat metadata range must belong to the builder');
+    if (!ownerRows || ownerRows.length < cap) {
+      const owners = new Uint32Array(cap), materials = new Uint32Array(cap);
+      if (ownerRows) {
+        owners.set(ownerRows);
+        materials.set(materialRows);
+      }
+      ownerRows = owners;
+      materialRows = materials;
+    }
+    ownerRows.fill(renderId(object, ownerIds, unnamedOwners, ownerNames), first, end);
+    materialRows.fill(renderId(material, materialIds, unnamedMaterials, materialNames), first, end);
+    if (target) {
+      let id = targetValues.get(target);
+      if (id === undefined) {
+        const labels = TargetSelectors.describe(target);
+        const key = SplatProvenance.targetKey(labels);
+        if (!targetKeys.has(key)) {
+          targetKeys.set(key, targetNames.length);
+          targetNames.push(JSON.parse(JSON.stringify(labels)));
+        }
+        id = targetKeys.get(key);
+        targetValues.set(target, id);
+      }
+      if (!targetRows || targetRows.length < cap) {
+        const next = new Uint32Array(cap);
+        if (targetRows) next.set(targetRows);
+        targetRows = next;
+      }
+      targetRows.fill(id, first, end);
+    } else if (targetRows) targetRows.fill(0, first, end);
+  }
+
+  function renderRows() {
+    if (!renderMetadata && !opticalSplats) return undefined;
+    const normals = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) if (nrms[i]) normals.set(nrms[i], i * 3);
+    if (!renderMetadata) return { normals };
+    return {
+      normals,
+      muteEmission: muteEmission?.slice(0, n),
+      objectIds: ownerRows?.slice(0, n),
+      materialIds: materialRows?.slice(0, n),
+      ...(targetRows && { targetIds: targetRows.slice(0, n), targets: targetNames.slice() }),
+      objects: ownerNames.slice(),
+      materials: materialNames.slice()
+    };
+  }
   /* the birth time given to the dabs laid next (null: there from the start). The motions that use the last number for themselves
      (falling, rising, flapping, swelling, writhing, a placed copy's sway) cannot grow */
   let bornV = null,
@@ -139,7 +278,107 @@ function makeBuilder(seed, hex) {
      tile on the surface, and the colour the dab was given, so a dab recoloured later is known and drawn plain. */
   let fine = null,
     attr = null,
-    attrN = null;
+    attrN = null,
+    pix = null,
+    pixHas = false,
+    surfaceData = null,
+    surfacePending = false,
+    shadowLod;
+  const renderSdfs = [];
+  let bevelIds = new WeakMap();
+  const surfaces = [],
+    surfaceIds = new Map(),
+    surfaceRow = new Float32Array(SurfaceLook.STRIDE);
+  function surfaceNext(settings, nx, ny, nz, light, visibility = 1, tangent, bevelDistance) {
+    let ids = surfaceIds.get(settings);
+    if (!ids) surfaceIds.set(settings, (ids = new Map()));
+    if (bevelDistance && !bevelIds.has(bevelDistance)) bevelIds.set(bevelDistance, surfaces.length + 1);
+    const key = light.join(',') + (bevelDistance ? '/' + bevelIds.get(bevelDistance) : '');
+    let id = ids.get(key);
+    if (id === undefined) {
+      id = surfaces.push({ settings, light: Array.from(light), ...(bevelDistance && { bevelDistance }) });
+      ids.set(key, id);
+    }
+    surfaceRow.set([id, nx, ny, nz, visibility, tangent?.[0] ?? 0, tangent?.[1] ?? 0, tangent?.[2] ?? 0]);
+    surfacePending = true;
+  }
+  /* colour worked out per pixel (a diorama's look.pixel): for a dab laid next, the ramp it is coloured from, how lit it is, the pattern
+     laid on it (a K.pixel material's pat) and the way its surface faces; the picture then decides each pixel from these, not from the
+     dab's one colour. Eight numbers a dab; the ramps and patterns are kept once each */
+  const pixN = new Float32Array(8),
+    ramps = [],
+    rampOff = [],
+    rampIx = new Map(),
+    rampNoIx = new Map(),
+    rampByText = new Map(),
+    pats = [],
+    patIx = new Map();
+  /* (fx, fy, fz: the way the shape it is lit as faces, if that is not its own: folded into two numbers; 9, 9 when there is none.
+      noLine: the material draws no outline, as clouds and water. Ramps with the same colours are one ramp, so an outline is drawn
+      only where one material meets another) */
+  function pixelRamp(ramp, noLine) {
+    const ix = noLine ? rampNoIx : rampIx;
+    let r = ix.get(ramp);
+    if (r === undefined) {
+      const text = (noLine ? '!' : '') + Array.from(ramp).join(',');
+      r = rampByText.get(text);
+      if (r === undefined) {
+        r = ramps.push(Array.from(ramp)) - 1;
+        rampOff.push(!!noLine);
+        rampByText.set(text, r);
+      }
+      ix.set(ramp, r);
+    }
+    return r + 1;
+  }
+  const pixNext = (ramp, t, pat, nx, ny, nz, fx, fy, fz, noLine) => {
+    let pi = 0;
+    if (pat) {
+      pi = patIx.get(pat);
+      if (pi === undefined) {
+        pi = pats.push(pat);
+        patIx.set(pat, pi);
+      }
+    }
+    pixN[0] = pixelRamp(ramp, noLine);
+    pixN[1] = t;
+    pixN[2] = pi;
+    pixN[3] = nx;
+    pixN[4] = ny;
+    pixN[5] = nz;
+    if (fx === undefined) pixN[6] = pixN[7] = 9;
+    else {
+      const l = Math.abs(fx) + Math.abs(fy) + Math.abs(fz) || 1;
+      let a = fx / l,
+        b = fz / l;
+      if (fy < 0) {
+        const a2 = (1 - Math.abs(b)) * (a >= 0 ? 1 : -1),
+          b2 = (1 - Math.abs(a)) * (b >= 0 ? 1 : -1);
+        a = a2;
+        b = b2;
+      }
+      pixN[6] = a;
+      pixN[7] = b;
+    }
+    pixHas = true;
+  };
+  function shadowNext(base, alternate) {
+    if (!alternate || !P[alternate.ci]) return;
+    const slot = pixHas && alternate.ramp ? pixelRamp(alternate.ramp, alternate.noLine) : 0;
+    if (base === alternate.ci && (!pixHas || slot === pixN[0] && Math.fround(alternate.t) === pixN[1]) &&
+        (!surfacePending || Math.fround(alternate.visibility) === surfaceRow[4])) return;
+    reserveRow();
+    const stride = ShadowArt.stride;
+    if (!shadowLod || shadowLod.length < cap * stride) {
+      const next = new Float32Array(cap * stride);
+      if (shadowLod) next.set(shadowLod);
+      shadowLod = next;
+    }
+    const pack = ([r, g, b]) => r + 256 * g + 65536 * b;
+    const { referenceSize, belowPixels } = shadowArt.small;
+    shadowLod.set([referenceSize / belowPixels, pack(P[base]), pack(P[alternate.ci]), slot,
+      alternate.t, alternate.visibility], n * stride);
+  }
   /* attributes (see the sculptor's S.keepAttrs): four numbers a dab, for the dabs laid next */
   const attrNext = (a, b, c, d) => {
     attrN = attrN || new Float32Array(4);
@@ -149,6 +388,7 @@ function makeBuilder(seed, hex) {
     attrN[3] = d;
   };
   const fineTile = (t0, t1, t2, t3, ux, uy, uz, vx, vy, vz, col) => {
+    reserveRow();
     if (!fine || fine.length < cap * 12) {
       const f = new Float32Array(cap * 12);
       if (fine) f.set(fine);
@@ -168,13 +408,8 @@ function makeBuilder(seed, hex) {
     fine[o + 10] = vz;
     fine[o + 11] = 1;
   };
-  function push(x, y, z, c00, c01, c02, c11, c12, c22, col, a, an) {
-    if (n === cap) {
-      cap *= 2;
-      const d = new Float32Array(cap * 16);
-      d.set(data);
-      data = d;
-    }
+  function push(x, y, z, c00, c01, c02, c11, c12, c22, col, a, an, normal = null) {
+    reserveRow();
     if (attrN) {
       if (!attr || attr.length < cap * 4) {
         const f = new Float32Array(cap * 4);
@@ -183,9 +418,30 @@ function makeBuilder(seed, hex) {
       }
       attr.set(attrN, n * 4);
     }
+    if (pixHas || pix) {
+      if (!pix || pix.length < cap * 8) {
+        const f = new Float32Array(cap * 8);
+        if (pix) f.set(pix);
+        pix = f;
+      }
+      if (pixHas) pix.set(pixN, n * 8);
+      else pix.fill(0, n * 8, n * 8 + 8);
+      pixHas = false;
+    }
+    if (surfacePending || surfaceData) {
+      const stride = SurfaceLook.STRIDE;
+      if (!surfaceData || surfaceData.length < cap * stride) {
+        const next = new Float32Array(cap * stride);
+        if (surfaceData) next.set(surfaceData);
+        surfaceData = next;
+      }
+      if (surfacePending) surfaceData.set(surfaceRow, n * stride);
+      surfacePending = false;
+    }
     if (fine && fine[n * 12 + 11] === 1)
       fine[n * 12 + 11] = 2; // the tile laid for this dab is now its own
     else if (fine && n * 12 < fine.length) fine.fill(0, n * 12, n * 12 + 12);
+    if(colorOverride){col=typeof colorOverride==='function'?colorOverride(col,[x,y,z]):colorOverride;if(!Array.isArray(col)||col.length!==3||!col.every(v=>Number.isFinite(v)&&v>=0&&v<=255))throw new TypeError('Color transform must return finite RGB bytes');}
     const o = n * 16;
     data[o] = x;
     data[o + 1] = y;
@@ -199,11 +455,24 @@ function makeBuilder(seed, hex) {
     data[o + 9] = c12;
     data[o + 10] = c22;
     cidx.push(P.indexOf(col));
-    nrms.push(curN);
+    nrms.push(normal);
     if (an) {
+      if (renderMetadata && an.em && an.emission === false) {
+        if (!muteEmission || muteEmission.length < cap) {
+          const next = new Uint8Array(cap);
+          if (muteEmission) next.set(muteEmission);
+          muteEmission = next;
+        }
+        muteEmission[n] = 1;
+      }
       // kind, plus flags: 16 = leave out of outlines, 32 = glows (ignores haze and relighting)
-      // + 64 = draw behind everything (used for water, so reflections show through it)
-      data[o + 11] = (an.k || 0) + (an.nd ? 16 : 0) + (an.em ? 32 : 0) + (an.bk ? 64 : 0) + (an.gl ? 256 : 0); // (256 = glass: it bends what is seen through it)
+      // 64 = behind everything, 256 = glass, 8192 = responds to horizontal airflow, 2048 = drawn as text where a page offers it
+      // 32768 bypasses rest-space brushes for world-space surface fragments.
+      // (K.ascii), with its own set in 4096 and 16384 (as: 1 ascii, 2 symbols, 3 braille; as: true, the page's)
+      const asSet = an.as && an.as !== true ? Math.max(0, Math.min(3, an.as | 0)) : 0;
+      data[o + 11] = (an.k || 0) + (an.nd ? 16 : 0) + (an.em ? 32 : 0) + (an.bk ? 64 : 0) + (an.gl ? 256 : 0) + (an.wind ? 8192 : 0)
+        + (an.as ? 2048 + (asSet & 1 ? 4096 : 0) + (asSet & 2 ? 16384 : 0) : an.k === 11 && an.cloth ? Airflow.clothFlag : 0)
+        + (an.coverage === undefined ? 0 : SampleCoverage.pack(an.coverage, an.coverageEnter));
       if (an.bk) back.push(n);
       data[o + 12] = an.ph || 0;
       data[o + 13] = an.sp || 0;
@@ -232,29 +501,42 @@ function makeBuilder(seed, hex) {
     const v = s * s;
     push(x, y, z, v, 0, 0, v, 0, v, col, a, an);
   }
-  function axial(x, y, z, ax, sa, sp, col, a, an) {
+  function axial(x, y, z, ax, sa, sp, col, a, an, recordNormal = false) {
+    if (ax?.length !== 3 || !Number.isFinite(ax[0]) || !Number.isFinite(ax[1]) || !Number.isFinite(ax[2]))
+      throw new TypeError('Splat axis needs three finite numeric components');
+    let u = ax[0], v = ax[1], w = ax[2];
+    const lengthSquared = u * u + v * v + w * w;
+    if (Math.abs(lengthSquared - 1) > 4 * Number.EPSILON) {
+      // Scale before taking the norm so finite axes also work at extreme magnitudes.
+      const scale = Math.max(Math.abs(u), Math.abs(v), Math.abs(w));
+      if (scale === 0) throw new RangeError('Splat axis must be nonzero');
+      u /= scale;
+      v /= scale;
+      w /= scale;
+      const inverseLength = 1 / Math.sqrt(u * u + v * v + w * w);
+      u *= inverseLength;
+      v *= inverseLength;
+      w *= inverseLength;
+    }
     const p = sp * sp,
       d = sa * sa - p;
     push(
       x,
       y,
       z,
-      p + d * ax[0] * ax[0],
-      d * ax[0] * ax[1],
-      d * ax[0] * ax[2],
-      p + d * ax[1] * ax[1],
-      d * ax[1] * ax[2],
-      p + d * ax[2] * ax[2],
+      p + d * u * u,
+      d * u * v,
+      d * u * w,
+      p + d * v * v,
+      d * v * w,
+      p + d * w * w,
       col,
       a,
-      an
+      an,
+      recordNormal ? [u, v, w] : null
     );
   }
-  const disc = (x, y, z, nrm, st, sn, col, a, an) => {
-    curN = nrm;
-    axial(x, y, z, nrm, sn, st, col, a, an);
-    curN = null;
-  };
+  const disc = (x, y, z, nrm, st, sn, col, a, an) => axial(x, y, z, nrm, sn, st, col, a, an, true);
   const stick = (x, y, z, ax, sl, sw, col, a, an) => axial(x, y, z, ax, sl, sw, col, a, an);
   /* a dab that is longer one way across the surface than the other (S.follow lays these along the form): nrm the way the surface
      faces, e the long way (across the surface), sa and sb its two half-widths, sn its thickness */
@@ -265,7 +547,6 @@ function makeBuilder(seed, hex) {
       A = sa * sa,
       Bq = sb * sb,
       C = sn * sn;
-    curN = nrm;
     push(
       x,
       y,
@@ -278,9 +559,9 @@ function makeBuilder(seed, hex) {
       A * e[2] * e[2] + Bq * fz * fz + C * nrm[2] * nrm[2],
       col,
       a,
-      an
+      an,
+      nrm
     );
-    curN = null;
   };
 
   let Lv = norm([-0.45, 0.75, 0.5]);
@@ -765,12 +1046,62 @@ function makeBuilder(seed, hex) {
     stick(x, y, z, [1, 0, 0], s2, s2 * 0.12 + 0.012, P[c], 3, an);
     stick(x, y, z, UP, s2, s2 * 0.12 + 0.012, P[c], 3, an);
   }
+  const precipitationRanges = [], fallingSnowRanges = [];
+  function describePrecipitation(first, end, profile = false, spatial = true) {
+    if (![first, end].every(Number.isSafeInteger) || first < 0 || end < first || end > n || typeof profile !== 'boolean' || typeof spatial !== 'boolean')
+      throw new RangeError('Expected a valid precipitation row range');
+    if (end > first) {
+      if (spatial) precipitationRanges.push({ first, end, profile });
+      else fallingSnowRanges.push({ first, end });
+    }
+  }
   function finish(meta) {
-    return Object.assign(
+    const pending = globalThis.INK_DECAL_NEXT;
+    if (pending) globalThis.INK_DECAL_NEXT = null;
+    const paint = meta?.paint ?? pending, px = 1 / (meta?.detail || 12);
+    const legacy = Array.isArray(paint) ? paint : paint?.decals ?? [];
+    const paintDecals = [];
+    for (const [x, y, z, nx, ny, nz, c] of legacy) {
+      if (!P[c]) continue;
+      paintDecals.push({ index: n, at: [x, y, z], n: [nx, ny, nz] });
+      disc(x + nx * px * 0.3, y + ny * px * 0.3, z + nz * px * 0.3, [nx, ny, nz], px * 0.6, px * 0.12, P[c], 3);
+    }
+    const correctionRows = [];
+    if (paint?.layers !== undefined) {
+      for (const group of PaintCorrections.groups(paint, px)) {
+        const { at: [x, y, z], n: [nx, ny, nz] } = group;
+        correctionRows.push({ ...group, index: n });
+        // The renderers resolve this reserved row for their own camera.
+        disc(x + nx * px * .3, y + ny * px * .3, z + nz * px * .3, group.n,
+          px * .65, px * .12, P[0], 0, { nd: true, rg: PaintCorrections.marker });
+      }
+    }
+    const world = Object.assign(
       {
         data: data.subarray(0, n * 16),
         count: n,
+        ...(paintDecals.length && { paintDecals }),
+        ...(correctionRows.length && { paintCorrections: PaintCorrections.bind(correctionRows) }),
+        renderMetadata: renderRows(),
+        ...(renderSdfs.length && {renderSdfs:renderSdfs.slice()}),
+        ...(precipitationRanges.length && { precipitationRanges: precipitationRanges.slice() }),
+        ...(fallingSnowRanges.length && { fallingSnowRanges: fallingSnowRanges.slice() }),
+        ...(materialAlbedo && { materialAlbedo: materialAlbedo.slice(0, n) }),
+        ...(opticalSplats && {
+          opticalSplats: opticalSplats.length < n * OpticalMaterials.STRIDE ?
+            Float32Array.from({ length: n * OpticalMaterials.STRIDE }, (_, i) => opticalSplats[i] ?? 0) :
+            opticalSplats.slice(0, n * OpticalMaterials.STRIDE)
+        }),
+        ...(footprintRecorder && { splatFootprints: footprintRecorder.finish(n) }),
+        ...(materialPixelStyles && { materialPixelStyles: materialPixelStyles.slice(0, n * 4) }),
+        ...(shadowLod && { shadowLod: shadowLod.length >= n * ShadowArt.stride ? shadowLod.slice(0, n * ShadowArt.stride) :
+          Float32Array.from({ length: n * ShadowArt.stride }, (_, i) => shadowLod[i] || 0) }),
         attr: attr ? Float32Array.from({ length: n * 4 }, (_, i) => attr[i] || 0) : undefined,
+        pix: pix ? Float32Array.from({ length: n * 8 }, (_, i) => pix[i] || 0) : undefined,
+        ramps: pix ? ramps.map(r => r.slice()) : undefined,
+        rampOff: pix ? rampOff.slice() : undefined,
+        pats: pix ? pats.slice() : undefined,
+        ...(surfaceData ? { surfaceData: surfaceData.slice(0, n * SurfaceLook.STRIDE), surfaces: surfaces.slice() } : {}),
         fine: fine
           ? fine.length >= n * 12
             ? fine.subarray(0, n * 12)
@@ -789,6 +1120,38 @@ function makeBuilder(seed, hex) {
       },
       meta
     );
+    if(engravingRanges||world.look?.screenPrint!==undefined&&world.look.screenPrint!==false||world.look?.engraving!==undefined&&world.look.engraving!==false){
+      const assignments=[];if(world.look?.engraving!==undefined&&world.look.engraving!==false)assignments.push(['all',world.look.engraving]);
+      if(world.look?.screenPrint!==undefined&&world.look.screenPrint!==false)assignments.push(['all',KIT.screenPrint.chart(world.look.screenPrint)]);
+      if(engravingRanges)for(const [first,end,spec,frame]of engravingRanges)assignments.push([Array.from({length:end-first},(_,i)=>first+i),spec??false,frame]);
+      Engraving.bindMany(world,assignments);
+    }
+    if (detailBudgets !== undefined)
+      world.look = { ...world.look, detailBudgets: detailBudget?.rules ?? false };
+    if (shadowSettings !== undefined)
+      world.look = { ...world.look, shadowArt: shadowArt?.settings ?? false };
+    if (world.environmentPreset !== undefined && world.environmentPreset !== false) {
+      const catalog = KIT.authoring.assetPacks.create({ packs:world.assetPacks ?? [] });
+      Object.assign(world,KIT.authoring.environments.apply(world,world.environmentPreset,catalog,world.pal));
+    }
+    if (world.look?.colorLut !== undefined && world.look.colorLut !== false)
+      world.look = { ...world.look, colorLut: ColorLUT.normalize(world.look.colorLut) };
+    if (world.look?.colorStack !== undefined && world.look.colorStack !== false)
+      world.look = { ...world.look, colorStack: ColorStack.normalize(world.look.colorStack) };
+    if (world.celestialTracks) world.celestialTracks = CelestialTracks.compile(world.celestialTracks);
+    if (world.areaLights !== undefined) AreaLights.prepare(world.areaLights);
+    if (world.shotLighting !== undefined) ShotLighting.prepare(world.shotLighting);
+    if (world.bounceProbes !== undefined && world.bounceProbes !== false) world.bounceProbes = KIT.bounceProbes.bake(world);
+    if (world.relighting !== undefined) SplatRelighting.settings(world.relighting);
+    if (world.atmosphereEmitters) world.atmosphereEmitters = KIT.atmosphere.emitters.compile(world.atmosphereEmitters);
+    if (world.splatFields) world.splatFields = KIT.splatFields.compile(world.splatFields);
+    if (world.surfaceEffects) world.surfaceEffects = KIT.splatEffects.context(world.surfaceEffects);
+    if (world.pixelStamps !== undefined) {
+      const placed = PixelStamps.placements(world.pixelStamps, { scenePalette: world.pal, paletteRoles: world.paletteRoles });
+      const atlases = world.spriteAtlases === false ? [] : world.spriteAtlases ?? [];
+      world.spriteAtlases = [...atlases, ...placed];
+    }
+    return world;
   }
   // hand over everything pushed so far and start again empty
   const take = () => {
@@ -797,9 +1160,31 @@ function makeBuilder(seed, hex) {
     fine = null;
     attr = null;
     attrN = null;
+    pix = null;
+    pixHas = false;
+    surfaceData = null;
+    surfacePending = false;
+    shadowLod = undefined;
+    surfaces.length = 0;
+    renderSdfs.length = 0;
+    surfaceIds.clear();
+    bevelIds = new WeakMap();
     bounced = 0;
     cidx.length = 0;
     nrms.length = 0;
+    footprintRecorder = undefined;
+    engravingRanges=undefined;
+    ownerRows = materialRows = muteEmission = materialAlbedo = materialPixelStyles = opticalSplats = undefined;
+    unnamedOwners = new WeakMap();
+    unnamedMaterials = new WeakMap();
+    ownerIds.clear();
+    materialIds.clear();
+    targetRows = undefined;
+    targetKeys.clear();
+    targetNames.length = 1;
+    targetValues = new WeakMap();
+    ownerNames.length = materialNames.length = 1;
+    precipitationRanges.length = fallingSnowRanges.length = 0;
     moving.length = 0;
     back.length = 0;
     return out;
@@ -823,11 +1208,36 @@ function makeBuilder(seed, hex) {
     return out;
   };
   return {
+    withColor(color,draw) {
+      if(typeof draw!=='function'||typeof color!=='function'&&(!Array.isArray(color)||color.length!==3||!color.every(v=>Number.isFinite(v)&&v>=0&&v<=255)))throw new TypeError('withColor needs RGB bytes or a transform and a drawing function');
+      const previous=colorOverride;colorOverride=color;try{return draw();}finally{colorOverride=previous;}
+    },
+    detailBudget,
+    shadowArt,
+    shadowNext,
     count: () => n,
+    describeOptical,
+    keepRenderSdf(source) {
+      for (const ranges of source.rows.values()) for (const range of ranges) {
+        const [start,end] = range, points = new Float32Array((end-start)*3);
+        for (let i=start;i<end;i++) points.set(data.subarray(i*16,i*16+3),(i-start)*3);
+        range.push(points);
+      }
+      renderSdfs.push(source);
+    },
+    describeSplats: renderMetadata ? describeSplats : undefined,
+    describeAlbedo,
+    describePixelStyle,
+    describeFootprint,
+    describeEngraving,
+    describeScreenPrint:(first,end,spec)=>describeEngraving(first,end,KIT.screenPrint.chart(spec)),
+    describePrecipitation,
     born: v => (bornV = v === undefined || v === null || !isFinite(v) ? null : v),
     wet: v => (wetV = v === undefined || v === null || !isFinite(v) ? null : v),
     fineTile,
     attrNext,
+    pixNext,
+    surfaceNext,
     dabAt,
     reseed,
     take,

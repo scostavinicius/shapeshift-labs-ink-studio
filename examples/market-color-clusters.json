@@ -1,0 +1,10 @@
+{
+  "targets": [
+    {
+      "select": {"material": "paving"},
+      "minPixels": 9,
+      "grain": {"angle": 25, "strength": 0.8},
+      "protect": {"swatches": ["#243447", "#b6aaa0"]}
+    }
+  ]
+}

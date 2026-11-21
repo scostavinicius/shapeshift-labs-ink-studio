@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pixel Stamp Workshop · Ink Studio</title>
+<style>
+  :root { color-scheme: dark; background:#10161b; color:#e6eeea; font: 15px system-ui,sans-serif; --line:#354549; --accent:#b3d6bb; --quiet:#a7b9b7; }
+  * { box-sizing:border-box; }
+  main { width:min(1210px,100%); margin:auto; padding:32px clamp(16px,4vw,54px) 48px; }
+  header { display:flex; align-items:end; justify-content:space-between; gap:16px; margin-bottom:22px; border-bottom:1px solid var(--line); padding-bottom:20px; flex-wrap:wrap; }
+  h1 { margin:6px 0 0; font:400 clamp(34px,5vw,58px)/1 Georgia,serif; letter-spacing:-.035em; }
+  h2 { margin:0 0 10px; font:600 14px system-ui,sans-serif; }
+  .eyebrow { color:var(--accent); font:600 12px ui-monospace,monospace; text-transform:uppercase; letter-spacing:.14em; }
+  .layout { display:grid; grid-template-columns:minmax(0,1fr) 284px; gap:20px; }
+  .paint { min-width:0; background:#172126; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .canvas { display:grid; place-items:center; min-height:430px; padding:24px; background:#121a1d; }
+  .canvas-wrap { position:relative; max-width:100%; }
+  canvas { width:var(--canvas-width,auto); max-width:100%; height:auto; max-height:590px; image-rendering:pixelated; cursor:crosshair; touch-action:none;
+    display:block; border:1px solid #405455; background:repeating-conic-gradient(#203035 0% 25%,#26383a 0% 50%) 0/20px 20px; }
+  .pixel-grid { position:absolute; pointer-events:none; inset:1px;
+    background-image:linear-gradient(to right,#adc6c34a 1px,transparent 1px),linear-gradient(to bottom,#adc6c34a 1px,transparent 1px);
+    background-size:calc(100% / var(--cols)) calc(100% / var(--rows)); }
+  aside { display:grid; gap:15px; align-content:start; }
+  section { background:#1a262b; border:1px solid var(--line); border-radius:10px; padding:15px; }
+  .row { display:flex; flex-wrap:wrap; gap:7px; align-items:center; }
+  .side-label { display:flex; justify-content:space-between; align-items:center; gap:10px; margin-top:12px; }
+  .side-label span, .muted, output { color:var(--quiet); }
+  input, button, select { font:inherit; color:inherit; accent-color:#a8ccb0; }
+  input[type=number], button, select, .file-button { border:1px solid #476062; border-radius:5px; background:#253437; padding:6px 10px; }
+  button, .file-button { cursor:pointer; min-height:34px; }
+  button[aria-pressed=true], .primary { color:#17221e; background:#b3d6bb; border-color:#b3d6bb; font-weight:600; }
+  button:disabled { opacity:.48; cursor:default; }
+  button:focus-visible, input:focus-visible, select:focus-visible, .file-button:focus-within { outline:2px solid var(--accent); outline-offset:3px; }
+  input[type=range] { flex:1; min-width:0; }
+  input[type=number] { width:82px; }
+  input[type=color] { background:transparent; border:1px solid #476062; width:38px; height:32px; padding:2px; border-radius:5px; }
+  .file-button input { position:absolute; opacity:0; width:1px; }
+  .palette { display:flex; flex-wrap:wrap; gap:8px; }
+  .swatch { width:30px; height:30px; min-height:0; padding:0; background:var(--swatch); border:1px solid #97a9a6; }
+  .swatch[aria-pressed=true] { background:var(--swatch); outline:2px solid var(--accent); outline-offset:2px; }
+  .timeline { padding:13px 16px; border-top:1px solid var(--line); }
+  #current { min-width:94px; font:12px ui-monospace,monospace; }
+  #status { margin:12px 0 0; min-height:1.45em; font-size:13px; }
+  @media(max-width:780px) { .layout { grid-template-columns:1fr; } .canvas { min-height:300px; } aside { grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); } }
+</style>
+<main>
+  <header>
+    <div><div class="eyebrow">Ink Studio</div><h1>Pixel Stamp Workshop</h1></div>
+    <div class="row">
+      <label for="preset">Study</label>
+      <select id="preset">
+        <option value="stone">Stone and moss</option><option value="glint">Glint</option><option value="star">Star twinkle</option><option value="bubble">Bubble and pop</option>
+        <option value="library">Library clips</option>
+        <option value="body">Flowing ink</option><option value="eye">Red eye</option><option value="blank">Blank stamp</option>
+      </select>
+      <label id="size-label" hidden><span id="variant-label">Size</span> <select id="size"></select></label>
+      <label class="file-button">Open JSON<input type="file" id="import" accept=".json,application/json"></label>
+      <button id="export" class="primary">Save JSON</button>
+    </div>
+  </header>
+  <div class="layout">
+    <div class="paint">
+      <div class="canvas"><div class="canvas-wrap"><canvas aria-label="Indexed art pixel canvas" id="art"></canvas><div id="grid" class="pixel-grid" hidden></div></div></div>
+      <div class="row timeline">
+        <button id="play">Play</button><input id="scrub" type="range" aria-label="Frame" min="1" value="1" step="1">
+        <output id="current" for="scrub"></output>
+      </div>
+    </div>
+    <aside>
+      <section>
+        <h2>Draw</h2>
+        <div class="row" id="tools">
+          <button type="button" data-tool="pencil" aria-pressed="true">Pencil</button>
+          <button type="button" data-tool="brush" aria-pressed="false">Brush</button>
+          <button type="button" data-tool="erase" aria-pressed="false">Erase</button>
+          <button type="button" data-tool="polygon" aria-pressed="false">Shape</button>
+        </div>
+        <label class="side-label"><span>Pixel grid</span><input id="show-grid" type="checkbox" checked></label>
+        <label class="side-label"><span>Brush width</span><input id="width" type="number" min="1" max="24" value="2"></label>
+        <div class="row" style="margin-top:12px"><button id="finish-shape" disabled>Close shape</button><button id="undo" disabled>Undo</button></div>
+      </section>
+      <section>
+        <h2>Palette</h2>
+        <div class="palette" id="palette" aria-label="Paint swatches"></div>
+        <label class="side-label"><span id="swatch-label">Active swatch</span><input type="color" id="color"></label>
+        <button id="add-color">Add swatch</button>
+      </section>
+      <section>
+        <h2>Timing</h2>
+        <label class="side-label"><span>Hold, seconds</span><input id="duration" type="number" min="0.01" max="60" step="0.01"></label>
+        <label class="side-label"><span>Playback</span><select id="playback"><option value="loop">Loop</option><option value="once">Once</option></select></label>
+        <div class="row" style="margin-top:12px"><button id="duplicate">Duplicate</button><button id="remove">Remove</button></div>
+      </section>
+    </aside>
+  </div>
+  <p id="status" class="muted" role="status"></p>
+</main>
+<script src="../dist/ink-studio.browser.js"></script>
+<script src="pixel-stamp-studies.js"></script>
+<script type="module" src="pixel-stamp-editor.mjs"></script>
+</html>

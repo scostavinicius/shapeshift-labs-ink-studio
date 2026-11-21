@@ -1,0 +1,14 @@
+{
+  "format": "ink-studio/input-recording",
+  "version": 1,
+  "initial": {
+    "held": false
+  },
+  "events": [
+    {
+      "time": 0.25,
+      "channel": "held",
+      "value": true
+    }
+  ]
+}

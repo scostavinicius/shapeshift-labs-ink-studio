@@ -5,13 +5,68 @@
    the combined surface, and coloured from a material ramp using the
    surface normal, a cast shadow, ambient occlusion and nearby lamps.
    ------------------------------------------------------------------ */
-function makeSculpt(B) {
-  const { P, n3, fbm, disc, stick, fib, TAU, clamp, norm, R } = B;
-  const pos = [],
-    neg = [],
+function bakedShadowMarch(settings = {}) {
+  if (settings === null || typeof settings !== 'object' || Array.isArray(settings) ||
+      Object.keys(settings).some(key => key !== 'steps' && key !== 'distance'))
+    throw new TypeError('Shadow march accepts steps and distance');
+  const { steps = 20, distance = 16 } = settings;
+  if (!Number.isSafeInteger(steps) || steps < 0 || steps > 4096)
+    throw new RangeError('Shadow march steps must be an integer from 0 to 4096');
+  if (!Number.isFinite(distance) || distance < 0)
+    throw new RangeError('Shadow march distance must be finite and nonnegative');
+  return { steps, distance };
+}
+
+function makeSculpt(B, rest) {
+  const { P, n3, fbm, stick, fib, TAU, clamp, norm, R } = B;
+  // A flat field sample supplies no normal. Its bake has round coverage.
+  const disc = (x, y, z, axis, radius, thickness, color, alpha, animation) =>
+    axis[0] === 0 && axis[1] === 0 && axis[2] === 0
+      ? B.iso(x, y, z, radius, color, alpha, animation)
+      : B.disc(x, y, z, axis, radius, thickness, color, alpha, animation);
+  const detailBudget = B.detailBudget;
+  const controlledMaterials = new WeakMap();
+  function controlled(material) {
+    if (material?.controls === undefined && material?.top?.controls === undefined) return material;
+    if (!controlledMaterials.has(material))
+      controlledMaterials.set(material, MaterialControls.resolve(material, { palette: P, packed: true }));
+    return controlledMaterials.get(material);
+  }
+  const shadowArt = B.shadowArt;
+  const shadowTarget = (owner, mat) => ({
+    object: owner?.renderOwner, entity: owner?.renderOwner, ...owner?.renderTarget,
+    material: mat.materialId, surface: owner?.renderTarget?.surface ?? mat.surfaceId ?? mat.surface?.id
+  });
+  const receives = new WeakMap();
+  function receivesShadow(owner, material) {
+    if (!shadowArt?.receive) return true;
+    if (!owner) return ShadowArt.allows(shadowArt.receive, shadowTarget(owner, material));
+    if (!receives.has(owner)) receives.set(owner, new WeakMap());
+    const cached = receives.get(owner);
+    if (!cached.has(material)) cached.set(material, ShadowArt.allows(shadowArt.receive, shadowTarget(owner, material)));
+    return cached.get(material);
+  }
+  const brushCache = new WeakMap();
+  function brushSettings(value) {
+    if (!value || typeof value !== 'object') return SurfaceBrush.prepare(value);
+    if (!brushCache.has(value)) brushCache.set(value, SurfaceBrush.prepare(value));
+    return brushCache.get(value);
+  }
+  const pixelStyles = new WeakMap();
+  function materialStyle(value) {
+    if (value === undefined || value === false) return null;
+    if (!pixelStyles.has(value)) pixelStyles.set(value, MaterialPixelStyle.prepare(value));
+    return pixelStyles.get(value);
+  }
+  const budgetFor = detailBudget && (p => detailBudget.match({
+    object: p.renderOwner, entity: p.renderOwner, ...p.renderTarget
+  }));
+  const pos = rest?.positive || [],
+    neg = rest?.negative || [],
     ghosts = [],
     g3 = [0, 0, 0],
     EM = { em: true },
+    GLINT = { em: true, emission: false },
     VIEW0 = [0, 0.34, 0.94],
     FSEG = [0.38, 0.34, 0.28],
     FWID = [1, 0.75, 0.5],
@@ -22,9 +77,12 @@ function makeSculpt(B) {
   let gid = 1,
     own = null,
     ownNeg = null,
-    L = null;
+    L = null,
+    shadowMarch = bakedShadowMarch();
   const S = {
     res: 0.09,
+    adaptiveSampling: false,
+    keepRenderSdf: false,
     sun: norm([-0.5, 0.8, 0.45]),
     amb: 0.14,
     sky: 0.26,
@@ -32,12 +90,14 @@ function makeSculpt(B) {
     aoR: 0.14,
     aoK: 1.5,
     shK: 9,
-    shLen: 16,
+    shLen: shadowMarch.distance,
+    shSteps: shadowMarch.steps,
     wob: 0.05,
     fat: 0.46,
     /* inked detail: 0 is off. Set to 1 and every plain dab also carries a 4 by 4 picture of the surface under it (its pattern, the
        edge of a shadow, the edge of the next thing along), which the page looks up for each pixel when its Inked detail option is on */
     fine: typeof globalThis !== 'undefined' && globalThis.INK_FINE ? 1 : 0,
+    pixel: typeof globalThis !== 'undefined' && !!globalThis.INK_PIXEL,
     /* bounce light: null is off. { k, reach, rays, glow } and, after each bake, every dab is also lit by the lit things round it, in
        their colours (B.bounce). The page's Bounce light option sets it for a whole diorama so the two looks can be compared */
     bounce: typeof globalThis !== 'undefined' && globalThis.INK_BOUNCE ? {} : null,
@@ -69,23 +129,144 @@ function makeSculpt(B) {
   S.grp = k => ({ g: gid++, k }); // members of a group melt into each other over distance k
   S.pick = (ramp, t) => ramp[clamp(Math.floor(t * ramp.length), 0, ramp.length - 1)];
 
+  let hasOptionalProxy = false;
   function add(p, mat, o) {
     o = o || {};
-    p.mat = Array.isArray(mat) ? { r: mat } : mat || {};
+    p.mat = controlled(Array.isArray(mat) ? { r: mat } : mat || {});
     p.res = o.res || S.res;
     p.k = o.k || 0;
     p.g = o.g || gid++;
     p.bump = o.bump || null;
     p.tag = o.tag || null;
+    p.renderOwner = o.objectId ?? p.tag;
+    p.renderTarget = o.surfaceId !== undefined ? { surface: o.surfaceId, ...o.target } : o.target;
+    if (shadowArt?.cast) p.shadowCaster = ShadowArt.allows(shadowArt.cast, shadowTarget(p, p.mat));
+    if (budgetFor) p.detailBudget = budgetFor(p);
+    p.model = o.model;
     if (p.bump) p.br += p.bump[0];
     p.reach = o.reach || 0;
     p.whole = !!o.whole;
+    if (o.lowerBound !== undefined) {
+      if (typeof o.lowerBound !== 'function') throw new Error('A field lower bound must be a function');
+      p.lowerBound = o.lowerBound;
+    }
     if (o.born !== undefined) p.born = o.born;
     if (o.hold) return p; // held: made to be combined into another solid, not drawn by itself
     if (S.collide && (o.ghost || (p.mat.skip && !p.mat.solid))) return p; // when only what can be walked on matters, leave out what is drawn but not solid
     (o.ghost ? ghosts : o.neg ? neg : pos).push(p);
+    if (p.mat.omitFromProxy && !o.ghost && !o.neg) hasOptionalProxy = true;
     return p;
   }
+  // Capture a multi-piece recipe as operands for a sculpt operation.
+  S.takeSolids = build => {
+    const start = pos.length;
+    try {
+      build();
+      return pos.slice(start);
+    } finally {
+      pos.length = start;
+    }
+  };
+  S.materialAt = (material, point, normal) => {
+    if (!material) return material;
+    const selected = material.materialAt?.(...point, ...normal) ?? material;
+    const state = selected.surfaceState, hit = state?.locate(point, normal);
+    return hit ? state.apply(selected, hit, point, normal) : selected;
+  };
+  S.mapSurfaceState = (material, inverse, pullNormal) => {
+    const state = material?.surfaceState;
+    return state ? { ...material, surfaceState: { ...state, locate(point, normal) {
+      const rest = inverse(point);
+      return state.locate(rest, pullNormal ? pullNormal(normal, rest, point) : normal);
+    } } } : material;
+  };
+  // Transform the geometry registered by one recipe, or its held boolean operand.
+  S.transformSolids = ({ point, inverse, direction, scale }, build) => {
+    const lists = [pos, neg, ghosts], starts = lists.map(list => list.length);
+    const result = build();
+    const solids = lists.flatMap((list, i) => list.slice(starts[i]));
+    if (!solids.length && result?.sd) solids.push(result);
+    for (const solid of solids) {
+      const { sd, sample, lowerBound, along, analytic, geometryBounds, mat } = solid;
+      solid.bc = point(solid.bc);
+      if (solid.br < 1e8) solid.br *= scale;
+      solid.reach *= scale;
+      if (solid.bump) solid.bump = [solid.bump[0] * scale, solid.bump[1]];
+      solid.sd = (x, y, z) => scale * sd(...inverse([x, y, z]));
+      solid.sample = function (visit) {
+        const res = this.res;
+        this.res = res / scale;
+        try {
+          sample.call(this, (x, y, z) => visit(...point([x, y, z])));
+        } finally {
+          this.res = res;
+        }
+      };
+      if (lowerBound) solid.lowerBound = (x, y, z, limit) => scale * lowerBound(...inverse([x, y, z]), limit / scale);
+      if (along) solid.along = (x, y, z) => along(...inverse([x, y, z]));
+      if (mat.rf) solid.mat = { ...mat, rf: (x, y, z) => mat.rf(...inverse([x, y, z])) };
+      if (mat.surfaceState) {
+        const axes = [[1, 0, 0], [0, 1, 0], [0, 0, 1]].map(direction);
+        solid.mat = S.mapSurfaceState(solid.mat, inverse,
+          normal => axes.map(axis => axis[0] * normal[0] + axis[1] * normal[1] + axis[2] * normal[2]));
+      }
+      if (analytic) {
+        const axes = analytic.frame ?? [[1, 0, 0], [0, 1, 0], [0, 0, 1]];
+        solid.analytic = { ...analytic, center: point(analytic.center), frame: axes.map(direction),
+          ...(analytic.radii ? { radii: analytic.radii.map(r => r * scale) } :
+            { major: analytic.major * scale, minor: analytic.minor * scale }) };
+      }
+      if (geometryBounds) {
+        const { min, max } = geometryBounds;
+        const corners = [min[0], max[0]].flatMap(x =>
+          [min[1], max[1]].flatMap(y => [min[2], max[2]].map(z => point([x, y, z]))));
+        solid.geometryBounds = {
+          min: min.map((_, i) => Math.min(...corners.map(p => p[i]))),
+          max: max.map((_, i) => Math.max(...corners.map(p => p[i])))
+        };
+      }
+    }
+    if (result?.sockets) {
+      result.sockets = Object.fromEntries(Object.entries(result.sockets).map(([name, socket]) =>
+        [name, { ...socket, p: point(socket.p), dir: direction(socket.dir) }]));
+    }
+    if (result && !result.sd && solids.length) {
+      const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+      for (const { bc, br } of solids) for (let axis = 0; axis < 3; axis++) {
+        min[axis] = Math.min(min[axis], bc[axis] - br);
+        max[axis] = Math.max(max[axis], bc[axis] + br);
+      }
+      result.geometryBounds = { min, max };
+    }
+    return result;
+  };
+  // A measurement pass records per-axis extents without changing sampling,
+  // grid bounds or shading for an ordinary sculpt.
+  const measureBounds = rest?.measureBounds === true;
+  function localBounds(p, center, half, frame, ellipsoid) {
+    if (!measureBounds) return;
+    const extent = frame ? half.map((_, axis) => {
+      const u = half[0] * frame[0][axis], v = half[1] * frame[1][axis], w = half[2] * frame[2][axis];
+      return ellipsoid ? Math.hypot(u, v, w) : Math.abs(u) + Math.abs(v) + Math.abs(w);
+    }) : half;
+    p.geometryBounds = {
+      min: center.map((v, i) => v - extent[i]),
+      max: center.map((v, i) => v + extent[i])
+    };
+  }
+  if (measureBounds) S.geometryBounds = () => {
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (const p of pos) {
+      if (!Number.isFinite(p.br) || p.br > 1e8) throw Error('Geometry measurement needs finite solids');
+      const bounds = p.geometryBounds, blend = Math.max(0, p.k);
+      const margin = blend + (bounds ? Math.max(0, p.bump?.[0] || 0) : p.br);
+      for (let i = 0; i < 3; i++) {
+        min[i] = Math.min(min[i], (bounds ? bounds.min[i] : p.bc[i]) - margin);
+        max[i] = Math.max(max[i], (bounds ? bounds.max[i] : p.bc[i]) + margin);
+      }
+    }
+    return pos.length ? { min, max } : null;
+  };
   // a solid defined in its own space: centred on c, optionally turned by the frame o.ax
   function local(c, br, sd0, sm0, mat, o) {
     const ax = o && o.ax,
@@ -128,7 +309,7 @@ function makeSculpt(B) {
       ry = r.length ? r[1] : r,
       rz = r.length ? r[2] : r,
       sph = rx === ry && ry === rz;
-    return local(
+    const solid = local(
       c,
       Math.max(rx, ry, rz),
       (x, y, z) => {
@@ -153,12 +334,15 @@ function makeSculpt(B) {
       mat,
       o
     );
+    if (measureBounds) localBounds(solid, c, [rx, ry, rz], o?.ax, true);
+    solid.analytic = { kind: 'ellipsoid', center: c, radii: [rx, ry, rz], frame: o?.ax };
+    return solid;
   };
   // box: c is the centre, h the half-sizes, o.rd rounds the edges
   S.box = (c, h, mat, o) => {
     const rd = (o && o.rd) || 0,
       hs = h;
-    return local(
+    const solid = local(
       c,
       Math.hypot(h[0], h[1], h[2]),
       (x, y, z) => {
@@ -187,15 +371,21 @@ function makeSculpt(B) {
       mat,
       o
     );
+    if (measureBounds) localBounds(solid, c, h, o?.ax);
+    return solid;
   };
   // turned solid: c is the centre of the base, h the height, rf the radius (a number, [bottom, top], or a function of 0..1)
   S.lathe = (c, h, rf, mat, o) => {
     const fn = typeof rf === 'function' ? rf : rf.length ? t => rf[0] + (rf[1] - rf[0]) * t : () => rf;
     let rm = 0;
     for (let i = 0; i <= 16; i++) rm = Math.max(rm, fn(i / 16));
+    if (o?.maxRadius !== undefined) {
+      if (!Number.isFinite(o.maxRadius) || o.maxRadius < 0) throw Error('Lathe radius bound must be finite and nonnegative');
+      rm = Math.max(rm, o.maxRadius);
+    }
     const V = o && o.ax ? o.ax[1] : [0, 1, 0],
       cc = [c[0] + (V[0] * h) / 2, c[1] + (V[1] * h) / 2, c[2] + (V[2] * h) / 2];
-    return local(
+    const solid = local(
       cc,
       Math.hypot(rm, h / 2),
       (x, y, z) => {
@@ -226,10 +416,12 @@ function makeSculpt(B) {
       mat,
       o
     );
+    if (measureBounds && (typeof rf !== 'function' || o?.maxRadius !== undefined)) localBounds(solid, cc, [rm, h / 2, rm], o?.ax);
+    return solid;
   };
   // ring lying flat (turn it with o.ax)
-  S.torus = (c, R, r, mat, o) =>
-    local(
+  S.torus = (c, R, r, mat, o) => {
+    const solid = local(
       c,
       R + r,
       (x, y, z) => Math.hypot(Math.hypot(x, z) - R, y) - r,
@@ -247,6 +439,9 @@ function makeSculpt(B) {
       mat,
       o
     );
+    solid.analytic = { kind: 'torus', center: c, major: R, minor: r, frame: o?.ax };
+    return solid;
+  };
   // limb or branch through a list of points; radius goes r0 -> r1, or is a function of 0..1
   S.tube = (pts, r0, r1, mat, o) => {
     const rf = typeof r0 === 'function' ? r0 : t => r0 + (r1 - r0) * t,
@@ -361,6 +556,15 @@ function makeSculpt(B) {
         sphere(pts[pts.length - 1], rf(1));
       }
     };
+    if (measureBounds && segs.length) {
+      const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+      for (const segment of segs) for (let i = 0; i < 3; i++) {
+        const a = segment[i], b = a + segment[i + 3];
+        min[i] = Math.min(min[i], a - segment[7], b - segment[8]);
+        max[i] = Math.max(max[i], a + segment[7], b + segment[8]);
+      }
+      p.geometryBounds = { min, max };
+    }
     return add(p, mat, o);
   };
   // the ground: flat at o.y, or a height function o.h(x, z); only a ragged disc of it (o.rad, o.zs squashes it front to back) is drawn
@@ -473,7 +677,7 @@ function makeSculpt(B) {
           }
     }
   }
-  function field(x, y, z) {
+  function field(x, y, z, exclude, proxyOnly, castOnly) {
     let d = 1e9,
       gd = 1e9,
       cur = -1,
@@ -488,6 +692,7 @@ function makeSculpt(B) {
       list = grid[(ix * gdim[1] + iy) * gdim[2] + iz] || always;
     for (let i = 0; i < list.length; i++) {
       const p = list[i];
+      if (p === exclude || proxyOnly && p.mat.omitFromProxy || castOnly && p.shadowCaster === false) continue;
       if (p.g !== cur) {
         if (gd < d) {
           d = gd;
@@ -505,7 +710,13 @@ function makeSculpt(B) {
           dz = z - p.bc[2];
         if (m <= 0 || dx * dx + dy * dy + dz * dz > m * m) continue;
       }
+      if (p.lowerBound) {
+        const limit = Math.min(d,gd) + gk + (p.bump ? p.bump[0] : 0) + 1e-9;
+        if (p.lowerBound(x,y,z,limit) > limit) continue;
+      }
       const pd = psd(p, x, y, z);
+      // A distance function may be undefined outside its solid. Keep that sample out of the smooth union.
+      if (Number.isNaN(pd)) continue;
       if (gk > 0 && gd < 1e8) {
         const h = Math.max(gk - Math.abs(gd - pd), 0) / gk;
         if (pd < gd) go = p;
@@ -538,8 +749,7 @@ function makeSculpt(B) {
     return d;
   }
   let gm = 1; // how steep the field is at the last point: roughness makes it steeper than a true distance
-  function grad(x, y, z, d) {
-    const e = 0.012;
+  function grad(x, y, z, d, e = 0.012) {
     g3[0] = field(x + e, y, z) - d;
     g3[1] = field(x, y + e, z) - d;
     g3[2] = field(x, y, z + e) - d;
@@ -581,6 +791,7 @@ function makeSculpt(B) {
        m.root  = 0.3                  darker by that much toward the root of a limb (along 0), lighter toward its tip */
   const A = { curv: 0, cav: 0, hollow: 0, up: 0, rel: 0, along: 0, y: 0, own: null },
     ATTR = [];
+  let stippleCandidates = null, stippleProfile = null, stippleProbes=0;
   let curP = null,
     FLO = null;
   S.attr = (name, fn) => ATTR.push([name, fn]);
@@ -676,20 +887,59 @@ function makeSculpt(B) {
     RR[1] = t;
     return RR;
   }
+  const bevelMaterials = new Map(), bevelPrimitives = new WeakMap();
+  let bevelSculpt;
+  function bevelDistance(settings, owner) {
+    if (!bevelMaterials.has(settings)) bevelMaterials.set(settings, SurfaceLook.needsDistance(settings));
+    if (!bevelMaterials.get(settings)) return undefined;
+    if (owner?.bevelDistance) return owner.bevelDistance;
+    if (owner && (owner.whole || ghosts.includes(owner))) {
+      if (!bevelPrimitives.has(owner)) bevelPrimitives.set(owner, (x, y, z) => psd(owner, x, y, z));
+      return bevelPrimitives.get(owner);
+    }
+    if (!bevelSculpt && pos.length) {
+      const sculpt = makeSculpt(B, { positive: pos.slice(), negative: neg.slice() });
+      sculpt.ready();
+      bevelSculpt = sculpt.sdf;
+    }
+    return bevelSculpt;
+  }
+  function withBrushNormals(run) {
+    const saved = [g3[0], g3[1], g3[2], gm, own, ownNeg];
+    try {
+      return run((x, y, z) => {
+        grad(x, y, z, field(x, y, z));
+        return [g3[0], g3[1], g3[2]];
+      });
+    } finally {
+      [g3[0], g3[1], g3[2], gm, own, ownNeg] = saved;
+    }
+  }
   const RR = [null, 0];
-  function light(m, res, x, y, z, nx, ny, nz, full) {
-    if (S.clip && !S.clip(x, y, z)) return;
+  function light(m, res, x, y, z, nx, ny, nz, full, selected, fine, coarse = false) {
+    if (!coarse && S.clip && !S.clip(x, y, z)) return;
     /* born: when this dab appears (growth you can watch). A material's or a solid's o.born: seconds, or (x, y, z, along) -> seconds */
     const bn = m.born !== undefined ? m.born : curP && curP.born !== undefined ? curP.born : null;
-    B.born(
+    if (!coarse) B.born(
       bn === null ? null : typeof bn === 'function' ? bn(x, y, z, curP && curP.along ? curP.along(x, y, z) : 0) : bn
     );
     /* wet: when the rain has soaked this dab, so that it darkens from then on. m.wet, or S.wet for everything: seconds, or
        (x, y, z, ny) -> seconds (null: it stays dry). S.open(x, y, z) says how open to the sky a place is, for deciding */
     const wt = m.wet !== undefined ? m.wet : S.wet;
-    B.wet(wt === undefined || wt === null ? null : typeof wt === 'function' ? wt(x, y, z, ny) : wt);
+    if (!coarse) B.wet(wt === undefined || wt === null ? null : typeof wt === 'function' ? wt(x, y, z, ny) : wt);
     let AA = null;
-    if (!PRB) LLS.length = 0;
+    const probe = PRB || coarse, receive = receivesShadow(curP, m);
+    let hadShadow = false;
+    if (!probe) LLS.length = 0;
+    /* form: the shape this is lit as, not the one it has (a crown lit as the few balls it is made of, a rock as its flat faces):
+       m.form(x, y, z, nx, ny, nz) -> [nx, ny, nz], or nothing to keep its own */
+    const gx = nx,
+      gy = ny,
+      gz = nz;
+    if (m.form) {
+      const f = m.form(x, y, z, nx, ny, nz);
+      if (f) ((nx = f[0]), (ny = f[1]), (nz = f[2]));
+    }
     let ramp = m.rf ? m.rf(x, y, z) || m.r : m.r,
       t,
       ao = 1,
@@ -701,7 +951,7 @@ function makeSculpt(B) {
     else {
       let sun = nx * L[0] + ny * L[1] + nz * L[2];
       if (full) {
-        if (PRB) ao = LAO;
+        if (probe) ao = LAO;
         else {
           let occ = 0,
             w = 1;
@@ -715,22 +965,25 @@ function makeSculpt(B) {
           LSH = -1;
         }
         if (sun > 0 && S.sunK > 0 && m.leaf) sun *= 0.8;
-        else if (sun > 0 && S.sunK > 0) {
+        else if (receive && sun > 0 && S.sunK > 0) {
           let tt = 0.07,
             sh = 1;
-          if (PRB && (LSH === 0 || LSH === 1)) sh = LSH;
+          if (coarse || PRB && (LSH === 0 || LSH === 1)) sh = LSH;
           else
-            for (let i = 0; i < 20 && tt < S.shLen; i++) {
-              const h = field(x + nx * 0.05 + L[0] * tt, y + ny * 0.05 + L[1] * tt, z + nz * 0.05 + L[2] * tt);
+            for (let i = 0; i < shadowMarch.steps && tt < shadowMarch.distance; i++) {
+              const h = shadowDistance(x + nx * 0.05 + L[0] * tt, y + ny * 0.05 + L[1] * tt, z + nz * 0.05 + L[2] * tt);
               if (h < 0.004) {
                 sh = 0;
                 break;
               }
-              const q = (S.shK * h) / tt;
-              if (q < sh) sh = q;
+              // The field's outside distance is capped. It represents empty
+              // space, which should not create a distant penumbra.
+              if (!shadowArt || h < MARG) sh = Math.min(sh, (S.shK * h) / tt);
               tt += h < 0.05 ? 0.05 : h > 0.9 ? 0.9 : h;
             }
-          if (!PRB) LSH = sh;
+          if (!probe) LSH = sh;
+          hadShadow = sh < 1;
+          sh = ShadowArt.transfer(shadowArt, sh, coarse);
           sun *= sh;
           shd = 1 - sh;
         }
@@ -749,13 +1002,13 @@ function makeSculpt(B) {
         const nd = (nx * lx + ny * ly + nz * lz) / (dist || 1),
           fa = 1 - dist / li.r;
         let c = fa * fa * li.s * (0.2 + 0.8 * Math.max(nd, 0));
-        if (full && li.sh && c > 0.03 && nd > 0) {
-          if (PRB && LLS[i] !== undefined) c *= LLS[i];
+        if (full && receive && li.sh && c > 0.03 && nd > 0) {
+          let k2 = 1;
+          if (probe && LLS[i] !== undefined) k2 = LLS[i];
           else {
-            let tt = 0.08,
-              k2 = 1;
-            for (let k = 0; k < 20 && tt < dist - 0.12; k++) {
-              const h = field(
+            let tt = 0.08;
+            for (let k = 0; k < shadowMarch.steps && tt < dist - 0.12; k++) {
+              const h = shadowDistance(
                 x + nx * 0.05 + (lx / dist) * tt,
                 y + ny * 0.05 + (ly / dist) * tt,
                 z + nz * 0.05 + (lz / dist) * tt
@@ -766,10 +1019,11 @@ function makeSculpt(B) {
               }
               tt += h < 0.06 ? 0.06 : h;
             }
-            c *= k2;
-            if (!PRB) LLS[i] = k2;
+            if (!probe) LLS[i] = k2;
           }
-        } else if (!PRB) LLS[i] = undefined;
+          hadShadow ||= k2 < 1;
+          c *= ShadowArt.transfer(shadowArt, k2, coarse);
+        } else if (!probe) LLS[i] = undefined;
         pl += c * (0.4 + 0.6 * ao);
         if (c > lbc) {
           lbc = c;
@@ -874,10 +1128,14 @@ function makeSculpt(B) {
       ramp = r[0];
       t = r[1];
     }
-    if (AA && S.keepAttrs) B.attrNext(AA.curv * res, AA.cav, AA.up, AA.along);
-    let ci = ramp[clamp(Math.floor(t * ramp.length), 0, ramp.length - 1)],
+    if (!coarse && AA && S.keepAttrs) B.attrNext(AA.curv * res, AA.cav, AA.up, AA.along);
+    const style = materialStyle(m.pixelStyle ?? m0.pixelStyle);
+    if (style?.highlight && !m.em && !m.glass)
+      t = MaterialPixelStyle.lighting(t, style.highlight, nx, ny, nz, L, S.view || VIEW0);
+    const shade = style && (style.mode || style.steps) ? MaterialPixelStyle.rampPair(t, style.steps, ramp) : null;
+    let ci = shade ? shade[shade[2] < .5 ? 0 : 1] : ramp[clamp(Math.floor(t * ramp.length), 0, ramp.length - 1)],
       flat = false;
-    if (RLOG && !PRB)
+    if (RLOG && !probe)
       RLOG.set(ramp, (RLOG.get(ramp) || 0) + 1); /* which ramps a diorama is shaded on, for `ink-studio ramps` */
     if (m.tex) {
       const q = m.tex(x, y, z, ny, t, nx, nz, AA);
@@ -889,8 +1147,9 @@ function makeSculpt(B) {
     }
     /* a wet or polished thing has a small hard highlight where it mirrors the sun to the eye. The eye is taken to be at S.view (set it to the
        way the camera looks from); gloss: { c (palette index), at (how small: 0.95), c2 and at2 (a dimmer ring round it) } */
+    const surface = m.surface === undefined ? m0.surface : m.surface;
     let glint = false;
-    if (m.gloss && !m.em && !flat) {
+    if (m.gloss && !style?.highlight && !surface && !m.em && !flat) {
       const g = m.gloss,
         vw = S.view || VIEW0,
         hx = L[0] + vw[0],
@@ -905,9 +1164,13 @@ function makeSculpt(B) {
         flat = true;
       }
     }
+    if (coarse) return { ci, ramp: flat && !m.pat ? undefined : ramp, t, noLine: m0.line === false || m.line === false,
+      visibility: 1 - shd };
     if (PRB) return ci;
+    const bevel = surface ? bevelDistance(surface, curP) : undefined;
+    selected?.(m, style, style?.mode && !flat && !m.glass && shade?.[0] !== shade?.[1] ? shade : null);
     const fl =
-      FLO || m.fl || (m.em || glint ? EM : (m.leaf || m.blade) && !m.still ? (m.leaf ? WINDL : WINDG) : undefined);
+      FLO || m.motionAt?.(x, y, z) || m.fl || (m.em ? EM : glint ? GLINT : (m.leaf || m.blade) && !m.still ? (m.leaf ? WINDL : WINDG) : undefined);
     if (m.leaf && !flat) {
       const lf = m.leaf,
         a = R() * TAU,
@@ -937,6 +1200,7 @@ function makeSculpt(B) {
           ramp[
             clamp(Math.floor(t * ramp.length + (R() - 0.5) * (lf.j === undefined ? 1.3 : lf.j)), 0, ramp.length - 1)
           ];
+        if (surface) B.surfaceNext(surface, nx, ny, nz, L, 1 - shd, [tx / tl, ty / tl, tz / tl], bevel);
         stick(
           x + nx * 0.04,
           y + ny * 0.04,
@@ -959,6 +1223,7 @@ function makeSculpt(B) {
       ci = tones[clamp(Math.floor(li * tones.length + (R() - 0.5) * 1.1), 0, tones.length - 1)];
       const size = (R() < 0.32 ? 0.12 + R() * 0.1 : 0.06 + R() * 0.065) * 2.3 * clamp(res * 5.2, 0.45, 1.1),
         out = 0.04 + R() * size * 0.6;
+      if (surface) B.surfaceNext(surface, nx, ny, nz, L, 1 - shd, [tx / tl, ty / tl, tz / tl], bevel);
       stick(
         x + nx * out,
         y + ny * out,
@@ -985,6 +1250,7 @@ function makeSculpt(B) {
         lo = ramp[Math.max(0, k - 1)],
         mid = ramp[k],
         hi = ramp[Math.min(n - 1, k + 1)];
+      if (surface) B.surfaceNext(surface, nx, ny, nz, L, 1 - shd, undefined, bevel);
       disc(x, y, z, [nx, ny, nz], res * S.fat, res * 0.3, P[lo], 3, m.fl);
       if (wear > 0.7 && R() < (wear - 0.7) * 6) return;
       const h = (bl.h || 0.15) * 2.1 * (0.45 + 1.1 * tall) * (0.55 + 0.75 * R()),
@@ -993,6 +1259,7 @@ function makeSculpt(B) {
         lz = (R() - 0.5) * 0.5,
         ll = Math.hypot(lx, 1, lz),
         ax = [lx / ll, 1 / ll, lz / ll];
+      if (surface) B.surfaceNext(surface, nx, ny, nz, L, 1 - shd, ax, bevel);
       stick(
         x + ax[0] * h * 0.3,
         y + ax[1] * h * 0.3,
@@ -1004,6 +1271,7 @@ function makeSculpt(B) {
         3,
         fl
       );
+      if (surface) B.surfaceNext(surface, nx, ny, nz, L, 1 - shd, ax, bevel);
       stick(
         x + ax[0] * h * 0.72,
         y + ax[1] * h * 0.72,
@@ -1046,6 +1314,7 @@ function makeSculpt(B) {
       fy -= ny * fn;
       fz -= nz * fn;
       const fm = Math.hypot(fx, fy, fz) || 1;
+      if (surface) B.surfaceNext(surface, nx, ny, nz, L, 1 - shd, undefined, bevel);
       disc(x, y, z, [nx, ny, nz], res * S.fat, res * 0.3, P[ramp[Math.max(0, k - 2)]], 3, m.fl);
       for (let hi = 0; hi < hairs; hi++) {
         const jx = R() - 0.5,
@@ -1074,6 +1343,7 @@ function makeSculpt(B) {
                 ? rr2[clamp(Math.floor(rim * rr2.length), 0, rr2.length - 1)]
                 : ramp[Math.min(n - 1, k + sg + (rim > 0.75 ? 1 : 0))];
           }
+          if (surface) B.surfaceNext(surface, nx, ny, nz, L, 1 - shd, ax, bevel);
           stick(
             qx + ax[0] * sl * 0.5,
             qy + ax[1] * sl * 0.5,
@@ -1092,12 +1362,40 @@ function makeSculpt(B) {
       }
       return;
     }
-    if (S.fine && !m.glass && (m.a === undefined || m.a >= 1 || glint))
+    const alternate = shadowArt?.small && hadShadow && !m.glass && !flat ?
+      light(m0, res, x, y, z, gx, gy, gz, full, undefined, undefined, true) : null;
+    if ((fine ?? (S.fine || m0.fine)) && !m.glass && (m.a === undefined || m.a >= 1 || glint))
       fineTile(m0, res, x, y, z, nx, ny, nz, full, ci);
     if (S.bounce && !flat && !m.em)
       ((BTAP.ramp[B.count()] = ramp), (BTAP.t[B.count()] = t)); /* kept for the bounce pass */
     if (S.tap) S.tap(ramp, t, nx, ny, nz, flat || !!m.em, ci); // whoever is listening learns how this splat was lit (it is the next one made)
+    /* colour worked out per pixel (S.pixel, for a diorama whose look.pixel is on): the dab says which ramp, how lit, which pattern and
+       which way its surface truly faces; each pixel is then coloured from those where it lands. A colour a material chose itself
+       (a texture with no pattern behind it), a glowing thing, glass and a glint keep the dab's own colour */
+    if (S.pixel && !m.optical && !surface?.opacity && !m.em && !m.glass && !glint && (m.a === undefined || m.a >= 1) && (!flat || m.pat))
+      B.pixNext(
+        ramp,
+        t,
+        m.pat || null,
+        gx,
+        gy,
+        gz,
+        m0.form || m.form ? nx : undefined,
+        ny,
+        nz,
+        m0.line === false || m.line === false
+      );
     // (a: how solid it is, 1 and over is solid, under 1 lets what is behind show through; glass also bends what is behind it)
+    if (surface) B.surfaceNext(surface, nx, ny, nz, L, 1 - shd, undefined, bevel);
+    if (alternate) B.shadowNext(ci, alternate);
+    const brushDefinition = m.brush === undefined ? (m0.brush ?? S.brush) : m.brush;
+    if (brushDefinition !== undefined && brushDefinition !== false && !m.glass && Math.hypot(nx, ny, nz) > 1e-8) {
+      const brush = brushSettings(brushDefinition);
+      const frame = withBrushNormals(normalAt =>
+        SurfaceBrush.direction(brush, [x, y, z], [nx, ny, nz], { spacing: res, normalAt }));
+      SurfaceBrush.stamp(B, frame, P[ci], brush, { opacity: m.a === undefined || glint ? 3 : m.a, animation: fl });
+      return;
+    }
     if (S.follow && !m.glass) {
       formDab(res, x, y, z, nx, ny, nz, P[ci], m.a === undefined || glint ? 3 : m.a, fl);
       return;
@@ -1313,8 +1611,8 @@ function makeSculpt(B) {
   // ---------------- baking ----------------
   // the first surface below (x, y0, z): 1e9 if that point is inside something, -1e9 if nothing is found
   const negAll = []; // carved shapes are kept after baking so openings (arches, doorways) stay open to anything walking the scene
-  const fieldAll = (x, y, z) => {
-    let d = field(x, y, z);
+  const fieldAll = (x, y, z, proxyOnly, castOnly) => {
+    let d = field(x, y, z, undefined, proxyOnly, castOnly);
     for (let i = 0; i < negAll.length; i++) {
       const p = negAll[i],
         dx = x - p.bc[0],
@@ -1323,13 +1621,76 @@ function makeSculpt(B) {
         m = p.br + 0.5;
       if (dx * dx + dy * dy + dz * dz > m * m) continue;
       const nd = -psd(p, x, y, z);
-      if (nd > d) d = nd;
+      if (nd > d) {
+        d = nd;
+        ownNeg = p;
+      }
     }
     return d;
   };
-  S.sdf = fieldAll;
+  S.sdf = (x, y, z) => fieldAll(x, y, z);
+  S.shadowSdf = shadowArt?.cast ? (x, y, z) => fieldAll(x, y, z, false, true) : S.sdf;
+  if (shadowArt?.cast) S.sdf.forShadow = S.shadowSdf;
+  const shadowDistance = shadowArt?.cast ? S.shadowSdf : field;
+  S.proxySdf = () => hasOptionalProxy ? (x, y, z) => fieldAll(x, y, z, true) : S.sdf;
+  /* Material and part ownership at a rest-pose surface. The distance field
+     is retained even when the renderer samples it at a different resolution. */
+  S.surfaceAt = (x, y, z, provenance = false) => {
+    const distance = fieldAll(x, y, z), cut = ownNeg;
+    const source = cut?.mat?.r ? cut : own;
+    return { distance, material: source?.mat, tag: cut?.tag || own?.tag || null,
+      ...(provenance && { owner: source?.renderOwner, target: source?.renderTarget }) };
+  };
   /* (before a bake the field does not yet know where its solids are: S.ready() tells it, for whoever needs to ask early) */
   S.ready = buildGrid;
+  /* Conservative rest bounds for the still-unbaked finite solids. */
+  S.modelBounds = padding => {
+    if (!pos.length && !neg.length) throw new Error('Model export needs an unbaked sculpt');
+    const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+    for (const p of pos) {
+      if (!Number.isFinite(p.br) || p.br > 1e8) throw new Error('Model export needs finite solids; put the ground in a separate render pass');
+      const r = p.br + Math.max(0, p.k) + padding;
+      for (let a = 0; a < 3; a++) {
+        min[a] = Math.min(min[a], p.bc[a] - r);
+        max[a] = Math.max(max[a], p.bc[a] + r);
+      }
+    }
+    if (!pos.length) throw new Error('Model export needs at least one positive solid');
+    return { min, max };
+  };
+  /* Detach the rest field from the splat bake, which clears its live solids. */
+  S.modelSource = () => {
+    const parts = [], positive = [];
+    for (const solid of pos) {
+      if ((solid.model === 'separate' || solid.model?.separate) && !solid.analytic)
+        throw new Error('A separate sculpt model requires an analytic primitive');
+      if (solid.analytic && (solid.model === 'separate' || solid.model?.separate)) parts.push(solid);
+      else positive.push(solid);
+    }
+    for (const solid of ghosts)
+      if (solid.analytic && (solid.model === 'separate' || solid.model?.separate)) parts.push(solid);
+    if (!positive.length && !parts.length) throw new Error('Model export needs an unbaked sculpt');
+    const field = positive.length ? makeSculpt(B, { positive, negative: [...neg, ...negAll] }) : null;
+    if (field) field.ready();
+    return { field, parts, noise: n3 };
+  };
+  S.renderSurface = (x,y,z) => {
+    fieldAll(x,y,z);
+    return {body:own, owner:ownNeg?.mat?.r ? ownNeg : own};
+  };
+  let renderSdf;
+  function captureRenderSdf() {
+    const positive = pos.filter(p => !p.whole && Number.isFinite(p.br) && p.br < 1e8 && SdfAssist.opaque(p.mat));
+    if (!positive.length) return null;
+    const field = makeSculpt(B,{positive,negative:neg.slice()});
+    const bounds = field.modelBounds(.05);
+    field.ready();
+    const rows = new Map();
+    const owners = new Set([...positive,...neg.filter(p=>SdfAssist.opaque(p.mat))]);
+    const {pre,clip} = S;
+    const accepts = (pre || clip) && ((x,y,z)=>(!pre || pre(x,y,z)) && (!clip || clip(x,y,z)));
+    return { bounds, distance:field.sdf, locate:field.renderSurface, rows, owners, accepts };
+  }
   S.solidCount = () => pos.length + neg.length;
   S.add = add;
   S.psd = psd; // the finished field (distance to the nearest surface), for whatever comes after the bake
@@ -1417,120 +1778,383 @@ function makeSculpt(B) {
     }
     return open / dirs.length;
   };
+  const stagedAlbedo = surface => Array.isArray(surface?.renderStages) && surface.renderStages.some(rule => rule.stage === 'material') ||
+    surface?.layers && Object.values(surface.layers).some(SurfaceLook.basePaint);
+  const unnamedTarget = {}, surfaceTargets = new WeakMap();
+  function renderTarget(owner, surfaceId) {
+    const target = owner?.renderTarget;
+    if (!surfaceId || target?.surface !== undefined) return target;
+    const source = target ?? unnamedTarget;
+    if (!surfaceTargets.has(source)) surfaceTargets.set(source, new Map());
+    const entries = surfaceTargets.get(source);
+    if (!entries.has(surfaceId)) entries.set(surfaceId, { ...target, surface: surfaceId });
+    return entries.get(surfaceId);
+  }
+
+  function shadeOwned(owner, material, ...sample) {
+    if (material.materialAt || material.surfaceState)
+      material = S.materialAt(material, sample.slice(1, 4), sample.slice(4, 7));
+    material = controlled(material);
+    const preview = typeof globalThis !== 'undefined' && globalThis.INK_LOOK_ALBEDO;
+    const capture = B.describeAlbedo && (preview || S.captureAlbedo || stagedAlbedo(material.surface) || stagedAlbedo(material.top?.surface));
+    const fine = owner?.detailBudget?.fine;
+    const collectFootprint = B.describeFootprint && (material.footprint !== undefined || material.top?.footprint !== undefined);
+    const collectEngraving=material.engraving!==undefined||material.top?.engraving!==undefined||S.engraving!==undefined;
+    const collectPrint=material.screenPrint!==undefined||material.top?.screenPrint!==undefined||S.screenPrint!==undefined;
+    const collectStyle = B.describePixelStyle && (material.pixelStyle || material.top?.pixelStyle);
+    if (!renderSdf && !capture && !B.describeSplats && !collectStyle && !collectFootprint && !collectEngraving && !collectPrint && !material.optical && !material.top?.optical) return light(material, ...sample, undefined, fine);
+    const first = B.count();
+    let effective = material, style, pair;
+    if (material.top || collectStyle || collectFootprint || collectEngraving || collectPrint) light(material, ...sample, (used, settings, shades) => {
+      effective = used;
+      style = settings;
+      pair = shades;
+    }, fine);
+    else light(material, ...sample, undefined, fine);
+    const end = B.count();
+    if (first < end && renderSdf?.owners.has(owner) && SdfAssist.opaque(effective)) {
+      if (!renderSdf.rows.has(owner)) renderSdf.rows.set(owner,[]);
+      const ranges = renderSdf.rows.get(owner);
+      if (ranges.at(-1)?.[1] === first) ranges.at(-1)[1] = end;
+      else ranges.push([first,end]);
+    }
+    if (effective.footprint !== undefined) B.describeFootprint?.(first,end,effective.footprint);
+    if (collectFootprint) B.describeFootprint?.(first, end, effective.footprint ?? material.footprint);
+    if (collectEngraving && first < end && B.describeEngraving) {
+      const definition = effective.engraving ?? material.engraving ?? S.engraving;
+      const settings = Engraving.prepare(definition);
+      if (settings?.brushwork) {
+        const [spacing, x, y, z, nx, ny, nz] = sample;
+        if (effective.glass || effective.optical || Math.hypot(nx, ny, nz) < 1e-8)
+          B.describeEngraving(first, end, false);
+        else {
+          const frame = withBrushNormals(normalAt =>
+            Brushwork.frame(settings.brushwork, [x, y, z], [nx, ny, nz], { spacing, normalAt }));
+          B.describeEngraving(first, end, settings, frame);
+        }
+      } else B.describeEngraving(first, end, definition);
+    }
+    if(collectPrint)B.describeScreenPrint?.(first,end,effective.screenPrint??material.screenPrint??S.screenPrint);
+    if (effective.optical !== undefined) B.describeOptical?.(first, end, effective.optical);
+    if (style) B.describePixelStyle?.(first, end, style, pair);
+    const surfaceId = effective.surfaceId ?? (effective === material ? undefined : effective.surface?.id) ?? material.surfaceId;
+    B.describeSplats?.(first, end, {
+      object: owner?.renderOwner ?? owner,
+      material: effective.materialId ?? material.materialId ?? material,
+      target: renderTarget(owner, surfaceId)
+    });
+    const albedo = effective.albedo ?? effective.r?.at(-1) ?? material.albedo ?? material.r?.at(-1);
+    if (capture && albedo !== undefined) B.describeAlbedo(first, end, albedo);
+  }
+  function sampleAt(solid, spacing, visit) {
+    const original = solid.res;
+    solid.res = spacing;
+    try {
+      if (S.sampleCandidates) S.sampleCandidates(solid, spacing, callback => solid.sample(callback), visit);
+      else solid.sample(visit);
+    } finally {
+      solid.res = original;
+    }
+  }
+  function bakeBand(p, band, res, adaptive, probeStep, finePass) {
+    const bump = p.bump ? p.bump[0] : 0,
+      tout = res * 0.7 + bump + p.reach,
+      tin = res * 0.7 + bump + p.k * 0.4 + p.reach,
+      normalStep = finePass ? Math.min(.012, res * .1) : .012;
+    function shadedSpacing(query, d, x, y, z, nx, ny, nz) {
+      const before = own, negative = ownNeg;
+      const score = SculptSampling.detail(adaptive, query, probeStep, d, x, y, z, nx, ny, nz);
+      own = before;
+      ownNeg = negative;
+      // The two grids overlap at the transition, where coarse dabs taper to leave room for the detail.
+      const start = .78, end = 1.12;
+      if (finePass) return score >= start ? res : 0;
+      if (score >= end) return 0;
+      return res * (1 - .22 * clamp((score - start) / (end - start), 0, 1));
+    }
+    // Rough or blended solids stretch their sample points.
+    sampleAt(p, p.bump ? res * 0.8 : res, (x, y, z) => {
+      if (S.pre && !S.pre(x, y, z)) return;
+      if (band >= 0 && focusBand(x, y, z) !== band) return;
+      // whole: this solid's own surface, all of it, found from its own distance alone (a part that will move must not have gaps where it touched something)
+      if (p.whole) {
+        const e = normalStep;
+        let d = psd(p, x, y, z),
+          nx = 0,
+          ny = 1,
+          nz = 0;
+        for (let it = 0; it < 6; it++) {
+          nx = psd(p, x + e, y, z) - d;
+          ny = psd(p, x, y + e, z) - d;
+          nz = psd(p, x, y, z + e) - d;
+          const l = Math.hypot(nx, ny, nz) || 1;
+          nx /= l;
+          ny /= l;
+          nz /= l;
+          if (Math.abs(d) < 0.004) break;
+          const st = d / Math.max(0.6, l / e);
+          x -= nx * st;
+          y -= ny * st;
+          z -= nz * st;
+          d = psd(p, x, y, z);
+        }
+        if (Math.abs(d) > res * 0.5 || !p.mat.r || p.mat.skip) return;
+        if (S.capture) {
+          S.capture(p, S.materialAt(p.mat, [x, y, z], [nx, ny, nz]), res, x, y, z, nx, ny, nz, 1);
+          return;
+        }
+        const spacing = adaptive ? shadedSpacing((a, b, c) => psd(p, a, b, c), d, x, y, z, nx, ny, nz) : res;
+        if (!spacing) return;
+        if(queueStipple(p,p.mat,res,x,y,z,nx,ny,nz,(a,b,c)=>psd(p,a,b,c)))return;
+        curP = p;
+        if (S.emit) {
+          const n0 = B.count();
+          shadeOwned(p, p.mat, spacing, x, y, z, nx, ny, nz, true);
+          S.emit(p, n0, B.count());
+        } else shadeOwned(p, p.mat, spacing, x, y, z, nx, ny, nz, true);
+        return;
+      }
+      /* a solid whose candidate points may lie well off its own surface (reach: grown rocks, typed-in shapes) has them taken onto
+         its own surface first. Otherwise, where something else is nearer than its own surface (the ground beside a rock's cut face,
+         the next rock) the field would carry them onto that, and its own surface there would get no dabs at all */
+      if (p.reach > 0)
+        for (let it = 0; it < 8; it++) {
+          const d0 = psd(p, x, y, z);
+          if (Math.abs(d0) < 0.002) break;
+          const e = 0.006,
+            gx = psd(p, x + e, y, z) - d0,
+            gy = psd(p, x, y + e, z) - d0,
+            gz = psd(p, x, y, z + e) - d0,
+            gl = Math.hypot(gx, gy, gz) || 1,
+            st = d0 / Math.max(0.6, gl / e);
+          x -= (gx / gl) * st;
+          y -= (gy / gl) * st;
+          z -= (gz / gl) * st;
+        }
+      let d = field(x, y, z);
+      if (d > tout || d < -tin) return;
+      for (let it = 0; it < 7 && Math.abs(d) > 0.004; it++) {
+        grad(x, y, z, d, normalStep);
+        const st = d / gm;
+        x -= g3[0] * st;
+        y -= g3[1] * st;
+        z -= g3[2] * st;
+        d = field(x, y, z);
+      }
+      if (Math.abs(d) > res * 0.5) return;
+      grad(x, y, z, d, normalStep);
+      const nx = g3[0],
+        ny = g3[1],
+        nz = g3[2];
+      field(x, y, z);
+      if (!own) return;
+      const m = ownNeg && ownNeg.mat.r ? ownNeg.mat : own.mat;
+      if (!m.r || m.skip) return;
+      if (S.capture) {
+        const pr = ownNeg && ownNeg.mat.r ? ownNeg : own;
+        let occ = 0,
+          w = 1;
+        for (let j = 1; j <= 3; j++) {
+          const h = S.aoR * j;
+          occ += (Math.max(0, h - field(x + nx * h, y + ny * h, z + nz * h)) * w) / h;
+          w *= 0.6;
+        }
+        S.capture(pr, S.materialAt(m, [x, y, z], [nx, ny, nz]), res, x, y, z, nx, ny, nz, clamp(1 - (S.aoK * occ) / 1.96, 0, 1));
+        return;
+      }
+      const source = ownNeg && ownNeg.mat.r ? ownNeg : own;
+      if (adaptive && !SculptSampling.surface(m)) return;
+      const spacing = adaptive ? shadedSpacing(field, d, x, y, z, nx, ny, nz) : res;
+      if (!spacing || S.merge && merged(x, y, z, spacing, m)) return;
+      if(queueStipple(source,m,res,x,y,z,nx,ny,nz,field))return;
+      curP = source;
+      if (S.emit) {
+        const pr = curP,
+          n0 = B.count();
+        shadeOwned(curP, m, spacing, x, y, z, nx, ny, nz, true);
+        S.emit(pr, n0, B.count());
+      } else shadeOwned(curP, m, spacing, x, y, z, nx, ny, nz, true);
+    });
+  }
+  function queueStipple(owner, material, res, x, y, z, nx, ny, nz, signed) {
+    if (
+      !stippleCandidates ||
+      material.stipple === false ||
+      !SculptSampling.surface(material)
+    )
+      return false;
+    if (stippleCandidates.length >= stippleProfile.maxCandidates)
+      throw new RangeError("Stippling: candidate budget exceeded");
+    const query = (a, b, c) => {
+      if (++stippleProbes > stippleProfile.maxProbes)
+        throw new RangeError("Stippling: probe budget exceeded");
+      return signed(a, b, c);
+    };
+    const base = res / stippleProfile.fine,
+      position = [x, y, z],
+      normal = [nx, ny, nz],
+      measured = Stippling.measure(
+        stippleProfile,
+        query,
+        position,
+        normal,
+        base * 0.8,
+      );
+    stippleCandidates.push({
+      group: owner.whole ? owner : undefined,
+      position,
+      normal,
+      spacing: base,
+      material,
+      owner,
+      ...measured,
+    });
+    return true;
+  }
+  function emitStipple(candidates, profile) {
+    const materials = new WeakMap(),
+      dotProfile = SplatFootprints.prepare({
+        shape: "circle",
+        softness: 0,
+        depth: "plane",
+      });
+    const plan = Stippling.sample(candidates, profile),
+      HALF = Math.sqrt(2 * Math.log(2)),
+      previousPixel = S.pixel,
+      previousFollow = S.follow,
+      previousFat = S.fat;
+    const draw = (c, radius, color, lift, shaped) => {
+      const { owner, material, position: p, normal: n } = c,
+        first = B.count();
+      curP = owner;
+      field(...p);
+      let m = materials.get(material);
+      if (!m) {
+        m = {
+          ...material,
+          fur: undefined,
+          leaf: undefined,
+          blade: undefined,
+          fiber: undefined,
+          brush: undefined,
+          footprint: undefined,
+          surface: undefined,
+          controls: undefined,
+          engraving: false,
+          screenPrint: false,
+          albedo: undefined,
+          pixelStyle: undefined,
+        };
+        materials.set(material, m);
+      }
+      B.withColor(color, () =>
+        shadeOwned(
+          owner,
+          m,
+          radius / (S.fat * HALF),
+          p[0] + n[0] * lift,
+          p[1] + n[1] * lift,
+          p[2] + n[2] * lift,
+          ...n,
+          true,
+        ),
+      );
+      const end = B.count();
+      if (end > first) {
+        const u = K_STIPPLE_TANGENT(n),
+          v = [
+            n[1] * u[2] - n[2] * u[1],
+            n[2] * u[0] - n[0] * u[2],
+            n[0] * u[1] - n[1] * u[0],
+          ];
+        B.describeFootprint(first, end, dotProfile, [
+          ...u.map((x) => x * radius),
+          ...v.map((x) => x * radius),
+        ]);
+      }
+      if (S.emit) S.emit(owner, first, end);
+    };
+    const K_STIPPLE_TANGENT = (n) => {
+      const u = Math.abs(n[1]) < 0.9 ? [n[2], 0, -n[0]] : [0, -n[2], n[1]],
+        l = Math.hypot(...u);
+      return u.map((x) => x / l);
+    };
+    try {
+      S.pixel = false;
+      S.follow = null;
+      S.fat = 1;
+      if (profile.paper) {
+        // The sparse marks and opaque support are independently distributed.
+        // Support is sampled at the authored resolution, with curvature retained.
+        const support = Stippling.sample(candidates, {
+          ...profile,
+          coarse: 1.05,
+          fine: 0.85,
+          density: 1,
+          toneDensity: 0,
+          size: [0.1, 0.42],
+          maxMarks: profile.maxCandidates,
+          importance: undefined,
+        });
+        for (const mark of support.marks)
+          draw(
+            candidates[mark.index],
+            mark.spacing * 0.9,
+            profile.paper,
+            -mark.spacing * 0.1,
+            false,
+          );
+      }
+      for (const mark of plan.marks) {
+        const c = candidates[mark.index];
+        draw(
+          c,
+          mark.radius,
+          (col) => Stippling.paint(profile, col, c.position),
+          c.spacing * 0.15,
+          true,
+        );
+      }
+    } finally {
+      S.pixel = previousPixel;
+      S.follow = previousFollow;
+      S.fat = previousFat;
+    }
+    return plan.stats;
+  }
   S.bake = () => {
+    shadowMarch = bakedShadowMarch({ steps: S.shSteps, distance: S.shLen });
+    const override = typeof globalThis !== 'undefined' ? globalThis.INK_ADAPTIVE_SAMPLING : undefined;
+    const sampling = !S.capture && SculptSampling.prepare(override ?? S.adaptiveSampling);
+    const keepSdf = S.keepRenderSdf || (typeof globalThis !== 'undefined' && globalThis.INK_RETAIN_RENDER_SDF);
+    renderSdf = keepSdf && !S.capture && B.keepRenderSdf ? captureRenderSdf() : null;
+    if(S.stipple&&S.stipple!==true&&(typeof S.stipple!=='object'||Array.isArray(S.stipple)))throw new TypeError('Stippling needs a boolean or settings');
+    stippleProfile=Stippling.prepare(S.stipple ? {light:S.sun,ambient:S.amb,...(S.stipple===true?{}:S.stipple)} : S.stipple);stippleCandidates=stippleProfile&&!S.capture?[]:null;stippleProbes=0;
     buildGrid();
     L = S.sun;
     for (const p of pos.concat(neg)) {
       if (p.mat.skip) continue;
-      const res0 = p.res,
+      const adaptive = sampling && SculptSampling.surface(p.mat) ? sampling : null;
+      const res0 = p.res * (p.detailBudget?.spacing ?? 1),
         bands = S.focus && !S.capture ? focusBands(p) : ONE_BAND;
       for (let bi = 0; bi < bands.length; bi++) {
         const band = bands === ONE_BAND ? -1 : bands[bi][0],
-          res = bands === ONE_BAND ? res0 : res0 * bands[bi][1],
-          bm = p.bump ? p.bump[0] : 0,
-          tout = res * 0.7 + bm + p.reach,
-          tin = res * 0.7 + bm + p.k * 0.4 + p.reach;
-        p.res = p.bump ? res * 0.8 : res; // rough or blended solids stretch their sample points, so take more of them
-        p.sample((x, y, z) => {
-          if (S.pre && !S.pre(x, y, z)) return;
-          if (band >= 0 && focusBand(x, y, z) !== band) return;
-          // whole: this solid's own surface, all of it, found from its own distance alone (a part that will move must not have gaps where it touched something)
-          if (p.whole) {
-            const e = 0.012;
-            let d = psd(p, x, y, z),
-              nx = 0,
-              ny = 1,
-              nz = 0;
-            for (let it = 0; it < 6; it++) {
-              nx = psd(p, x + e, y, z) - d;
-              ny = psd(p, x, y + e, z) - d;
-              nz = psd(p, x, y, z + e) - d;
-              const l = Math.hypot(nx, ny, nz) || 1;
-              nx /= l;
-              ny /= l;
-              nz /= l;
-              if (Math.abs(d) < 0.004) break;
-              const st = d / Math.max(0.6, l / e);
-              x -= nx * st;
-              y -= ny * st;
-              z -= nz * st;
-              d = psd(p, x, y, z);
-            }
-            if (Math.abs(d) > res * 0.5 || !p.mat.r || p.mat.skip) return;
-            curP = p;
-            if (S.emit) {
-              const n0 = B.count();
-              light(p.mat, res, x, y, z, nx, ny, nz, true);
-              S.emit(p, n0, B.count());
-            } else light(p.mat, res, x, y, z, nx, ny, nz, true);
-            return;
-          }
-          /* a solid whose candidate points may lie well off its own surface (reach: grown rocks, typed-in shapes) has them taken onto
-             its own surface first. Otherwise, where something else is nearer than its own surface (the ground beside a rock's cut face,
-             the next rock) the field would carry them onto that, and its own surface there would get no dabs at all */
-          if (p.reach > 0)
-            for (let it = 0; it < 8; it++) {
-              const d0 = psd(p, x, y, z);
-              if (Math.abs(d0) < 0.002) break;
-              const e = 0.006,
-                gx = psd(p, x + e, y, z) - d0,
-                gy = psd(p, x, y + e, z) - d0,
-                gz = psd(p, x, y, z + e) - d0,
-                gl = Math.hypot(gx, gy, gz) || 1,
-                st = d0 / Math.max(0.6, gl / e);
-              x -= (gx / gl) * st;
-              y -= (gy / gl) * st;
-              z -= (gz / gl) * st;
-            }
-          let d = field(x, y, z);
-          if (d > tout || d < -tin) return;
-          for (let it = 0; it < 7 && Math.abs(d) > 0.004; it++) {
-            grad(x, y, z, d);
-            const st = d / gm;
-            x -= g3[0] * st;
-            y -= g3[1] * st;
-            z -= g3[2] * st;
-            d = field(x, y, z);
-          }
-          if (Math.abs(d) > res * 0.5) return;
-          grad(x, y, z, d);
-          const nx = g3[0],
-            ny = g3[1],
-            nz = g3[2];
-          field(x, y, z);
-          if (!own) return;
-          const m = ownNeg && ownNeg.mat.r ? ownNeg.mat : own.mat;
-          if (!m.r || m.skip) return;
-          if (S.capture) {
-            const pr = ownNeg && ownNeg.mat.r ? ownNeg : own;
-            let occ = 0,
-              w = 1;
-            for (let j = 1; j <= 3; j++) {
-              const h = S.aoR * j;
-              occ += (Math.max(0, h - field(x + nx * h, y + ny * h, z + nz * h)) * w) / h;
-              w *= 0.6;
-            }
-            S.capture(pr, m, res, x, y, z, nx, ny, nz, clamp(1 - (S.aoK * occ) / 1.96, 0, 1));
-            return;
-          }
-          if (S.merge && merged(x, y, z, res, m)) return;
-          curP = ownNeg && ownNeg.mat.r ? ownNeg : own;
-          if (S.emit) {
-            const pr = curP,
-              n0 = B.count();
-            light(m, res, x, y, z, nx, ny, nz, true);
-            S.emit(pr, n0, B.count());
-          } else light(m, res, x, y, z, nx, ny, nz, true);
-        });
+          res = bands === ONE_BAND ? res0 : res0 * bands[bi][1];
+        if (stippleCandidates&&p.mat.stipple!==false&&SculptSampling.surface(p.mat))bakeBand(p,band,res*stippleProfile.fine,null);
+        else if (!adaptive) bakeBand(p, band, res, null);
+        else {
+          const probeStep = res * adaptive.coarse * .9;
+          bakeBand(p, band, res * adaptive.coarse, adaptive, probeStep, false);
+          bakeBand(p, band, res * adaptive.fine, adaptive, probeStep, true);
+        }
       }
-      p.res = res0;
     }
+    if(stippleCandidates){S.stippleStats=emitStipple(stippleCandidates,stippleProfile);stippleCandidates=null;stippleProfile=null;}
     // ghosts are drawn but take no part in shadows (things in the sky, glass, glowing shapes)
     for (const p of ghosts) {
-      const res = p.res,
+      const res = p.res * (p.detailBudget?.spacing ?? 1),
         e = 0.012;
-      if (p.bump) p.res = res * 0.8;
-      p.sample((x, y, z) => {
+      sampleAt(p, p.bump ? res * 0.8 : res, (x, y, z) => {
         if (S.pre && !S.pre(x, y, z)) return;
         let d = psd(p, x, y, z),
           nx = 0,
@@ -1552,19 +2176,25 @@ function makeSculpt(B) {
           d = psd(p, x, y, z);
         }
         if (S.capture) {
-          S.capture(p, p.mat, res, x, y, z, nx, ny, nz);
+          S.capture(p, S.materialAt(p.mat, [x, y, z], [nx, ny, nz]), res, x, y, z, nx, ny, nz);
           return;
         }
         curP = p;
         if (S.emit) {
           const n0 = B.count();
-          light(p.mat, res, x, y, z, nx, ny, nz, !!S.ghostLit);
+          shadeOwned(p, p.mat, res, x, y, z, nx, ny, nz, !!S.ghostLit);
           S.emit(p, n0, B.count());
-        } else light(p.mat, res, x, y, z, nx, ny, nz, !!S.ghostLit);
+        } else shadeOwned(p, p.mat, res, x, y, z, nx, ny, nz, !!S.ghostLit);
       });
-      p.res = res;
     }
+    if (renderSdf?.rows.size) {
+      const {owners, ...source} = renderSdf;
+      B.keepRenderSdf(source);
+    }
+    renderSdf = null;
     layInstances();
+    bevelSculpt = undefined;
+    bevelMaterials.clear();
     B.born(null);
     B.wet(null);
     MERGE.clear();
@@ -1593,8 +2223,11 @@ function makeSculpt(B) {
     for (const k of ['res', 'sun', 'amb', 'sky', 'sunK', 'aoR', 'aoK', 'fat']) S2[k] = S[k];
     if (o.res) S2.res = o.res;
     const samples = [];
-    S2.capture = (pr, m, res, x, y, z, nx, ny, nz) =>
-      samples.push([x, y, z, nx, ny, nz, res, m, pr && pr.along ? pr.along(x, y, z) : 0]);
+    S2.capture = (pr, m, res, x, y, z, nx, ny, nz) => {
+      const sample = [x, y, z, nx, ny, nz, res, m, pr && pr.along ? pr.along(x, y, z) : 0];
+      if (pr?.whole) sample[9] = true;
+      samples.push(sample);
+    };
     build(S2);
     S2.bake();
     const lo = [1e9, 1e9, 1e9],
@@ -1608,6 +2241,7 @@ function makeSculpt(B) {
     return {
       samples,
       sdf: S2.sdf,
+      proxySdf: S2.proxySdf(),
       bc,
       br: Math.hypot(hi[0] - bc[0], hi[1] - bc[1], hi[2] - bc[2]) + 0.05,
       foot: lo[1]
@@ -1615,6 +2249,7 @@ function makeSculpt(B) {
   };
   S.place = (tpl, at, o) => {
     o = o || {};
+    const proxySdf = tpl.proxySdf || tpl.sdf;
     const sc = o.scale || 1,
       yw = o.yaw || 0,
       cy = Math.cos(yw),
@@ -1651,7 +2286,7 @@ function makeSculpt(B) {
             dy = (y - at[1]) / sc,
             dz = (z - at[2]) / sc;
           return (
-            tpl.sdf(
+            proxySdf(
               R[0] * dx + R[3] * dy + R[6] * dz,
               R[1] * dx + R[4] * dy + R[7] * dz,
               R[2] * dx + R[5] * dy + R[8] * dz
@@ -1662,7 +2297,13 @@ function makeSculpt(B) {
       };
     // (o.solid false: the copy is drawn and lit, but takes no part in the field: no shadow of its own, nothing hidden by it.
     // Right for small thin things in great numbers, leaves, petals, where the field would only be slowed by them)
-    if (o.solid !== false) add(proxy, { r: [0], skip: true }, {});
+    const labels = { objectId: o.objectId, tag: o.tag, target: o.target };
+    if (o.solid !== false) add(proxy, { r: [0], skip: true }, labels);
+    else {
+      proxy.renderOwner = o.objectId ?? o.tag;
+      proxy.renderTarget = o.target;
+      if (budgetFor) proxy.detailBudget = budgetFor(proxy);
+    }
     insts.push({
       born: o.born,
       tpl,
@@ -1689,6 +2330,7 @@ function makeSculpt(B) {
         : null;
       INST.bc = I.proxy.bc;
       INST.br = I.proxy.br;
+      INST.bevelDistance = I.proxy.sd;
       INST.born = I.born; // (a copy can have its own time to appear)
       for (const q of I.tpl.samples) {
         const p = I.tw(q),
@@ -1697,14 +2339,15 @@ function makeSculpt(B) {
           y = I.at[1] + p[1] * I.sc,
           z = I.at[2] + p[2] * I.sc,
           res = q[6] * I.sc;
-        if (field(x, y, z) < -res * 0.6) continue; // buried in something else
+        if (field(x, y, z, q[9] ? I.proxy : undefined) < -res * 0.6) continue; // buried in another solid
         if (S.clip && !S.clip(x, y, z)) continue;
         INST.v = q[8];
         curP = INST;
-        light(q[7], res, x, y, z, nv[0], nv[1], nv[2], true);
+        shadeOwned(I.proxy, q[7], res, x, y, z, nv[0], nv[1], nv[2], true);
       }
     }
     FLO = null;
+    INST.bevelDistance = undefined;
     insts.length = 0;
   }
 
@@ -1755,7 +2398,7 @@ function makeSculpt(B) {
         mz = nz * (1 - 0.35 * w),
         ml = Math.hypot(mx, my, mz) || 1;
       curP = null;
-      light(mat, res, x + nx * th, y + ny * th, z + nz * th, mx / ml, my / ml, mz / ml, true);
+      shadeOwned(null, mat, res, x + nx * th, y + ny * th, z + nz * th, mx / ml, my / ml, mz / ml, true);
       laid++;
     }
     return laid;
@@ -1944,7 +2587,9 @@ function makeSculpt(B) {
   };
   // A tree: a twisted trunk and roots; main limbs leaving the upper trunk; two to four side
   // branches off each limb; a leaf cluster at the end of every side branch and limb, and one over the top.
-  // o: h (trunk height), r, lean [x, z], nb (limbs), spread (reach of the limbs), cr (cluster size), bark, leaf, roots, res, leaves (count)
+  // o: h (trunk height), r, lean [x, z], nb (limbs), spread (reach of the limbs), cr (cluster size), bark, leaf, roots, res, leaves (count),
+  // shade (false: the crown casts no shadow of its own, for when S.mask says where its shade falls), crown (false: the leaves wait for
+  // .leaves(), so what the crown's clusters are can be known first). -> { top, tips, clusters, leaves }
   S.tree = (x, y, z, o) => {
     const { rr, path } = B,
       h = o.h || 5,
@@ -2029,14 +2674,20 @@ function makeSculpt(B) {
       const c = L0 * rr(0.2, 0.33);
       clusters.push({ p: at(pts, 1), r: [c * 1.25, c * 0.72, c * 1.25] });
     }
+    let leaves = () => 0;
     if (o.leaf) {
       const top = tr(1),
         sn = h / 6.2,
         ls = o.ls || clamp(sn, 0.5, 1.6);
       clusters.push({ p: [top[0], top[1] + L0 * 0.32, top[2]], r: [L0 * 0.36, L0 * 0.24, L0 * 0.36] });
-      S.crown(clusters, o.leaf, o.leaves || Math.round(1900 * Math.min(1, (sn / ls) * (sn / ls))), { scale: ls });
+      leaves = () =>
+        S.crown(clusters, o.leaf, o.leaves || Math.round(1900 * Math.min(1, (sn / ls) * (sn / ls))), {
+          scale: ls,
+          shade: o.shade
+        });
+      if (o.crown !== false) leaves();
     }
-    return { top: tr(1), tips };
+    return { top: tr(1), tips, clusters, leaves };
   };
   return S;
 }

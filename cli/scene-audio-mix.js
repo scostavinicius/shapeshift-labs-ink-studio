@@ -1,0 +1,93 @@
+/* Offline stereo resampling, panning, and stem summing on an absolute sample grid. */
+const WAV = require('./wav.js');
+
+const stereo = ['timeline', 'spatial', 'music', 'tracks'];
+const clamp = (value, min, max) => Math.min(max, Math.max(min, value));
+
+function stereoSource(source, position, loop, side) {
+  const { samples, channels } = source, length = samples.length / channels;
+  const i = Math.floor(position), fraction = position - i;
+  function sample(index) {
+    const at = loop ? ((index % length) + length) % length : index;
+    if (at < 0 || at >= length) return 0;
+    if (channels === 1) return samples[at];
+    let sum = 0;
+    for (let c = side; c < channels; c += 2) sum += samples[at * channels + c];
+    return sum / Math.ceil((channels - side) / 2);
+  }
+  return sample(i) * (1 - fraction) + sample(i + 1) * fraction;
+}
+
+function placement({ asset, first, end, offset = 0, rate = 1, gain = 1, loop = false, fade = 0, points }, source, sampleRate) {
+  const sourceStep = source.sampleRate * rate / sampleRate;
+  const sourceStart = offset * source.sampleRate;
+  end ??= loop ? Number.MAX_SAFE_INTEGER :
+    first + Math.max(0, Math.ceil((source.samples.length / source.channels - sourceStart) / sourceStep));
+  return { asset, first, end, sourceStep, sourceStart, gain, loop, fade, points };
+}
+
+function mix(voices, resolve, { start, end, sampleRate, gain = 1 }) {
+  const count = end - start;
+  if (!Number.isSafeInteger(count) || count < 1 || count * 2 > WAV.maxSamples)
+    throw new RangeError('Scene soundtrack exceeds its WAV sample budget');
+  const stems = new Map(stereo.map(name => [name, new Float32Array(count * 2)]));
+  const statistics = Object.fromEntries(stereo.map(name => [name, { voices: 0, peak: 0 }]));
+  let work = 0;
+  for (const { stem, ...voice } of voices) {
+    if (voice.end !== undefined && voice.end <= start) continue;
+    const source = resolve(voice.asset);
+    if (!source.samples.length) continue;
+    const p = placement(voice, source, sampleRate), bus = stems.get(stem);
+    const first = Math.max(start, p.first), last = Math.min(p.end, end);
+    if (last <= first) continue;
+    const points = p.points, filters = Boolean(points?.some(row => row.cutoff < 22000));
+    // A short filter pre-roll makes trimmed playback agree with the previous decay.
+    const begin = filters ? Math.max(p.first, first - Math.ceil(sampleRate / 3)) : first;
+    work += (last - begin) * Math.max(2, source.channels);
+    if (work > 240e6) throw new RangeError('Scene soundtrack exceeds its mixing work budget');
+    statistics[stem].voices++;
+    let knot = 0, low = 0;
+    for (let sample = begin; sample < last; sample++) {
+      while (points && knot + 1 < points.length && points[knot + 1].sample <= sample) knot++;
+      const a = points?.[knot], b = points?.[knot + 1];
+      const u = b ? clamp((sample - a.sample) / (b.sample - a.sample), 0, 1) : 0;
+      const level = a ? a.gain + u * ((b?.gain ?? a.gain) - a.gain) : 1;
+      const pan = a?.pan === undefined ? undefined : a.pan + u * ((b?.pan ?? a.pan) - a.pan);
+      const cutoff = a && a.cutoff + u * ((b?.cutoff ?? a.cutoff) - a.cutoff);
+      const delay = a && a.delay + u * ((b?.delay ?? a.delay) - a.delay);
+      const position = p.sourceStart + (sample - p.first - (delay ?? 0) * sampleRate) * p.sourceStep;
+      const l = stereoSource(source, position, p.loop, 0), r = stereoSource(source, position, p.loop, 1);
+      const fade = p.fade ? clamp(Math.min((sample - p.first) / p.fade, (p.end - sample) / p.fade), 0, 1) : 1;
+      const n = (sample - start) * 2, scale = level * p.gain * gain * fade;
+      if (pan !== undefined) {
+        const mono = (l + r) * .5;
+        low += (!filters || cutoff >= 22000 ? 1 : 1 - Math.exp(-2 * Math.PI * cutoff / sampleRate)) * (mono - low);
+        if (sample < first) continue;
+        bus[n] += low * scale * Math.sqrt((1 - pan) / 2);
+        bus[n + 1] += low * scale * Math.sqrt((1 + pan) / 2);
+      } else if (sample >= first) {
+        bus[n] += l * scale;
+        bus[n + 1] += r * scale;
+      }
+    }
+  }
+  const sum = new Float32Array(count * 2);
+  let peak = 0;
+  for (const [name, bus] of stems) {
+    for (let i = 0; i < bus.length; i++) {
+      statistics[name].peak = Math.max(statistics[name].peak, Math.abs(bus[i]));
+      sum[i] += bus[i];
+    }
+  }
+  for (const value of sum) peak = Math.max(peak, Math.abs(value));
+  const maximum = Math.max(peak, ...Object.values(statistics).map(row => row.peak));
+  const headroom = maximum > 1 ? 1 / maximum : 1;
+  const waves = Object.fromEntries([...stems, ['mix', sum]].map(([name, samples]) => {
+    if (headroom < 1) for (let i = 0; i < samples.length; i++) samples[i] *= headroom;
+    return [name, WAV.encode({ samples, channels: 2, sampleRate }, { encoding: 'pcm24' })];
+  }));
+  return { waves, report: { sampleRate, channels: 2, firstSample: start, endSample: end,
+    frames: count, headroom, peak, stems: statistics } };
+}
+
+module.exports = { mix };

@@ -6,7 +6,12 @@
      K.flow.wind(v)  K.flow.curl(scale, speed)  K.flow.vortex(c, axis, strength, radius)  K.flow.sink(c, strength)  K.flow.sum(a, b, ...)
      K.flow.around(sdf, margin)   wraps the others: near a surface the current is turned along it, so nothing is carried through a solid */
 (function (K) {
-  const V = K.V;
+  const { V, M } = K;
+  const spatialFields = new WeakSet(),
+    spatial = field => {
+      spatialFields.add(field);
+      return field;
+    };
   // smooth noise in 3D, 0..1 (value noise: cheap, and good enough to stir a current)
   const h3 = (x, y, z) => {
     const s = Math.sin(x * 127.1 + y * 311.7 + z * 74.7) * 43758.5453;
@@ -29,32 +34,143 @@
       w
     );
   };
+  const defaultNoise = K.noise3;
   K.flow = {
-    wind: v => (x, y, z, t, o) => {
-      o[0] = v[0];
-      o[1] = v[1];
-      o[2] = v[2];
-    },
+    // Built-in fields consume only coordinates and time. Simulators may omit
+    // expensive per-carrier operator contexts when no custom field needs one.
+    contextFree: field => spatialFields.has(field),
+    wind: v =>
+      spatial((x, y, z, t, o) => {
+        o[0] = v[0];
+        o[1] = v[1];
+        o[2] = v[2];
+      }),
     // a current with no sources or sinks (the curl of a noise potential): it swirls without bunching things up
     curl: (scale, speed) => {
-      const e = 0.1,
-        n = K.noise3;
-      return (x, y, z, t, o) => {
+      const e = 0.1;
+      if (K.noise3 !== defaultNoise) {
+        const n = K.noise3,
+          k = speed / (2 * e);
+        return spatial((x, y, z, t, out) => {
+          x *= scale;
+          y *= scale;
+          z = z * scale + t * 0.13;
+          out[0] = (n(x, y + e, z + 31) - n(x, y - e, z + 31) - (n(x, y + 17, z + e) - n(x, y + 17, z - e))) * k;
+          out[1] = (n(x + 5, y, z + e) - n(x + 5, y, z - e) - (n(x + e, y, z + 31) - n(x - e, y, z + 31))) * k;
+          out[2] = (n(x + e, y + 17, z) - n(x - e, y + 17, z) - (n(x + 5, y + e, z) - n(x + 5, y - e, z))) * k;
+        });
+      }
+      // Neighbouring carriers repeatedly visit the same lattice cells. Cache their
+      // eight exact corner values, not sampled velocities: time, interpolation and
+      // finite-difference curl remain identical, with bounded storage per field.
+      const cells = new Float64Array(256 * 11),
+        valid = new Uint8Array(256);
+      const cell = (ix, iy, iz) => {
+        const slot = (Math.imul(ix, 73856093) ^ Math.imul(iy, 19349663) ^ Math.imul(iz, 83492791)) & 255,
+          q = slot * 11;
+        if (!valid[slot] || cells[q] !== ix || cells[q + 1] !== iy || cells[q + 2] !== iz) {
+          valid[slot] = 1;
+          cells[q] = ix;
+          cells[q + 1] = iy;
+          cells[q + 2] = iz;
+          for (let dz = 0; dz < 2; dz++)
+            for (let dy = 0; dy < 2; dy++)
+              for (let dx = 0; dx < 2; dx++) cells[q + 3 + dx + 2 * dy + 4 * dz] = h3(ix + dx, iy + dy, iz + dz);
+        }
+        return q;
+      };
+      const n = (x, y, z) => {
+        const ix = Math.floor(x),
+          iy = Math.floor(y),
+          iz = Math.floor(z),
+          q = cell(ix, iy, iz);
+        const fx = x - ix,
+          fy = y - iy,
+          fz = z - iz,
+          u = fx * fx * (3 - 2 * fx),
+          v = fy * fy * (3 - 2 * fy),
+          w = fz * fz * (3 - 2 * fz),
+          a = cells[q + 3] + (cells[q + 4] - cells[q + 3]) * u,
+          b = cells[q + 5] + (cells[q + 6] - cells[q + 5]) * u,
+          c = cells[q + 7] + (cells[q + 8] - cells[q + 7]) * u,
+          d = cells[q + 9] + (cells[q + 10] - cells[q + 9]) * u,
+          low = a + (b - a) * v,
+          high = c + (d - c) * v;
+        return low + (high - low) * w;
+      };
+      const smooth = f => f * f * (3 - 2 * f),
+        lerp = (a, b, t) => a + (b - a) * t;
+      const partials = (x, y, z, skip, out) => {
+        const ix = Math.floor(x),
+          iy = Math.floor(y),
+          iz = Math.floor(z),
+          q = cell(ix, iy, iz),
+          h0 = cells[q + 3],
+          h1 = cells[q + 4],
+          h2 = cells[q + 5],
+          h3 = cells[q + 6],
+          h4 = cells[q + 7],
+          h5 = cells[q + 8],
+          h6 = cells[q + 9],
+          h7 = cells[q + 10],
+          u = smooth(x - ix),
+          v = smooth(y - iy),
+          w = smooth(z - iz),
+          a = lerp(h0, h1, u),
+          b = lerp(h2, h3, u),
+          c = lerp(h4, h5, u),
+          d = lerp(h6, h7, u);
+        // Share the lattice/interpolation work for the two partials needed from
+        // each potential. At cell boundaries, retain the original noise samples.
+        if (skip !== 0) {
+          if (x - e < ix || x + e >= ix + 1) out[0] = n(x + e, y, z) - n(x - e, y, z);
+          else {
+            const low = smooth(x - e - ix),
+              high = smooth(x + e - ix);
+            out[0] =
+              lerp(
+                lerp(lerp(h0, h1, high), lerp(h2, h3, high), v),
+                lerp(lerp(h4, h5, high), lerp(h6, h7, high), v),
+                w
+              ) - lerp(lerp(lerp(h0, h1, low), lerp(h2, h3, low), v), lerp(lerp(h4, h5, low), lerp(h6, h7, low), v), w);
+          }
+        }
+        if (skip !== 1) {
+          if (y - e < iy || y + e >= iy + 1) out[1] = n(x, y + e, z) - n(x, y - e, z);
+          else {
+            const low = smooth(y - e - iy),
+              high = smooth(y + e - iy);
+            out[1] = lerp(lerp(a, b, high), lerp(c, d, high), w) - lerp(lerp(a, b, low), lerp(c, d, low), w);
+          }
+        }
+        if (skip !== 2) {
+          if (z - e < iz || z + e >= iz + 1) out[2] = n(x, y, z + e) - n(x, y, z - e);
+          else {
+            const low = lerp(a, b, v),
+              high = lerp(c, d, v);
+            out[2] = lerp(low, high, smooth(z + e - iz)) - lerp(low, high, smooth(z - e - iz));
+          }
+        }
+      };
+      const first = [0, 0, 0],
+        second = [0, 0, 0],
+        third = [0, 0, 0];
+      return spatial((x, y, z, t, o) => {
         x = x * scale;
         y = y * scale;
         z = z * scale + t * 0.13;
-        const a = n(x, y + e, z + 31) - n(x, y - e, z + 31) - (n(x, y + 17, z + e) - n(x, y + 17, z - e)),
-          b = n(x + 5, y, z + e) - n(x + 5, y, z - e) - (n(x + e, y, z + 31) - n(x - e, y, z + 31)),
-          c = n(x + e, y + 17, z) - n(x - e, y + 17, z) - (n(x + 5, y + e, z) - n(x + 5, y - e, z));
+        partials(x + 5, y, z, 0, first);
+        partials(x, y + 17, z, 1, second);
+        partials(x, y, z + 31, 2, third);
         const k = speed / (2 * e);
-        o[0] = a * k;
-        o[1] = b * k;
-        o[2] = c * k;
-      };
+        o[0] = (third[1] - second[2]) * k;
+        o[1] = (first[2] - third[0]) * k;
+        o[2] = (second[0] - first[1]) * k;
+      });
     },
     vortex: (c, axis, strength, radius) => {
       const ax = V.norm(axis);
-      return (x, y, z, t, o) => {
+      return spatial((x, y, z, t, o) => {
         const r = [x - c[0], y - c[1], z - c[2]],
           h = V.dot(r, ax),
           q = V.mad(r, ax, -h),
@@ -64,18 +180,19 @@
         o[0] = w[0] * k - q[0] * 0.3 * k;
         o[1] = w[1] * k - q[1] * 0.3 * k;
         o[2] = w[2] * k - q[2] * 0.3 * k;
-      };
+      });
     },
-    sink: (c, strength) => (x, y, z, t, o) => {
-      const r = [c[0] - x, c[1] - y, c[2] - z],
-        d = V.len(r) + 0.3;
-      o[0] = (r[0] / d) * strength;
-      o[1] = (r[1] / d) * strength;
-      o[2] = (r[2] / d) * strength;
-    },
+    sink: (c, strength) =>
+      spatial((x, y, z, t, o) => {
+        const r = [c[0] - x, c[1] - y, c[2] - z],
+          d = V.len(r) + 0.3;
+        o[0] = (r[0] / d) * strength;
+        o[1] = (r[1] / d) * strength;
+        o[2] = (r[2] / d) * strength;
+      }),
     sum: (...fs) => {
       const tmp = [0, 0, 0];
-      return (x, y, z, t, o) => {
+      return spatial((x, y, z, t, o) => {
         let a = 0,
           b = 0,
           c = 0;
@@ -88,12 +205,12 @@
         o[0] = a;
         o[1] = b;
         o[2] = c;
-      };
+      });
     },
     around: (flow, sdf, margin) => {
       margin = margin || 0.5;
       const e = 0.05;
-      return (x, y, z, t, o) => {
+      return spatial((x, y, z, t, o) => {
         flow(x, y, z, t, o);
         const d = sdf(x, y, z);
         if (d > margin) return;
@@ -110,17 +227,20 @@
           o[1] += n[1] * 1.5;
           o[2] += n[2] * 1.5;
         }
-      };
+      });
     }
   };
   K.particles = (st, pool, o) => {
     o = o || {};
+    const { renderTransforms } = o;
+    if (renderTransforms !== undefined && typeof renderTransforms !== 'function')
+      throw new TypeError('Particle renderTransforms needs a pose callback');
     const n = pool.n,
       P = [],
       fl = [0, 0, 0],
       palP = st.W.pal.map(h => ((h >> 16) & 255) + (h & 0xff00) + ((h & 255) << 16));
     for (let i = 0; i < n; i++) P.push({ life: 0 });
-    let next = 0;
+    let next = 0, generation = 0;
     const ps = {
       live: 0,
       flow: o.flow || null,
@@ -129,6 +249,7 @@
           i = pool.first + next;
         next = (next + 1) % n;
         q.i = i;
+        if (renderTransforms) q.id = 'particle-' + pool.first + '-' + generation++;
         q.p = e.p.slice();
         q.v = (e.v || [0, 0, 0]).slice();
         q.life = q.max = e.life || 1;
@@ -149,6 +270,7 @@
       },
       update(dt, t) {
         let live = 0;
+        const pending = renderTransforms && [];
         for (let k = 0; k < n; k++) {
           const q = P[k];
           if (q.life <= 0) continue;
@@ -192,22 +314,33 @@
           }
           const size = q.size * (1 + q.grow * u) * (q.fade > 0 && u > 1 - q.fade ? (1 - u) / q.fade : 1),
             col = palP[q.cols[Math.min(q.cols.length - 1, Math.floor(u * q.cols.length))]];
-          if (q.ax) pool.put(st, q.i, q.p[0], q.p[1], q.p[2], size, col, q.alpha, q.ax, q.len);
-          else if (q.streak) {
+          let axis = q.ax, length = q.len;
+          if (!axis && q.streak) {
             const sp = V.len(q.v);
-            pool.put(
-              st,
-              q.i,
-              q.p[0],
-              q.p[1],
-              q.p[2],
-              size,
-              col,
-              q.alpha,
-              sp > 1e-3 ? V.mul(q.v, 1 / sp) : [0, 1, 0],
-              size + sp * q.streak
-            );
-          } else pool.put(st, q.i, q.p[0], q.p[1], q.p[2], size, col, q.alpha);
+            axis = sp > 1e-3 ? V.mul(q.v, 1 / sp) : [0, 1, 0];
+            length = size + sp * q.streak;
+          }
+          if (!pending) pool.put(st, q.i, q.p[0], q.p[1], q.p[2], size, col, q.alpha, axis, length);
+          else {
+            const axisLength = axis ? V.len(axis) : 0, along = axisLength ? V.mul(axis, 1 / axisLength) : [0, 1, 0];
+            const across = V.perp(along);
+            const pose = { id: q.id, position: q.p.slice(), rotation: M.cols(across, along, V.cross(across, along)),
+              scale: Math.abs(size) || 1 };
+            pending.push({ pose, i: q.i, alpha: q.alpha, col, axis, axisLength, length, size, scale: pose.scale });
+          }
+        }
+        if (pending) {
+          const instances = pending.map(row => row.pose);
+          const poses = K.procedural.animationGraph.captureTransforms(renderTransforms({ time: t, instances }) ?? instances);
+          const rows = new Map(poses.map(pose => [pose.id, pose]));
+          if (rows.size !== pending.length || pending.some(({ pose }) => !Number.isFinite(rows.get(pose.id)?.scale)))
+            throw new TypeError('Particle render transforms need the same IDs and uniform scales');
+          for (const particle of pending) {
+            const { position, rotation, scale } = rows.get(particle.pose.id);
+            const ratio = scale / particle.scale;
+            const axis = particle.axis && V.mul([rotation[1], rotation[4], rotation[7]], particle.axisLength);
+            pool.put(st, particle.i, ...position, particle.size * ratio, particle.col, particle.alpha, axis, particle.length * ratio);
+          }
         }
         ps.live = live;
       }

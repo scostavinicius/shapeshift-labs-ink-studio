@@ -1,0 +1,21 @@
+{
+  "from": 0.25,
+  "fps": 12,
+  "frames": 12,
+  "warmup": 3,
+  "width": 160,
+  "height": 128,
+  "cuts": [],
+  "subjects": [
+    { "id": "Right glove", "select": { "object": "rightForearm" } }
+  ],
+  "palette": [
+    { "id": "glove ink", "subject": "Right glove", "swatch": "#294951", "minPixels": 20, "minShare": 0.4 }
+  ],
+  "silhouette": [
+    { "id": "glove contour", "subject": "Right glove", "minPixels": 30, "minLightnessP10": 0.035 }
+  ],
+  "motion": { "required": true },
+  "transition": { "thresholds": { "popFraction": 0.008 } },
+  "performance": { "fragments": 40000 }
+}

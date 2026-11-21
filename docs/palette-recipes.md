@@ -1,0 +1,1091 @@
+# Palette recipes and color paths
+
+`KIT.palette` authors named material palettes using the library's existing OKLab/OKLCh conversion and gamut-mapping math. It adds independent hue/chroma/lightness curves, two-color recipes, reference-ramp transfer, and seekable animation. It has no external runtime dependencies, network requests, packages or assets. The older `KIT.procedural.materials.ramp` API remains compatible.
+
+Try the [Chromatic garden](../examples/palette-recipes.html): the same SDF geometry under three two-color recipes, with channel controls, a reference transfer and a continuous animated palette path. Drag to orbit and scroll to zoom.
+
+## Start with two colors and named roles
+
+```js
+const palette = KIT.palette.duotone('#58aeb7', '#efad72', {
+  roles: {
+    stone: { anchor: 'primary', steps: 7 },
+    foliage: {
+      anchor: 'primary', steps: 7,
+      lightness: [.16, .87],
+      hueShift: [-29, 13],
+      chromaScale: [.3, 1.2, .2]
+    },
+    glow: { anchor: 'accent', steps: 4, lightness: [.62, .98] }
+  }
+});
+const B = makeBuilder(37, palette.palette);
+const S = KIT.sculpt(makeSculpt(B));
+S.box([0, 0, 0], [1, 1, 1], { r: palette.roles.stone });
+S.bake();
+const world = B.finish({ paletteRoles: palette.roles });
+```
+
+`duotone(primary, accent, options)` supplies two named anchors, `primary` and `accent`. Without custom roles, each gets a seven-shade ramp. `recipe({ anchors, roles, background? })` supports arbitrary named anchors using the same role definitions. Colors accept six-digit hex strings, packed RGB integers or normalized sRGB triples.
+
+Every recipe reserves slot zero for `background`. Its default is a dark, subdued version of the first anchor; set `background` to an explicit color to control it. `roles` cannot redeclare this reserved name. Recipes contain at most 48 palette slots including the background, matching the JSON diorama palette budget. Each role has 1–32 shades. Slots stay separate even when their current colors match, so role layouts do not change with color choices.
+
+Outputs are immutable:
+
+| Member | Meaning |
+| --- | --- |
+| `palette` | Packed RGB colors, ready for `makeBuilder`. |
+| `rgb` | The same palette as normalized RGB triples. Recipe palettes are quantized to eight-bit colors. |
+| `roles` | Named lists of palette indices, ready for material `r` fields and `paletteRoles`. |
+| `ramps` | Named lists of packed colors. |
+| `sampleRole(name, shade)` | Continuous role-path sampling; shade is clamped to 0–1. |
+| `inspectRole(name, shade)` | Requested and gamut-mapped OKLCh, RGB, packed color and `gamutMapped`. Hue values are equivalent modulo 360 degrees. |
+| `snapshot()` | A fresh JSON-compatible definition that can be edited, saved and compiled again. |
+
+Each role has exactly one of these sources:
+
+- `anchor: 'name'`: derive a shade ramp from a named color. Defaults: `lightness: [.14, .94]`, `chromaScale: [.3, 1, .12]`, `hueShift: [-16, 10]`, and `steps: 7`. Lightness gives the absolute low/high endpoints, with the anchor's lightness as the midpoint, constrained to that range. The default profile preserves the anchor color at its midpoint. Chroma scales the anchor's chroma at the dark end, midpoint and light end. Hue shift gives dark/light endpoint offsets in degrees around an unshifted midpoint. Profiles use smooth segment interpolation. Optional absolute `curves` override individual generated channels.
+- `color: '#rrggbb'`: one constant color. Only `steps: 1` may be supplied.
+- `path: pathDefinition`: sample any color path into the role's shade slots. Set `steps` on the role; the path's preview sample count is independent.
+
+## Bind a surface effect to named roles
+
+Use a role name anywhere a surface finish asks for a single colour. For
+a role with several shades, pick a stop such as `glacier.shadow`,
+`glacier.midtone`, `glacier.highlight`, or `glacier.2`.
+
+Set `surface.paletteRoles` to map an effect's names to the scene's
+`paletteRoles`. Each binding accepts a scene role or stop, a palette
+index, or an exact swatch in the scene palette. A local name takes
+precedence over a scene role of the same name on that surface. Binding
+a whole ramp preserves all its stops for uses such as a lighting ramp.
+Aliases resolve directly against the scene roles.
+
+```js
+const decal = {
+  type: 'projected',
+  pattern: 'indexed',
+  raster: {
+    width: 2, height: 2, slots: [0, 1, 2, 3],
+    palette: ['shadow', 'body', 'rim', 'emission']
+  }
+};
+const finish = KIT.surface.material(base, {
+  paletteRoles: {
+    shadow: 'glacier.shadow',
+    body: 'glacier.midtone',
+    rim: 'glacier.highlight',
+    emission: 'glacier-light'
+  },
+  layers: { decal }
+});
+```
+
+Use the same aliases for finish colours, indexed graphics, palette
+ramps and fields, lighting-ramp stops, driven colours, and the
+surface's palette constraints or render stages. Role references
+resolve against the scene's authored palette. A missing role or an
+ambiguous single-colour reference reports an error.
+
+The [relay colourways scene](../examples/surface-palette-roles.js) uses
+one indexed dial for three recipe ramps. Run the scene at native size
+to compare how their labels, rim and signal colours resolve.
+
+```sh
+ink-studio render examples/surface-palette-roles.js --w 354 --h 168 --px 1 --out relays.png
+```
+
+[Palette remaps](pixel-look.md#palette-remaps) also accept a named
+destination swatch.
+
+## Animate a palette field or ramp
+
+Add `animation` to an existing field. Key times are in seconds and
+increase from zero. Each key overrides values from the base definition.
+Leave a value out of a key to use its authored base value at that key.
+
+```json
+{
+  "type": "spectrum",
+  "hue": [0, 1],
+  "saturation": 0.7,
+  "brightness": 0.9,
+  "steps": 16,
+  "animation": {
+    "interpolation": "linear",
+    "playback": "loop",
+    "keys": [
+      { "time": 0 },
+      { "time": 3, "hue": [1, 2] }
+    ]
+  }
+}
+```
+
+Use `smooth` (default), `linear`, or `step` interpolation and
+`clamp` (default), `loop`, or `pingpong` playback. A loop needs a
+closing key. Whole-turn differences in `hue` and `rotation` count as
+matching endpoints. Hue values can run in either direction by
+authoring the ends of the sweep in turns.
+
+Key the existing numeric appearance controls, palette swatches, or
+named colour stops that are present in the base field. Keep palette
+lists, ramp types, step counts, and projection geometry fixed across
+keys. Palette-only changes recolour the original indexed regions.
+Coverage error and boundary views measure the current palette.
+
+Use `protect: [2, "emission"]` to lock original entries by zero-based
+slot or their authored string reference, including material palette
+roles. A primary ramp can also protect its `shadow`, `accent`, or
+`highlight` stop by name. Protection holds the swatch colour while
+the keyed field controls can still move its boundaries.
+
+```js
+const sweep = KIT.palette.ramp(definition);
+const color = sweep.frame(1.25).sample(0.35);
+const texture = sweep.raster(192, 32, 1.25);
+```
+
+`ink-studio palette field spectrum.json --t 1.25 --out sweep.png`
+exports the same sample. Assign the definition to a projected palette
+effect or a surface colour ramp to sample the scene clock. For
+atmospheric bindings, use the same ramp definition or key an existing
+bands field by supplying a `palette` list in the order of its stops.
+
+The [chromatic observatory](../examples/animated-palette-fields.js) combines
+a sky transition, a spectrum sweep, and spell glass with a protected gold
+swatch. This export retains the sampled sky colours at one art pixel per
+output pixel.
+
+```sh
+ink-studio clip examples/animated-palette-fields.js --w 340 --h 178 --px 1 --raw --to 8 --fps 12 --out observatory.png
+ink-studio transition-review examples/animated-palette-fields.js --w 340 --h 178 --raw --out observatory-review.png
+```
+
+## Independent channel curves
+
+```js
+const path = KIT.palette.path({
+  curves: {
+    hue: { stops: [[0, 205], [.5, 225], [1, 275]], interpolation: 'smooth' },
+    chroma: { stops: [[0, .025], [.5, .14], [1, .025]], interpolation: 'smooth' },
+    lightness: { stops: [[0, .12], [.4, .42], [1, .95]], interpolation: 'smooth' }
+  },
+  steps: 12
+});
+const color = path.sample(.65);
+const explanation = path.inspect(.65);
+```
+
+A channel may be a constant or `{ stops: [[position, value], ...], interpolation? }`. Use `step`, `linear` or `smooth` interpolation. Positions strictly increase from zero to one, with 2–256 stops. Lightness and chroma values are 0–1. Hue is in degrees and may be unwrapped across the seam: `350 → 370` passes through red; `0 → 720` makes two turns. Hue values are bounded to ±36,000 degrees.
+
+`path({ colors, curves?, steps?, interpolation?, hue? })` also accepts 2–64 RGB color anchors, including explicit `{ at, color }` stops. These must cover 0–1. The anchors define an OKLCh path, and `curves` replace only the channels supplied. Without RGB anchors, all three channels are required. The `hue` route is `short` by default, or `long`, `increasing`, `decreasing`. Neutral anchors borrow neighboring chromatic hues. Explicit absolute hue curves use their authored winding.
+
+`sample(t)` returns normalized sRGB. `lch(t)` returns the requested `[lightness, chroma, hueDegrees]` before gamut mapping. `inspect(t)` returns both requested and mapped values. Out-of-gamut colors reduce chroma while retaining lightness and hue. RGB anchors are preserved exactly when no channel overrides apply. Sampling clamps finite coordinates to 0–1; nonfinite coordinates fail explicitly.
+
+`rgb` and `hex` contain 2–4,096 evenly spaced preview samples. They do not limit continuous sampling. Very dark or nearly neutral colors can have numerically unstable measured hue; hue is visually immaterial when chroma is zero.
+
+## Extract a reference palette
+
+```sh
+ink-studio palette extract reference.png --size 24 --alpha visible --out palette-report.json
+```
+
+Indexed PNGs keep the complete embedded palette in slot order,
+including unused entries, duplicate colours, and alpha bytes.
+`swatches[].pixels` counts actual index references and
+`includedPixels` counts the references admitted by the alpha mode.
+The size setting applies to full-colour extraction.
+
+For full-colour PNGs, `--size` sets a maximum of 1–256 swatches and
+defaults to 32. Colours and their counts are exact when they fit.
+Otherwise a deterministic, frequency-weighted median cut produces the
+requested number of swatches. Each count is the number of source pixels
+represented by that group. The report marks reduction with
+`reduced: true`, `method: "weighted-median-cut"`, and the count of
+`sourceSwatches`. The `palette` list contains RGB8 hex colours. PNGs
+with 16-bit channels round RGB to 8 bits before counting distinct
+colours, and the report includes the source `bitDepth`.
+
+The default `visible` alpha mode excludes fully transparent pixels and
+counts partially transparent pixels using their stored RGB. Use
+`opaque` to count only fully opaque pixels, or `all` to include hidden
+RGB. The report gives separate transparent, partial, opaque, included,
+and excluded counts. A fully transparent full-colour image returns an
+empty palette in `visible` mode. For an animated PNG, extraction reads
+the default image.
+
+In Node, call `ink.readReferencePalette(filenameOrPngBuffer, options)`.
+For other image formats, decode the source to RGB or RGBA integer
+samples and call `KIT.palette.extract({ width, height, data }, options)`.
+An `ImageData` object can be passed directly. Both entry points accept
+`{ size, alpha }` and return the CLI's report.
+
+## Compare colour distributions with a reference
+
+```sh
+ink-studio palette distributions reference.png --scene examples/animated-palette-fields.js \
+  --w 340 --h 178 --px 1 --raw --t 4 --out distribution-review
+ink-studio palette distributions reference.png --render exported-frame.png --out distribution-review
+```
+
+`comparison.png` puts both images beside each other and uses the same
+histogram scale for each pair of charts. `distributions.json` records the
+pixel counts, shares, and Studio-minus-reference changes. The previews are
+resized for the sheet. The counts come from the source pixels and use the
+share of each image so different resolutions can be compared.
+
+Brightness uses OKLab lightness. Saturation uses HSV saturation. Hue
+uses 30° HSV families plus a neutral group for greys and colours below
+the neutral saturation or OKLab chroma threshold. The tonal rows divide
+the image into shadows, midtones, and highlights. Accents can overlap
+those rows and require both high saturation and high chroma. Each row
+shows how much of the image it covers and each family's share within it,
+with the most frequent actual swatch for that family.
+
+Use `--bins` for the number of brightness and saturation intervals (2–32,
+default 12) and `--alpha visible|opaque|all` to choose which pixels count.
+The default `visible` counts partially transparent pixels once using their
+stored RGB and skips fully transparent pixels. A `--settings` JSON file can
+set `shadow` and `highlight` (default 0.40 and 0.75), `neutralSaturation`
+and `neutralChroma` (0.10 and 0.02), and `accentSaturation` and
+`accentChroma` (0.65 and 0.10).
+
+In Node, `ink.comparePaletteDistributions(reference, studio, options)`
+accepts PNG paths, PNG buffers, or decoded RGB or RGBA rasters and returns
+`{ report, image }`. Pass a frame from `ink.render` to compare it directly.
+Use `KIT.palette.distributions(image, options)` or
+`KIT.palette.compareDistributions(reference, studio, options)` for
+just the measurements on decoded image data.
+
+## Review quantization error
+
+```sh
+ink-studio palette error examples/render-stages.js --params '{"stage":"palette"}' \
+  --w 760 --h 420 --px 2 --threshold .06 --out palette-error
+```
+
+The command exports `graded.png`, `resolved.png`, and `heatmap.png` on the
+same art grid. The heatmap shows Euclidean OKLab distance per pixel,
+including the selected dither pattern. Its fixed scale runs from dark
+at zero to red at `--heatmap-max` (default 0.20). Larger errors use
+the same red. Fully transparent pixels are skipped and partially
+transparent pixels count once using their stored RGB.
+
+`error.json` carries the heatmap legend, mean, RMS and maximum errors,
+and the same measurements by visible material. The material pass gives
+each pixel one owner. Pixels with no named owner are reported under ID
+`0`. Regions group horizontally or vertically adjacent pixels of the
+same material that reach `--threshold` (default 0.06). The report ranks
+these groups by total distance, with their pixel bounds and worst swatch
+pair. Coordinates start at the top-left art pixel. Use `--region-limit`
+to set how many regions are listed (default 20, maximum 100).
+
+For explicit render stages, the reference keeps frame grading and the
+authored material, lighting, and effect work. The measurement isolates
+the palette policies in the frame and palette stages. Legacy looks
+compare their continuous input to the scene resolver's output, including
+indexed grading, coverage choices, and pixel cleanup. Screen overlays
+are outside the measured pass.
+
+In Node use `ink.reviewQuantizationError(world, options)` for the three
+rasters, report, and a row-major `Float32Array` of distances. For aligned
+RGB8 buffers use `ink.measureQuantizationError({ w, h, graded, resolved, alpha },
+{ passes, threshold, heatmapMax, regionLimit })`. The optional material pass
+uses Ink's `{ w, h, materialId, materials }` format.
+
+## Inspect the palette at a pixel
+
+```sh
+ink-studio palette inspect examples/render-stages.js --params '{"stage":"palette"}' \
+  --w 760 --h 420 --px 2 --at 180,144
+```
+
+Use top-left, zero-based art pixel coordinates. Keep the camera, time,
+and art resolution of the shot you are inspecting. The command prints
+JSON, or writes it to `--out report.json`.
+
+The report names the visible surface's object and material where available.
+`winner` gives the rule, input colour, selected swatch, and its index in the
+rule's colour list. `inputRgb` preserves the matcher input even when it
+falls outside the display range of `inputColor`. `matchColor` identifies a
+separate mapped input when a legacy policy samples a graded swatch.
+
+Pair dithering reports both candidates, whether the pair was explicitly
+authorised, the sampled coordinates and rank, and the blend share and
+threshold. `method: "dither-pair"` means the alternate won. Ordered RGB
+bias reports its rank and offset. Tone ramps show their adjacent stops.
+
+`decisions` records the visible receiver's palette choices in render
+order, including scoped material or stage rules, masks, and effect
+palettes. A soft mask records its weight, and the stronger choice is
+reported as the winner until a later rule replaces it. Compare
+`outputColor` with the winning swatch to see changes from blending,
+cleanup, or finishing. The coordinates and colour refer to the scene
+pass before screen overlays. A fully transparent pixel has no winner.
+
+In Node, use `ink.inspectPalettePixel(world, { at: [x, y], ...view })`.
+
+## Measure palette usage at export size
+
+Use the same camera, time, and art resolution as the intended export.
+Omit `--select` to measure the whole frame.
+
+```sh
+ink-studio palette usage examples/palette-composition.js --w 368 --h 188 --px 1 \
+  --select '{"material":"fabric","effect":"bounce"}' --out fabric-usage.json
+```
+
+Select an authored `object` or `material` by its label. A screen
+`region` uses `[x, y, width, height]` in top-down art pixels and is
+clipped to the image. A world region uses
+`{"min":[x,y,z],"max":[x,y,z]}` and tests owned surface positions.
+An `effect` selects the final palette assignment for `fog`,
+`clouds`, `sky`, `emission`, `bounce`, or `shadow`. Combine fields
+to measure their intersection.
+
+Counts come from the exact RGB bytes of the rendered frame. Fully
+transparent pixels are excluded. Partial pixels count once. Object
+and material selections follow the [surface ownership pass](art-passes.md).
+When export and ownership pass grids differ, ownership uses the
+nearest source pixel at each export pixel centre.
+
+Each row reports its swatch, pixel count, fraction of selected pixels,
+and declaration status. Identical RGB swatches share a row. Compiled
+palette declarations cover scene and scoped palettes, including
+reserved swatches. An offscreen object or gated-off palette effect
+can report its unused declarations with zero visible pixels.
+Colours introduced by blending or overlays appear in the counts and
+are flagged as undeclared when they match no applicable declaration.
+
+The `unused` list contains declared swatches with zero matches.
+The `rare` list contains declared swatches with at least one match
+and at most `--rare-pixels` (default 3) or `--rare-share`
+(default .001, or 0.1% of the selected pixels). Set a threshold to
+zero to disable that criterion.
+
+Node callers can use
+`ink.paletteUsage(world, { w, h, px, t, select, rarePixels, rareShare })`
+and pass the usual render options. Pose mutable worlds using the same
+workflow as a direct render.
+
+## Transfer a reference ramp
+
+```js
+const transferred = KIT.palette.transfer(
+  ['#10202b', '#284653', '#42717c', '#86a9a6', '#d9d9b9'],
+  '#ab82d7',
+  { pivot: .5, strength: 1, hueStrength: 1, steps: 9 }
+);
+
+const recipe = KIT.palette.recipe({
+  anchors: { primary: '#ab82d7', accent: '#c7d67a' },
+  roles: {
+    stone: {
+      anchor: 'primary', steps: 9,
+      reference: ['#10202b', '#284653', '#42717c', '#86a9a6', '#d9d9b9'],
+      pivot: .5
+    },
+    glow: { anchor: 'accent', steps: 4, lightness: [.65, .98] }
+  }
+});
+```
+
+The reference may be a color array, path definition or compiled path. The reference at `pivot` aligns to the target anchor. Relative lightness below and above the pivot maps into the available shadow/highlight range; chroma follows the reference's relative profile, and hue follows its unwrapped offsets. A neutral reference pivot uses chroma differences instead of dividing by zero. Output gamut mapping keeps colors displayable.
+
+`strength` and `hueStrength` range from zero to one. Strength zero returns the target anchor throughout. The target color is exact at the pivot. Defaults are pivot `.5`, strength `1`, hue strength `1`, and seven samples. Transfer is a mathematical profile operation; it does not reconstruct lighting or simulate pigments. Compiled transfers can be assigned as role paths. Their snapshots use a serializable `{ transfer: { reference, anchor, options } }` path definition.
+
+## Animate recipes along a palette path
+
+```js
+const dusk = KIT.palette.duotone('#58aeb7', '#efad72');
+const midnight = KIT.palette.duotone('#ab82d7', '#c7d67a');
+const animation = KIT.palette.animate({
+  keys: [
+    { time: 0, recipe: dusk },
+    { time: 5, recipe: midnight },
+    { time: 10, recipe: dusk }
+  ],
+  playback: 'loop',
+  space: 'lch',
+  hue: 'short',
+  interpolation: 'smooth'
+});
+const frame = animation.sample(3.25);
+```
+
+Keys are 2–128 strictly increasing seconds, starting at zero. Every recipe must have the same role names and shade counts. Role declaration order may differ: animation aligns by name and retains the first key's slot layout. The last key defines the duration. Colors interpolate in OKLCh (`lch`) or OKLab (`lab`), with `step`, `linear` or `smooth` progress. Exact key times select the exact keyed recipe, including with step interpolation.
+
+Playback is `clamp`, `loop` or `pingpong`. Loop endpoints must match; include a closing key for a seamless loop. Pingpong reverses without needing a duplicate endpoint. Negative finite times clamp or wrap according to playback. Sampling is stateless and independent of delta time, render rate or seek order.
+
+The sampled result contains `time`, wrapped `phase`, normalized `rgb`, packed `palette`, `roles` and `ramps`. `duration`, `keyTimes`, `roles` and `snapshot()` are available on the compiled animation. Snapshot definitions accept recipes or paths compiled in the same toolkit, and export plain JSON data.
+
+## Bind to a live world without rebaking
+
+```js
+const live = KIT.palette.bind(world, animation);
+
+function render(time) {
+  // Advance the world's own simulation first, if it has one.
+  live.update(time);
+  renderer.render(live.world, {
+    time, width: 1056, height: 650,
+    changedRows: [] // use the simulation's actual dirty rows if geometry moved
+  });
+}
+// CPU: studio.render(live.update(time), { t: time, w: 1056, h: 650 });
+```
+
+The default binding requires the world palette to match the first recipe. `live.world` has stable identity and shares the source world's geometry; `live.grade` is a reused normalized RGB buffer. `update(seconds)` returns the same view object after updating its existing animation grade. The original world's palette, geometry and animation object are kept intact. Ordinary source-world changes are synchronized into the view, including replaced data arrays and removed properties. A palette layout change requires rebinding.
+
+The binding uses the existing palette-grade path in both renderers. Subsequent color curves, LUTs and color stacks retain their ordinary order. Render paths that intentionally bypass animation grades, including applicable tone or local-palette modes, retain their existing behavior. The binding does not rewrite literal effect colors outside the palette. `changedRows: []` tells the native renderer that no geometry changed; supply actual changed rows when the simulation moves splats. With a stable view, palette-only updates need no geometry texture upload.
+
+For an existing scene, map its named roles to recipe roles:
+
+```js
+const live = KIT.palette.bind(existingWorld, animation, {
+  roles: { masonry: 'primary', neon: 'accent' }
+});
+```
+
+Mapped ramps are resampled to the existing role's shade count. Unmapped slots preserve the source world's current animation grade, or their original palette colors when there is no grade. Mapped slots replace their prior color. Mapping `background` is explicit in this mode. Changes to mapped source-role layouts require rebinding. The binding is an explicit seconds-based sampler, not a `stage.add` simulation system.
+
+Ordinary splats encode RGB rather than a unique palette-slot identity. Consequently, two identical source colors cannot map to different animated colors. Bindings validate aliases and overlapping role assignments at every key, then validate interpolated updates before committing the grade. Invalid updates leave the previous grade intact. Keep independently animated roles distinguishable in the source palette or use existing scoped look tools when per-object ownership is required.
+
+## CLI export
+
+```sh
+node cli/ink-studio.js palette examples/palette-recipe.json --out palette.json
+node cli/ink-studio.js palette animation.json --t 3.25 --out frame-palette.json
+```
+
+The command accepts a recipe, path or palette-animation JSON definition and exports sampled colors. Recipes and animation also export named role indices and ramps. `--t` selects animation seconds; path definitions export their configured preview samples. Output can be written to a file or printed as JSON. Use the exported `palette` and `roles` when authoring a diorama.
+
+
+## Hue–brightness fields
+
+Use `KIT.palette.hueBrightness({ palette, saturation, hue, brightness })` to sample a rectangular field or export an indexed chart. A palette contains 1–48 hex colours or normalized RGB swatches. Hue runs horizontally across one turn by default, with red at both ends. Write a range such as `[0.8, 1.2]` to span part of the wheel across red. Brightness is HSV value and rises from bottom to top. Set the `brightness` range to `[0.05, 0.56]` for a dark field. Saturation runs from 0 for gray input targets to 1 for fully saturated targets. The selected colours always come from the supplied palette using Ink's weighted RGB palette match. An equal match uses the earliest swatch.
+
+- `index(u, v)` returns a swatch slot for normalized coordinates.
+- `sample(u, v, out?)` writes the chosen normalized RGB.
+- `raster(width, height)` returns top-down RGB bytes, one index per pixel, and the ordered palette. It samples pixel centres.
+
+```sh
+ink-studio palette field examples/hue-brightness-field.json --w 192 --h 96 \
+  --saturation 0.32 --out muted-field.png
+ink-studio render examples/hue-brightness.js --w 232 --h 132 --px 1 --out prism-workshop.png
+```
+
+The [Prism Workshop](../examples/hue-brightness.js) projects three variants of one palette onto its windows. See [hue–brightness material projection](projected-effects.md#huebrightness-fields) for the layer definition.
+
+
+## Polar colour fields
+
+`KIT.palette.polar({ palette, radial, range, rotation, saturation, brightness })` makes a circular field from the same nearest-swatch match as the [rectangular hue–brightness field](#huebrightness-fields). Hue increases counterclockwise from the right edge. `rotation` adds to that edge's hue in turns. Coordinates for `index(u, v)` and `sample(u, v)` run across the unit square around the disk, with `[0.5, 0.5]` at its centre and Y rising. The exact centre uses the starting hue.
+
+- With `radial: 'brightness'`, the default, set a fixed `saturation`.
+- With `radial: 'saturation'`, set a fixed `brightness` (HSV value).
+- The fixed control defaults to 1. `range` gives the radial values at centre and rim and defaults to `[0, 1]`. Use `[1, 0]` to reverse the gradient.
+- Outside the circle, `index` returns `-1` and `sample` returns `null`. `raster(w, h)` fits a circle to the shorter side, with RGB, alpha, and swatch indices. Transparent pixels have index `-1`.
+
+For the CLI, set `"type": "polar"` in the field JSON. The default chart size is 128 × 128. Its PNG has a transparent background for reuse as a texture.
+
+```sh
+ink-studio palette field examples/polar-colour-field.json --w 192 --h 192 --out polar-colour.png
+ink-studio render examples/polar-colour.js --w 248 --h 146 --px 1 --out observatory.png
+```
+
+The [chromatic observatory](../examples/polar-colour.js) uses both radial modes as [projected material fields](projected-effects.md#polar-colour-fields).
+
+## RGB and OKLab plots
+
+Use `KIT.palette.plot({ palette, space, size, radius, frame })` with 1–256 swatches. Accepts six-digit hex strings, packed RGB integers and normalized RGB triples. RGB uses X=R, Y=G, Z=B. OKLab uses X=a, Y=L, Z=b with a common world scale on all three axes, so spatial distance is proportional to OKLab distance. The RGB frame spans the unit cube. OKLab axes span L in `[0, 1]` and a and b in `[-0.35, 0.35]`.
+
+- `space` defaults to `'rgb'`. `frame` takes `'box'`, `'axes'` or `'off'`. It defaults to a box for RGB and axes for OKLab.
+- `size` is world units per colour-space unit and defaults to 4. `radius` is each swatch splat's radius as a fraction of size and defaults to 0.023.
+- `points` gives input order, hex swatches, native coordinates (RGB or `[L,a,b]`), and 3D positions. `axes` gives labels, ranges, colours and endpoints.
+- `plot.emit(builder, { origin, scale, id, frameColor })` places the plot as actual splat geometry. It returns world anchors for optional axis labels. Use the plot swatches in the scene palette or render raw to retain the source colours. The [colour archive example](../examples/palette-space-plots.js) mounts two plots in one scene and attaches labels with the existing annotation layer.
+
+```sh
+ink-studio palette plot examples/palette-space-plot.json --space rgb --out rgb-cube.png
+ink-studio palette plot examples/palette-space-plot.json --space oklab \
+  --orbit 360 --duration 4 --fps 18 --out oklab-orbit.png
+ink-studio palette plot examples/palette-space-plot.json --space oklab \
+  --format data --out oklab-points.json
+```
+
+The still render defaults to an isometric camera. Adjust `--yaw` and `--pitch` in radians, use `--ortho off` for perspective, and use `--labels off` to hide axis labels. `--orbit` is in degrees and writes an animated PNG. Full turns omit the duplicate end frame. Image output fits the plot to the viewport. JSON and embedded geometry keep the specified world scale.
+
+## Palette coverage fields
+
+Use `KIT.palette.coverage({ palette, space, slice, view })` to sample a plane through colour space. The field takes 1–48 swatches. `space: 'rgb'` uses normalized encoded RGB and Ink's weighted RGB match. `space: 'oklab'` uses `[L, a, b]` and Euclidean OKLab distance.
+
+Set `slice.origin` at the lower left. Add `slice.along` to reach the lower right and `slice.across` to reach the upper left. The vectors can be oblique and can vary more than one colour channel. The RGB default fixes blue at 0.5. The OKLab default fixes lightness at 0.62. Sample coordinates are literal, so slices can extend beyond the sRGB gamut.
+
+- `nearest` paints the exact winning swatch. Equal distances choose the earliest swatch.
+- `error` paints the distance from the sample to that swatch.
+- `boundary` paints the shortest distance, within the plane, to a change of winning swatch. It measures the full cell even if its edge falls beyond the output crop. A cell with no boundary in the plane returns `Infinity`.
+
+The diagnostic views use a stepped `ramp` and `displayRange: [low, high]`. The range defaults to `[0, 0.25]` for error and `[0, 0.09]` for boundary distance. An optional `edge: { width, color }` draws leading in the nearest view within the given distance of a cell edge. The width uses the same units as the boundary view.
+
+`index(u,v)` returns the nearest swatch slot. `sample(u,v,out?)` returns the chosen view's RGB. `measure(u,v)` returns the nearest `index`, `error`, and `boundary` together. `raster(w,h)` returns top-down RGB alongside swatch indices, errors, and boundary distances at pixel centres.
+
+```sh
+ink-studio palette field examples/palette-coverage-field.json --out cells.png
+ink-studio palette field examples/palette-coverage-field.json --view error --out error.png
+ink-studio palette field examples/palette-coverage-field.json --view boundary --out boundaries.png
+```
+
+Use `"type": "coverage"` in a CLI field JSON file. The [spectrum chapel](../examples/palette-coverage.js) uses the same OKLab slice as [projected leaded glass](projected-effects.md#palette-coverage-fields).
+
+## Spectrum and primary ramps
+
+`K.palette.ramp(definition)` compiles either ramp into a normalized `sample(t)` and a horizontal `raster(width, height)`. Samples outside `[0,1]` use the nearest endpoint. The RGB result is normalized sRGB.
+
+- A `spectrum` ramp sweeps between two hue values in turns. Use `hue: [0, 1]` for a full wheel or choose a shorter, reversed, or seam-crossing sweep. `saturation` and `brightness` hold their values across the strip and each default to 1.
+- A `primary` ramp interpolates through its required `accent` in OKLab. `shadow` and `highlight` default to black and white. `accentAt` places the accent along the strip and defaults to `0.5`.
+- Either ramp can use `steps` from 2 through 48 for equal-width bands. Primary ramps with at least three bands keep a band for the accent. An optional `palette` maps each result to the nearest swatch using Ink’s RGB weights.
+
+```sh
+ink-studio palette field examples/spectrum-ramp.json --out spectrum.png
+ink-studio palette field examples/primary-ramp.json --out primary.png
+ink-studio render examples/spectrum-ramps.js --w 288 --h 152 --px 1 --raw --out signal-station.png
+```
+
+Use the same ramp definitions in [projected materials](projected-effects.md#palette-ramps), or set `skyEnvironment.sky.paletteRamp` for a directional sky. The [signal station example](../examples/spectrum-ramps.js) uses a short spectrum sweep for dusk and a stepped primary ramp on the painted sign.
+
+```json
+{
+  "sky": {
+    "paletteRamp": {
+      "axis": "elevation",
+      "domain": [0, 0.45],
+      "strength": 0.7,
+      "ramp": {"type": "spectrum", "hue": [0.09, -0.32], "saturation": 0.57, "steps": 14}
+    }
+  }
+}
+```
+
+Sky axes use radians. Elevation starts at the horizon and defaults to the full upper hemisphere. Azimuth starts at world +Z, increases toward +X, and defaults to one turn. The sky blends the ramp above the horizon before drawing the sun. Overcast reduces the blend, and an optional `gain` can bind `strength` to a nonnegative numeric profile channel. Scene reflections that sample the sky see the same ramp.
+
+## Grayscale and brightness matches
+
+Compile `K.palette.ramp({type: 'grayscale', palette, metric, range})` to map a neutral gray strip to exact palette swatches. Supply 1–48 hex colours or normalized RGB triples. The gray target rises left to right in sRGB and covers `[0, 1]` by default. Use a narrower `range`, such as `[0.2, 0.85]`, to target a particular part of the tonal scale.
+
+- `nearest` (default) compares the neutral target and swatches using Ink’s weighted RGB distance. Swatches closer to neutral can win over saturated ones.
+- `lightness` compares only OKLab lightness. Saturated swatches can fill dark, middle, or light bands according to their perceived lightness. Both metrics use palette order to break ties.
+
+Use `index(t)` for the original swatch index, `sample(t)` for its RGB value, or `measure(t)` for the gray target, swatch, their OKLab lightness values, and the selected metric's error. The `report(width)` method lists each swatch's pixel count and the bands in the exported strip. Band starts are inclusive and ends are exclusive. Match the report width to the texture width to align the readings pixel for pixel. Swatches with zero pixels are unused at that resolution.
+
+```sh
+ink-studio palette field examples/grayscale-ramp.json --w 192 --h 32 --out gray-match.png
+ink-studio palette field examples/grayscale-ramp.json --w 192 --format data --out gray-match.json
+ink-studio render examples/grayscale-ramp-reliefs.js --w 312 --h 124 --px 1 --raw --out nautilus-press.png
+```
+
+Export the strip as a lookup texture for shaded print, halftones, or light-level bands. Use the same definition in a [projected ramp or material colour curve](projected-effects.md#palette-ramps). The [Nautilus press](../examples/grayscale-ramp-reliefs.js) applies both matching methods to the same lit sculpt.
+
+## Complementary and desaturation fields
+
+Compile either field with `K.palette.chromaField(definition)`. Sample it with `sample(u, v)` or export it with `raster(width, height)`. Horizontal position follows the colour path. Vertical position blends that path toward an independent shadow colour. Coordinates range from 0 to 1, with `v = 1` at the top of the texture.
+
+- Set `type: 'complementary'` and a source `color`. By default the other end is the hue opposite in OKLab, at the same lightness and with chroma reduced where needed to fit sRGB. Set `opposite` to use a chosen colour. The default `route: 'neutral'` passes through gray halfway across. Set `neutralLightness` to choose its OKLab lightness, or use `route: 'increasing'` or `'decreasing'` to travel around the OKLCh hue wheel.
+- Set `type: 'desaturation'` to move from `color` to gray at the same OKLab lightness. Use `neutralLightness` to end at a lighter ash or darker neutral.
+- Set `shade: [bottom, top]` to control the OKLab mix toward `shadow`. The default is `[0.68, 0]` toward black. Set `[0, 0]` for a flat strip or use a tinted shadow for glazes and patinas.
+- Set `steps: [columns, rows]` for discrete bands. Each axis accepts 2–48 steps. An odd column count keeps the exact midpoint on a neutral route. Add an optional `palette` of 1–48 swatches for exact palette output. With a palette, `index(u,v)` and `raster(width, height).indices` give the chosen swatch indices.
+
+```sh
+ink-studio palette field examples/complementary-field.json --out copper-to-teal.png
+ink-studio palette field examples/desaturation-field.json --out green-to-ash.png
+ink-studio render examples/chroma-glazes.js --w 312 --h 152 --px 1 --raw --out glaze-trials.png
+```
+
+The [glaze firing trials](../examples/chroma-glazes.js) project both definitions directly onto sculpted ceramics. Use the same approach for oxidation on metal, dyes on cloth, or two-colour decals. [Material setup](projected-effects.md#projected-chroma-fields)
+
+## Swatch and mix charts
+
+`K.palette.chart({type, palette})` makes an indexed artwork asset and a table of the values it depicts. The chart accepts 1–48 swatches and keeps their original zero-based order, including duplicates. Choose a chart type for the comparison you want.
+
+| Type | What it shows |
+| --- | --- |
+| `swatches` | Indexed swatches in palette order |
+| `brightness` | OKLab lightness bars in palette order |
+| `saturation` | HSV saturation bars in palette order |
+| `closest-pairs` | Distinct index pairs sorted by Euclidean distance in OKLab, with lightness differences and ties in index order |
+| `dither-pairs` | Bayer dither tiles containing only the two source swatches at each mix share |
+
+Set `cell: [width, height]` and `gap` in native texels. Use `columns` for swatch and closest-pair grids, or set `labels: false` for unlabelled art. Pair charts accept an optional `limit` for the number of automatically ranked pairs. For dithering, supply ordered `pairs` such as `[[0, 5], [2, 10]]`. Each `mix` share gives the requested fraction of the second swatch and defaults to `[0, 0.25, 0.5, 0.75, 1]`. The report includes the actual fraction of texels for each tile. Cell sizes divisible by four fit complete Bayer tiles.
+
+```sh
+ink-studio palette chart examples/palette-charts.json --out swatches.png
+ink-studio palette chart examples/palette-charts.json --type brightness --out brightness.png
+ink-studio palette chart examples/palette-charts.json --type saturation --out saturation.png
+ink-studio palette chart examples/palette-charts.json --type closest-pairs --format data --out pairs.json
+ink-studio palette chart examples/palette-charts.json --type dither-pairs --out mixes.png
+ink-studio render examples/palette-chart-archive.js --w 382 --h 168 --px 1 --raw --out pigment-archive.png
+```
+
+PNG files carry the palette in their indexed colour table and preserve transparent gaps. `chart.raster()` also exposes RGB, alpha and the original swatch indices as typed arrays. The JSON export includes the cell bounds and measurements plus a self-contained `raster` for an [indexed projected material](projected-effects.md#indexed-palette-charts). The [pigment archive](../examples/palette-chart-archive.js) mounts charts on sculpted display boards.
+
+## Review duplicate and close swatches
+
+```sh
+ink-studio palette pairs palette-report.json --sort distance --limit 12 --scale 16 --out pair-review
+```
+
+The input accepts a JSON array of colours or an object with a
+`palette` array, including output from `palette extract`.
+The review compares RGB8 values and preserves the original swatch
+indices, including all copies of an identical RGB value.
+
+`pairs.json` contains duplicate groups and every distinct index pair,
+with ranks for Euclidean OKLab distance and absolute OKLab lightness
+separation. A pair is `close` when its distance is at most
+`--max-distance` (default .035). The separate `lowLightnessSeparation`
+flag uses `--max-lightness` (default .02). Two strongly different hues
+can have nearly the same lightness.
+
+`native.png` shows each pair as two adjacent art pixels. `view.png`
+enlarges those exact pixels by `--scale` with nearest-neighbour
+sampling. Transparent gutters separate pairs. `--sort lightness`
+changes which pairs appear first. `--limit` sets how many pairs appear
+in the previews, and `--columns` sets their layout. The JSON report
+maps each cell's bounds on the native grid to its two palette indices.
+
+Use `KIT.palette.reviewPairs({ palette, sort, limit, columns,
+maxDistance, maxLightnessDelta })` with up to 256 swatches. Read
+`.report` for the measurements and use `.preview(scale)` for RGB and
+alpha bytes.
+
+
+## Review ramp spacing
+
+```sh
+ink-studio palette ramp-review ramp.json --out spacing.json
+ink-studio palette ramp-review --scene examples/palette-remap.json --role stone \
+  --w 240 --h 168 --px 1 --t .75 --out shot-spacing.json
+```
+
+The JSON input can be an ordered array of colours or an object with
+`stops`. Stops can be colours with optional `positions`, or pairs such
+as `[0.4, "#867b6e"]`. Unspecified positions are evenly spaced.
+`direction` defaults to `auto` and accepts `ascending` or `descending`
+to check an explicitly intended order.
+
+The report measures RGB8 stops in OKLab lightness. It includes each
+actual and expected step and flags the following.
+
+- `uneven-step` means a step differs from the lightness slope implied
+  by the endpoints and authored positions by more than `maxDeviation`
+  (default .035).
+- `reversal` means a step moves against the ramp direction by more
+  than `reversalTolerance` (default .005).
+- `missing-midtones` identifies two available lightness levels with no
+  stop between them and a gap greater than `maxGap` (default .22).
+  The report includes the midpoint lightness.
+- `duplicate-stop` and `resolved-collapse` identify adjacent stops
+  that share authored or resolved RGB8 values.
+
+For a shot using the indexed scene palette, use `--role` to track
+the original slots through the sampled time, colour grade, and remap.
+With a ramp file and `--scene`, a stop can bind automatically when its
+RGB identifies exactly one scene slot. The report counts where each
+resulting RGB appears anywhere in the export. Stops that share an RGB
+value report the same count.
+
+For material palettes, tone resolve, or other composited colour,
+pass a list such as `--pixels '[[41,62],[44,62],null]'` with one entry per stop.
+Coordinates are top-down art pixels. Use `null` for an unsampled
+stop. Probes read the final export RGB, including post styling, and
+fully transparent pixels have no reading.
+
+Use `KIT.palette.reviewRamp({ stops, positions, direction, ...thresholds })`
+for authored spacing, or `ink.reviewRampShot(world, { role, pixels, ...view })`
+in Node. The shot API accepts explicit `stops` in place of `role`.
+CLI thresholds are `--max-deviation`, `--reversal-tolerance`, and
+`--max-gap`. Use `--positions` to supply positions for a scene role.
+
+## Fit a target with two swatches
+
+`K.palette.fitDither({ target, policy, size }, { palette, roles })` searches
+the policy's explicit [authorized pairs](pixel-look.md#authorize-dither-pairs)
+for a target hex swatch or normalized RGB triple. Each pair's lightness
+range applies to the target's OKLab L. Supply the optional scene context
+when the policy refers to palette indices or roles. The CLI reads the same
+definition with optional `context: { palette, roles }`.
+
+The fitter counts the fractions of pixels each pair can draw using the
+pattern at the requested native size. It averages the two swatches in
+linear sRGB and ranks the averages by OKLab distance to the 8-bit target.
+The report gives the closest solid, selected swatches, actual share of the
+second swatch, average, and both errors. The average shown as hex is rounded
+for display. The scores use the unrounded average. Exact matches, including
+reserved matches, stay solid. The closest-solid comparison uses matchable
+swatches. Reserved swatches can enter the search as pair endpoints if
+they allow dithering. A target also stays solid if no approved mix
+improves the error.
+
+Choose `size: [width, height]` in native pixels. It defaults to `[32, 24]`.
+The fit uses the policy's Bayer, checker, or seeded blue-noise pattern, with
+a fixed top-left origin and the base cell scale. It searches the coverage levels in that exact crop,
+including partial patterns at the edges. The fitted texture has an explicit
+coverage. The policy's automatic strength and matching priority still govern
+the ordinary scene resolve. `pattern: "none"` and an empty `pairs` list each
+produce a solid.
+
+```sh
+ink-studio palette fit examples/palette-dither-fit.json --out comparison.png
+ink-studio palette fit examples/palette-dither-fit.json --tile --out slate.png
+ink-studio palette fit examples/palette-dither-fit.json --format data --out slate.json
+```
+
+The comparison PNG shows target, closest solid, and fit side by side at 1×.
+Use `result.indexed()` or the JSON report's `raster` as an
+[indexed projected material](projected-effects.md#indexed-palette-charts).
+The fit raster contains only the selected palette swatches, with no
+interpolated colors baked into it.
+
+## Review dither usefulness
+
+```sh
+ink-studio palette dither-review examples/palette-dither-fit.json --out dither-review
+```
+
+Review uses the same input as `palette fit`. It measures each approved
+pair against the same closest solid, including pairs that produce a
+worse match. The pair's average is a linear-light blend weighted by
+the actual pixel counts in the native crop. `gain` is the solid's
+OKLab error minus the mix's OKLab error. A positive gain means the mix
+is closer to the target. The PNG for each reviewed pair shows the
+target, closest solid, blended average, and native pattern from left
+to right.
+
+The report includes the endpoints' OKLab and lightness separation,
+and counts horizontal and vertical neighbours that switch swatches.
+The texture score is the larger of two RMS contrasts. One weights
+the swatch contrast by their coverage in the whole patch. The other uses the
+measured contrast between neighbours in the native crop. This flags
+strong contrast in both large clusters and fine stipple.
+
+Add `"review": { "minGain": 0.01, "textureLimit": 0.12 }` to set the
+thresholds. A pair is useful when it improves the match by at least
+`minGain` and stays within `textureLimit`. The texture flag is a guide
+to visual review. Add `"share": 0.5` inside `review` to check a specific
+fraction of the second swatch, in palette order. That share snaps to the
+closest attainable two-colour coverage. With no requested share, each
+pair uses its best attainable average.
+
+Pairs gated by lightness, reserved targets, a disabled pattern, or
+crops too small for two colours are listed with a status. In the
+library, call `K.palette.reviewDither(definition, context)`. Use the
+zero-based pair index with `result.preview(index)` for the comparison
+or `result.indexed(index)` for the pattern by itself.
+
+## Review subject readability
+
+```sh
+ink-studio palette readability examples/silhouette-protection.js \
+  --plan examples/readability-courier.json --w 264 --h 150 --px 1 --out readability
+
+ink-studio palette readability examples/silhouette-protection.js \
+  --select '{"surface":"courier-face"}' --directions 4 --times 0,1 \
+  --w 264 --h 150 --px 1 --out face-readability
+```
+
+Select a face, a prop, or a whole silhouette using Ink's existing
+object, material, surface, entity, or tag selectors. The review
+measures the final native scene colours before screen overlays. Every
+sample pairs a visible subject pixel with an immediate horizontal
+or vertical neighbour outside that subject. A neighbour can be
+another surface on the same object, such as the hat next to a face.
+Crop edges and foreground occluders are counted separately. With a
+transparent export, add a hex `matte` to the plan to measure against
+the intended background. Without a matte the review skips pixel pairs
+with partial or missing alpha.
+
+The report includes Euclidean OKLab colour distance, absolute OKLab
+lightness difference, minimum, tenth percentile, and mean separation.
+It gives the worst pair for each metric with the two swatches and
+top-left art pixel coordinates. Green outlines mark measured edges
+above both thresholds. Blue marks low colour separation, amber marks
+low lightness separation, and red marks edges low on both. A plan can
+override `thresholds.color` (default 0.09), `thresholds.lightness`
+(0.055), `thresholds.weakShare` (0.25 of sampled edge pairs to flag
+the view), and `thresholds.depthBias` (0.05 scene units).
+
+Use plan `subjects` with `{ id, select }`, named `views` with camera
+settings such as `yaw` and `pitch` in radians, and named `states` with
+`time` in seconds. Each state may override `lighting` using
+`skyTime`, `skyProfiles`, `skyEnvironment`, `liveSun`, or `areaLights`.
+The review checks every view under every state and identifies each
+subject's weakest cases. Export `comparison.png` and `review.json`
+together to keep the edge evidence and measurements aligned.
+
+In Node, call `ink.reviewSubjectReadability(world, { plan, width, height,
+view, pose })` for the image and report. Use `view.px` just as in a
+normal render. A stateful world needs a `pose(world, time)` callback.
+
+## Review shadow readability
+
+```sh
+ink-studio palette darks examples/shadow-readability.js --w 184 --h 104 --px 1 --cols 2 --out low-tide
+```
+
+The review pairs horizontal and vertical neighbours on visible
+geometry at the export's art resolution. Both pixels must be at or
+below `maxLightness` in OKLab L, which defaults to 0.40. It reports
+adjacent shapes sharing the same swatch, weak OKLab colour separation,
+and weak OKLab lightness separation. `review.json` gives contact counts,
+dark sample counts, and the weakest pair's coordinates and swatches.
+`comparison.png` shows the render and marks the measured edges.
+
+The default plan groups contacts by visible material. Use
+`groupBy: "object"` to identify adjacent objects with the same material.
+For exact areas, use the readability plan's named `subjects` and
+optional `pairs` of subject IDs. `views`, `states`, and transparent
+`matte` work as in the subject review. A state can set
+`look: { "effectPalettes": false }` for a matched baseline.
+
+`thresholds.color` defaults to 0.06, `thresholds.lightness` to 0.035,
+and `thresholds.weakShare` to 0.25. A contact with zero dark samples
+reports its sample count and receives a **No dark contacts** label when
+the whole view is unmeasured. Add an authored
+[material dark ramp](effect-palettes.md#reserve-dark-ramps-by-material)
+to reserve swatches for a specific shadow shape.
+
+In Node, use `ink.reviewShadowReadability(world, {plan, width, height,
+view, pose})`. Pass the scene's usual pixel size in `view.px`.
+
+## Compare palettes through lighting and weather
+
+```sh
+ink-studio palette weather examples/review-beacon.js --plan examples/palette-weather-beacon.json \
+  --w 268 --h 158 --px 1 --cols 3 --out palette-weather
+
+ink-studio palette weather examples/palette-field-weather.js \
+  --select '{"material":"rain-glaze"}' --times 0,2,4.5 --w 180 --h 108 --px 1
+```
+
+Weather review uses the same subject selectors, camera views,
+lighting states, and edge measurements as subject readability.
+Add a `weather` object to a state to override options such as
+`retainedWeather`, `precipitation`, or `shapedAtmosphere`. State times can
+sample any authored sky, light, or weather track. Set `baseline` to a
+state ID, or use the first named state. Each comparison uses the
+baseline sample from the same named view. Camera rigs are sampled at
+the baseline time by default. Scenes with procedural camera updates
+use the starting camera unless the plan supplies a view.
+
+The native scene colours supply brightness, hue and saturation
+distributions and the number of distinct shadows, midtones and
+highlights. Use `palette.shadow` and `palette.highlight` for the OKLab
+lightness boundaries (default 0.40 and 0.75). Each state's subject
+measurements show what changed, including newly weak silhouette edges
+and midtones that lost area or distinct swatches.
+
+Set `pairs` to arrays of two subject IDs, for example
+`[["Paving", "Inlay"]]`. The review checks every pair if this is omitted.
+It measures horizontally or vertically adjacent render pixels owned
+by the two subjects and counts contacts that resolve to the exact same
+swatch. Pink marks those contacts in the evidence panels.
+The report records the comparison counts and example pixel coordinates.
+Contacts without samples in either state have no change value.
+
+Set `limits` to tune the finding thresholds. `midtoneShareDrop`
+defaults to 0.15, `midtoneSwatchLoss` to 0.5 of the baseline count,
+`weakEdgeGain` to 0.2, and `sameSwatchGain` to 0.2. The share limits
+are absolute changes, so 0.2 means twenty percentage points.
+Select intermediate times to catch a temporary loss during a transition.
+
+Use `ink.reviewPaletteWeather(world, { plan, width, height, view, pose })`
+in Node. The CLI writes `comparison.png` and `review.json` with the
+resolved artwork, edge evidence and per-view findings.
+
+## Review the palette at each render stage
+
+```sh
+ink-studio palette stages examples/render-stages.js --params '{"stage":"review"}' \
+  --w 296 --h 158 --px 1 --out stage-review
+```
+
+The review captures four aligned views from the same native render.
+Base paint shows the visible surface's retained albedo after material
+rules and projected paint. The lit composite includes lighting, surface
+finishes, atmosphere, and compositing as they enter the frame grade.
+Graded output includes the actual frame-stage rules. Final swatches show
+the resolved scene before screen overlays.
+
+The report counts distinct swatches, hue families and tonal bands at
+each stage. Between stages it compares the same pixels and lists
+output swatches that combine multiple source swatches, colours newly
+present in the paired sample, and large hue shifts with example art
+pixel coordinates. Set `--hue-threshold` in degrees (default 22) and
+`--min-chroma` in OKLab (default 0.025). Colours below the chroma floor
+have no reported hue. Use `--select '{"material":"steel"}'` or another
+named selector to review one ramp or surface.
+
+Pass `--allowed '["#131d33","#253551"]'` to check the final output against
+an explicit palette. The report identifies the first captured stage at
+which those outside colours appeared and persisted on their pixels.
+The clipping audit covers the whole shot.
+
+Legacy looks grade indexed swatches during resolution. Their report
+compares the lit input and final output directly. Paint data is
+shown where the bake retained it. JavaScript sculpt scenes can capture
+this data with `S.captureAlbedo = true` before baking, and custom
+splats can supply it through `B.describeAlbedo`.
+
+Use `ink.reviewPaletteStages(world, options)` in Node for the
+report, native stage rasters, and comparison image. The CLI writes those
+rasters, `comparison.png`, and `stages.json`.
+
+## Suggest editable lighting ramps
+
+Use `K.palette.lightingRamps.suggest({ palette, roles, materials })` to choose lighting swatches from an existing palette. `roles` can carry the scene's current named roles. Each material needs a `base` palette index or a hex/RGB target. An index pins the exact swatch. A target uses the nearest allowed swatch as the base.
+
+Choose `preset: 'cloth' | 'iron' | 'stone' | 'skin'` per material. A matching material name selects its preset automatically. Other names default to stone. Optional `bounce` supplies an index or a colour hint for reflected light. Optional `candidates` limits suggestions to the listed palette indices. A candidate list must include a pinned base.
+
+The draft holds six indices per material. The five diffuse stops run from shadow through bounce, half-shade and base to highlight in order of increasing lightness. The neutralizer is a suggested low-chroma swatch near the base lightness. The generator may repeat a swatch in a limited palette. Review and edit the indices, the five `positions`, and `interpolation` before approval.
+
+```sh
+ink-studio palette lighting examples/lighting-ramp-palette.json --out lighting-draft.json
+ink-studio palette lighting lighting-draft.json --approve --out lighting-roles.json
+ink-studio render examples/authored-lighting-ramps.js --w 368 --h 158 --px 1 --t 0.75 --out lighting-bench.png
+```
+
+Approval validates the draft and saves the chosen indices as written. It returns the original packed `palette`, updated `roles`, and `ramps` ready for `lightingRamp` bindings. For example, `roles.cloth` contains the five diffuse indices, `roles['cloth.bounce']` contains the selected bounce swatch, and `roles['cloth.neutralizer']` contains the companion neutralizer. The output also includes a one-swatch role for each of the other named tones. Existing roles are carried forward, with matching names updated by approval.
+
+Use `paletteRoles: approved.roles` in `B.finish()`. In a JSON diorama, use the approved `palette` and `roles` and copy the matching `ramps` entry to the finish's `lightingRamp`. The [lighting bench](../examples/authored-lighting-ramps.js) shows cloth, iron, stone, and skin, with an artist-edited stone highlight. [Material lighting ramps](surface-materials.md#material-lighting-ramps)
+## Compare candidate palettes on one shot
+
+Pass a JSON array of alternatives with distinct IDs and swatches.
+
+```json
+[
+  {"id":"cobalt","palette":["#131d33","#38537d","#77a6c6","#a6ced4"],"match":"perceptual"},
+  {"id":"amber","palette":["#191725","#5e3a33","#b67a4d","#f3d59f"],"match":"brightness"}
+]
+```
+
+```sh
+ink-studio palette compare examples/render-stages.js palettes.json \
+  --params '{"stage":"review"}' --w 296 --h 158 --px 1 --out matched-palettes
+```
+
+Ink renders one native reference using the selected camera, time and
+art-pixel size. Every candidate resolves the same RGB8 pixels and alpha
+with its own swatches, matching mode and optional reserved swatches or
+screen-space dither. Candidate palettes apply to the whole captured
+frame. The reference includes frame grading with frame and final palette
+rules bypassed. Earlier material and atmosphere colour operations are
+already baked into the reference. For legacy indexed looks, the
+reference is the input to indexed grading and swatch selection.
+Screen overlays and render-graph passes are outside this comparison.
+
+The output directory contains a contact sheet, the source reference,
+artwork and an OKLab-distance heatmap per candidate, and a JSON report
+with swatch counts, unused swatches (zero pixels), and error by material
+and region. All heatmaps use the same scale and threshold. Set
+`--heatmap-max` (default 0.20), `--threshold` (default 0.06), and
+`--region-limit` (default 20) to tune the diagnostics.
+
+A world manifest, simulation checkpoint, or recording can supply the
+shot. Use `--ticks` or `--t` to select a simulation snapshot, or omit
+both to use the saved tick on a checkpoint or recording. In Node, use
+`ink.compareShotPalettes(world, { palettes, w, h, px, t })` with a
+world already posed or sampled at the desired simulation state.
+## Save approved findings as look assets
+
+```sh
+ink-studio palette lighting lighting-draft.json --approve --out lighting-roles.json
+ink-studio palette save-look approved-stone.json --out workshop-pack.json
+```
+
+The approval file declares the findings to keep. This example uses a
+named lighting ramp, a hand-approved palette and a protected accent.
+Any of those can be saved on its own.
+
+```json
+{
+  "id": "workshop/stone",
+  "label": "Stone and lantern accents",
+  "ramp": {"approved": "lighting-roles.json", "role": "stone"},
+  "palette": ["#242b36", "#56677c", "#93a4a5", "#e9cf9e"],
+  "reserved": [{"color": "#ffbb58", "match": false, "dither": false}]
+}
+```
+
+- For a reference-derived palette, use `"palette": {"reference":
+  "reference-report.json"}` with a `palette extract` report. By default
+  this keeps swatches with pixels included by the extraction's alpha
+  settings. Add `"indices": [2, 8, 1]` to choose and order specific
+  report swatches. The look stores up to 48 output swatches including
+  reserved accents.
+- For a ramp spacing review, use `"ramp": {"review": "ramp-review.json",
+  "interpolation": "smooth"}`. It takes the authored stops, with their
+  positions. You can also supply explicit `stops` and optional
+  `interpolation` and `weights`. Approved lighting roles are converted
+  to explicit RGB stops so a different scene's indices cannot change them.
+- For a dither review, add `"dither": {"review": "dither-review/review.json",
+  "approved": [0], "strength": 0.65}`. Indices refer to measured pairs
+  and are zero-based. The saved table keeps those pairs' lightness
+  ranges from the report. Use `{"index": 0, "lightness": [0.36, 0.56]}`
+  to author a range explicitly or restore it from an older report.
+  You can also supply ordinary `dither` settings with an edited
+  `pairs` table. Pair tables use an explicit candidate palette so
+  all endpoints resolve in another scene.
+
+Install the result with `--asset-pack workshop-pack.json` or embed
+it in the scene's `assetPacks`. Bind `"lookAsset":
+{"asset": "workshop/stone", "revision": 1}` on a material or on
+a simulation entity's visual. The ramp supplies a diffuse finish
+before the other lit finish layers. A palette policy can also bind at
+`finish.look.asset` or `visual.look.asset` for scene-wide resolution.
+Material lighting ramps use the headless renderer.
+
+Pass `--pack workshop-pack.json` when saving another look in the pack
+or updating an existing one. Updates keep the look ID and carry over
+omitted components. The pack revision increments on content changes.
+Use `K.authoring.assetPacks.savePaletteLook(approval, pack)` in the library,
+passing the report objects directly where the CLI accepts paths.
+## Run palette checks in CI
+
+```sh
+ink-studio palette check examples/silhouette-protection.js examples/palette-check-courier.json \
+  --params '{"lanternAccent":true}' --w 216 --h 136 --px 1 --out palette-checks
+```
+
+The plan uses the same named `subjects`, `views`, `states`, `thresholds`
+and optional `matte` as subject readability. Add a `checks` array. Every
+check has a distinct `id`, a `type` and a subject ID. Checks run on every
+sample by default. An optional `views` or `states` list can scope a check
+to named samples. For a camera move, name views along the orbit or
+sample the authored camera path at the plan's state times.
+
+- A `swatch` check takes an exact `#rrggbb` swatch. It counts visible
+  subject pixels in the final resolved RGB at native art size before
+  screen overlays. `minPixels` defaults to one visible pixel and
+  `minShare` defaults to 1, so every visible pixel must match. This
+  compares the actual output colour, including the effect of dithering.
+- A `readability` check measures subject contour contrast against the
+  immediate background. Set `minSamples`, `minPixels`, `minColorP10`,
+  `minLightnessP10`, `maxWeakColorShare`, `maxWeakLightnessShare` or
+  `maxCroppedEdges`. At least one visible pixel and one comparable edge
+  are required. If no contrast limit is supplied, both weak-edge shares
+  must be at or below the plan's `thresholds.weakShare`. The matte, when
+  present, applies to contour contrast.
+
+The example checks that every visible lantern-core pixel keeps
+`#fff0c2` and that the courier meets the contrast limits at each of four
+orbit samples. Omit `--params` to run the same checks with the lantern's
+reserved accent disabled.
+
+The command writes `board.png` and `report.json` on both pass and
+assertion failure. The board pairs each rendered view with its
+highlighted swatch and edge evidence. JSON records the overall
+outcome, each check's evaluation count, and actual values with limits
+for failures at each view and state. Exit status is 0 when every check
+passes, 2 when any check fails, and 1 for invalid input or a render or
+I/O error. In Node, call `ink.checkPaletteShot(world, { plan, view, width,
+height, columns, pose })` and read `report.passed`.

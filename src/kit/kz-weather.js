@@ -26,6 +26,12 @@
   };
 
   K.weather = {
+    lightning: Lightning.compile,
+    exposure: SceneExposure.compile,
+    bind(environment, descriptor = true, { profiles } = {}) {
+      return WeatherBinding.bind(SkyEnvironment.compile(environment), WeatherBinding.settings(descriptor),
+        { profiles, createSurface: K.procedural.motion.surfaceWeather });
+    },
     fall(B, o) {
       o = o || {};
       const R = dice(o.seed || 61),
@@ -39,6 +45,10 @@
         speed = o.speed || (kind === 'rain' ? 9 : kind === 'leaf' ? 0.9 : 0.6),
         sway = o.sway === undefined ? (kind === 'leaf' ? 0.35 : kind === 'snow' ? 0.12 : 0) : o.sway,
         wind = o.wind || [0, 0];
+      const spatial = o.worldSpace === true && (kind === 'rain' || kind === 'snow');
+      if (spatial && (!Number.isFinite(speed) || speed <= 0 || !Number.isFinite(top)))
+        throw new RangeError('World precipitation needs finite height and positive fall speed');
+      const first = B.count();
       let laid = 0;
       for (let i = 0; i < (o.n || 300); i++) {
         const x = box[0] + (box[1] - box[0]) * R(),
@@ -49,11 +59,11 @@
         const col = B.P[cols[Math.floor(R() * cols.length)]],
           an =
             kind === 'rain'
-              ? { k: 2, ph: R(), sp: speed * (0.9 + 0.2 * R()), rg: h, ex: 0, nd: true }
+              ? { k: 2, ph: R(), sp: speed * (0.9 + 0.2 * R()), rg: h, ex: 0, nd: true, wind: o.profile === true && !spatial }
               : { k: 15, ph: R(), sp: speed * (0.7 + 0.6 * R()), rg: h, ex: sway * (0.6 + 0.8 * R()), nd: true };
         if (kind === 'rain') {
           // a streak, slanted with the wind
-          const ax = norm([wind[0] / speed, -1, wind[1] / speed]);
+          const ax = spatial || o.profile === true ? [0, -1, 0] : norm([wind[0] / speed, -1, wind[1] / speed]);
           B.stick(x, top, z, ax, o.len || 0.09, size, col, 1.1, an);
         } else if (kind === 'leaf') {
           const a = R() * 6.28,
@@ -62,6 +72,7 @@
         } else B.disc(x, top, z, [0, 0, 1], size, size, col, 2.2, an);
         laid++;
       }
+      if (spatial || kind === 'snow') B.describePrecipitation(first, B.count(), o.profile === true, spatial);
       return laid;
     }
   };
