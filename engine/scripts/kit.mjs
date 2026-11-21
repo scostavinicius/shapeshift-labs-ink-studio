@@ -9,10 +9,13 @@ import { fileURLToPath } from 'node:url';
 const require = createRequire(import.meta.url);
 export const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const studio = require(path.join(REPO, 'index.js'));
+// the toolkit's source with `**` lowered to a late-bound Math.pow (kit-node.cjs says why), cached in engine/out/kit
+const { kitSource } = require('./kit-node.cjs');
 
-export function kitScript() {
+/** The page's kit.js. o.minify: the minified toolkit (the build uses it; the dev server serves it readable). */
+export function kitScript(o = {}) {
   return [
-    studio.bundle(),
+    kitSource({ minify: !!o.minify }),
     'const SCENES = [];',
     studio.demos(),
     // the scene modules a page loads later add themselves here (see sceneScript)

@@ -24,7 +24,7 @@ const REPO = path.resolve(HERE, '..', '..', '..');
 const OUT = path.join(HERE, 'out');
 const R = require(path.join(REPO, 'cli', 'render.js'));
 const PNG = require(path.join(REPO, 'cli', 'png.js'));
-const kit = require(path.join(REPO, 'index.js')).load();
+const kit = require(path.join(REPO, 'engine', 'scripts', 'kit-node.cjs')).loadKit();
 
 // the fixed set the plan names: each scene at two moments, from three sides
 const W = 900,

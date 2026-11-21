@@ -12,7 +12,7 @@ const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const REPO = path.resolve(ROOT, '..');
 const R = require(path.join(REPO, 'cli', 'render.js'));
-const kit = require(path.join(REPO, 'index.js')).load();
+const kit = require(path.join(ROOT, 'scripts', 'kit-node.cjs')).loadKit();
 
 const burnAt = t => {
   const scene = kit.SCENES.find(s => s.id === 'burn'),

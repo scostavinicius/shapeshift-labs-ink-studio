@@ -107,7 +107,8 @@ function sceneOf(def) {
   return require(file);
 }
 
-const freshInk = () => ({ ...require(path.join(REPO, 'index.js')).load(), extra: [] });
+// the toolkit with `**` lowered for determinism (scripts/kit-node.cjs)
+const freshInk = () => ({ ...require('./scripts/kit-node.cjs').loadKit(), extra: [] });
 
 function readScript(o) {
   const script = o.input ? JSON.parse(fs.readFileSync(path.resolve(o.input), 'utf8')) : { events: [] };

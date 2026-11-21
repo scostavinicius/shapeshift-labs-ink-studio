@@ -2,6 +2,8 @@
 // entry (rebuilt by esbuild on every request, so a reload always shows the latest code), the toolkit bundle, and scene
 // modules from the repository.
 import http from 'node:http';
+import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,15 +34,31 @@ export async function startServer({ port = 5173, host = '127.0.0.1' } = {}) {
     res.writeHead(code, { 'Content-Type': type, 'Cache-Control': 'no-store' });
     res.end(body);
   };
+  // big text (the toolkit is several MB) goes gzipped when the browser takes it; the last few results are kept by
+  // content hash, so a reload with nothing changed costs a hash, not a compression
+  const zipped = new Map();
+  const sendText = (req, res, type, body) => {
+    const buf = Buffer.isBuffer(body) ? body : Buffer.from(body);
+    if (buf.length < 64 * 1024 || !/\bgzip\b/.test(req.headers['accept-encoding'] || '')) return send(res, 200, type, buf);
+    const key = crypto.createHash('md5').update(buf).digest('hex');
+    let gz = zipped.get(key);
+    if (!gz) {
+      gz = zlib.gzipSync(buf, { level: 6 });
+      zipped.set(key, gz);
+      if (zipped.size > 6) zipped.delete(zipped.keys().next().value);
+    }
+    res.writeHead(200, { 'Content-Type': type, 'Content-Encoding': 'gzip', 'Cache-Control': 'no-store' });
+    res.end(gz);
+  };
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url, 'http://localhost');
     try {
       if (contexts[url.pathname]) {
         const out = await contexts[url.pathname].rebuild();
-        return send(res, 200, 'text/javascript', out.outputFiles[0].contents);
+        return sendText(req, res, 'text/javascript', Buffer.from(out.outputFiles[0].contents));
       }
       if (url.pathname === '/favicon.ico') return send(res, 204, 'image/x-icon', '');
-      if (url.pathname === '/kit.js') return send(res, 200, 'text/javascript', kitScript());
+      if (url.pathname === '/kit.js') return sendText(req, res, 'text/javascript', kitScript());
       // a game module (engine/examples/<name>/game.ts), bundled for the page
       const game = /^\/game\/([\w-]+)\.js$/.exec(url.pathname);
       if (game) {

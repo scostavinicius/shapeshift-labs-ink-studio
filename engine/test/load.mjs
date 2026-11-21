@@ -23,7 +23,7 @@ export async function loadTs(rel) {
 
 /** The toolkit as the engine's page sees it (INK): a fresh copy each call, so tests do not share state. */
 export function loadInk() {
-  const kit = require(path.join(REPO, 'index.js')).load();
+  const kit = require(path.join(ROOT, 'scripts', 'kit-node.cjs')).loadKit();
   return { ...kit, extra: [] };
 }
 

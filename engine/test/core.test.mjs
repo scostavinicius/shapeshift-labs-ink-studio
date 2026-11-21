@@ -10,7 +10,7 @@ import * as esbuild from 'esbuild';
 const require = createRequire(import.meta.url);
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const REPO = path.resolve(ROOT, '..');
-const kit = require(path.join(REPO, 'index.js')).load();
+const kit = require(path.join(ROOT, 'scripts', 'kit-node.cjs')).loadKit();
 
 // the core is TypeScript: bundle it for Node and load it from a data URL
 const out = await esbuild.build({

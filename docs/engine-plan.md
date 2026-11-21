@@ -315,6 +315,43 @@ Plano original:
 - Decidir, com números, o que vale mover para Worker ou WebAssembly (candidatos: ordenação, `K.mpm`, `K.xpbd`, partículas).
 - **Pronto quando:** a arena mantém 60 fps com 300 mil splats numa GPU integrada, ou existe um relatório dizendo o que impede e quanto custaria resolver.
 
+## Etapas 12+ — trazer o ink-studio novo para a engine
+
+Em 2026-11-21 o `main` do original (828 commits: geração procedural, simulação de mundo, IA de agentes, luzes, clima, áudio espacial, renderizador WebGL próprio) entrou nesta branch. O plano abaixo traz para a engine só o que melhora os jogos, escolhido com o usuário. O que ficou de fora, e por quê, está no fim desta seção.
+
+| Etapa | O quê | Estado |
+|---|---|---|
+| 12 | Saúde depois do merge, `**` do kit, linha de base | ✅ |
+| 13 | Peso de carregamento: kit minificado e comprimido, cenas pré-montadas | em andamento |
+| 14 | Trocar o renderizador próprio pelo do original (`webgl.mjs`), mantendo o Worker de ordenação | |
+| 15 | Tamanho do pixel controlável (`&px=`, `[` `]`) e cobertura contínua (sem buracos) | |
+| 16 | Custo de render: recorte por visibilidade, ordem estática + móvel, menos splats no bake | |
+| 17 | Fases procedurais (salas e cavernas pela semente) | |
+| 18 | IA dos inimigos: rotas, percepção, `hunter()` | |
+| 19 | Objetos destrutíveis, que continuam quebrados depois do save | |
+| 20 | Câmera com impacto (só na vista desenhada) | |
+| 21–22 | Luzes locais com sombra; chuva, neblina e raios | |
+| 23–24 | Som posicional; modelos GLB (cenário e personagens rígidos) | |
+| 25 | Jogo novo (`masmorra`) e o que melhora cada jogo atual | |
+
+### Etapa 12 — Saúde depois do merge · ✅ concluída
+
+- **Linha de base:** com o kit novo, `npm test` (55), `npm run parity -- --min 99` (100% em todos os casos), `npm run live` e `npm run perf` passaram sem mudança. Números do perf na mesma máquina da etapa 11: arena 0,18 ms de GPU por desenho, arena densa 1,73 ms; ordenação no Worker 1,4 ms e 8 ms.
+- **O `**` voltou ao kit:** o original passou a usar o operador em cerca de 165 arquivos, inclusive no núcleo (`K.wobble`, deformadores). Ele não passa pela troca do `Math` determinístico. Em vez de editar esses arquivos, a engine carrega o kit por [`engine/scripts/kit-node.cjs`](../engine/scripts/kit-node.cjs), que reescreve cada `a ** b` com o esbuild e põe um ajudante que eleva ao quadrado com `a * a` e, no resto, chama o `Math.pow` do momento. Vale para a página e para o Node (CLI e testes); o kit reescrito fica em cache em `engine/out/kit/`. O teste [`kit-determinism.test.mjs`](../engine/test/kit-determinism.test.mjs) confere. Detalhes em [engine-determinism.md](engine-determinism.md), seção 5.
+- Depois da troca: 58 testes e a paridade continuam em 100%.
+
+### O que fica de fora (e por quê)
+
+- **Grafos de nós e tradução do Pixel Composer:** são ferramentas de autoria offline.
+- **Efeitos glitch e retrô:** não servem ao estilo dos jogos.
+- **Revisão de paleta:** é direção de arte, não runtime.
+- **Redes elétricas, hidráulica, logística, população, economia:** fora do gênero.
+- **Simulação em pedaços com workers:** para mundos enormes; as fases daqui são pequenas.
+- **Música procedural, fractais, geometria 4D, mosaicos matemáticos:** não melhoram os jogos.
+- **Estado de jogo declarativo (`pu24`) e controladores de personagem (`pu88`):** duplicam ou conflitam com `def.step` e `K.character`.
+- **Multidões (`pu36-crowd`):** querem ser donas do movimento, como o `K.character`.
+- **Código do repositório do cobanov:** o ink-studio já cobre aquele pipeline.
+
 ## Resumo de quando usar o Fable
 
 | Etapa | Modelo |
