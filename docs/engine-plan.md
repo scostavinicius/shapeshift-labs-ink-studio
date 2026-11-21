@@ -322,7 +322,7 @@ Em 2026-11-21 o `main` do original (828 commits: geração procedural, simulaç�
 | Etapa | O quê | Estado |
 |---|---|---|
 | 12 | Saúde depois do merge, `**` do kit, linha de base | ✅ |
-| 13 | Peso de carregamento: kit minificado e comprimido, cenas pré-montadas | em andamento |
+| 13 | Peso de carregamento: kit minificado e comprimido (cenas pré-montadas adiadas) | ✅ |
 | 14 | Trocar o renderizador próprio pelo do original (`webgl.mjs`), mantendo o Worker de ordenação | |
 | 15 | Tamanho do pixel controlável (`&px=`, `[` `]`) e cobertura contínua (sem buracos) | |
 | 16 | Custo de render: recorte por visibilidade, ordem estática + móvel, menos splats no bake | |
@@ -339,6 +339,18 @@ Em 2026-11-21 o `main` do original (828 commits: geração procedural, simulaç�
 - **Linha de base:** com o kit novo, `npm test` (55), `npm run parity -- --min 99` (100% em todos os casos), `npm run live` e `npm run perf` passaram sem mudança. Números do perf na mesma máquina da etapa 11: arena 0,18 ms de GPU por desenho, arena densa 1,73 ms; ordenação no Worker 1,4 ms e 8 ms.
 - **O `**` voltou ao kit:** o original passou a usar o operador em cerca de 165 arquivos, inclusive no núcleo (`K.wobble`, deformadores). Ele não passa pela troca do `Math` determinístico. Em vez de editar esses arquivos, a engine carrega o kit por [`engine/scripts/kit-node.cjs`](../engine/scripts/kit-node.cjs), que reescreve cada `a ** b` com o esbuild e põe um ajudante que eleva ao quadrado com `a * a` e, no resto, chama o `Math.pow` do momento. Vale para a página e para o Node (CLI e testes); o kit reescrito fica em cache em `engine/out/kit/`. O teste [`kit-determinism.test.mjs`](../engine/test/kit-determinism.test.mjs) confere. Detalhes em [engine-determinism.md](engine-determinism.md), seção 5.
 - Depois da troca: 58 testes e a paridade continuam em 100%.
+
+### Etapa 13 — Peso de carregamento · ✅ concluída (em parte)
+
+Medido no Edge, servidor local, 2026-11-21:
+
+| | antes | depois |
+|---|---|---|
+| `kit.js` no servidor de dev | 7,6 MB sem compressão | 2,0 MB com gzip (o servidor comprime arquivos grandes) |
+| `kit.js` no build (`npm run build`) | 7,6 MB | 4,45 MB minificado; 1,69 MB gzip, 1,35 MB brotli (`.gz` e `.br` ao lado) |
+
+- **Montagem do mundo no navegador:** 0,45 s na arena, 0,35 s no pátio e nos faróis, 1,4 a 1,5 s no farol e 1,8 s na arena densa.
+- **Cenas pré-montadas: adiadas.** O ganho máximo é esse tempo de montagem. O mundo pronto carrega sistemas vivos do kit (palco, personagens, pools de efeito, ossos) que são funções com estado e não viram arquivo. O `splatCodec` do kit só guarda os splats. Pré-montar exigiria refazer esses sistemas por cima dos splats carregados, com risco de quebrar o determinismo, para ganhar 0,4 s na maioria dos jogos. Volta a valer a pena se uma fase passar de uns 3 s para montar.
 
 ### O que fica de fora (e por quê)
 
