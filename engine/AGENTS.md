@@ -97,6 +97,7 @@ Os três exemplos completos, do menor ao maior:
 | `collision` | `{ cell: 0.25, bakes: 'all' \| [0, 2], block: [caixas], open: [caixas], region }` |
 | `breakables` | `[{ tag, hits: 1, mode: 'debris' \| 'rubble', pieces: 0.3, push: 3, by: [times] }]`: coisas que um golpe quebra (seção 5) |
 | `coverage` | `'continuous'` (padrão), `'legacy'` ou `'soft'`: como os splats cobrem o pixel de arte |
+| `weather` | `{ kind: 'rain' \| 'snow' \| 'leaf', box: [x0, x1, z0, z1] \| rad, n: 400, cols: [índices], top, wind: [vx, vz] }` (ou uma lista): chuva, neve ou folhas caindo. Quem move é a placa de vídeo, então não custa CPU e não entra no jogo |
 | `build(ctx)` | reserva mais splats antes do `B.finish` (`ctx.reserve(() => K.play.fx(ctx.B, 200))`); o que devolve vira `game.built` |
 
 ---
@@ -169,6 +170,10 @@ export default defineGame({
 - **A semente:** a mesma semente dá a mesma masmorra. O `"seed"` de um roteiro gera outra.
 - **Enfeitar:** `dress(S, K, layout, B)` esculpe mais coisas antes do bake, como tochas, caixas e colunas.
 - **Opções:** `palette` (a padrão é `DUNGEON_PALETTE`, com as cores do `walker` em 13–17), `floor`, `wall`, `top`, `wallHeight`, `res`, `adaptive` e `finish`.
+- **Tochas:** `torches: 8` (padrão; 0 desliga e deixa a masmorra clara) pendura tochas nas paredes, uma por sala. A luz delas, com sombras, é **assada** na cena (`S.lights`): o chão e a pedra perto ficam quentes (rampas `g` da paleta, 25–31), e o resto fica escuro.
+  - Não custa nada por quadro e sai igual no navegador e no `shot`. Em `dungeonOf(world).torches` ficam onde estão.
+  - **Luz numa cena sua:** `S.lights.push({ p: [x, y, z], r: alcance, s: força, sh: true })` antes do `S.bake()`. Com `g: [rampa quente]` no material, a superfície muda de cor onde essa luz domina.
+- **Neblina:** `finish: { fog: { c: índice, start: 0.6, max: 0.4 } }`.
 
 **O chão e as paredes saem da cena sozinhos.** A cada `S.bake()`, a engine amostra os sólidos daquele bake num mapa de colunas: o que é sólido em pé é parede; o que tem topo é chão. Onde não há nada embaixo, o personagem **não anda** (ele não cai da borda de uma ilha). Sólidos `ghost` e o que vem depois do último bake não contam.
 

@@ -91,3 +91,42 @@ test('a game on a dungeon: floor at 0, walls block, a walker pushed into a wall 
   assert.equal(d.rows[cz][cx], '.', `the walker ended in a wall cell at ${p}`);
   assert.ok(p[0] < d.start[0] - 0.5, 'the walker did not move');
 });
+
+test('torches hang on wall faces, looking into the open; their light is baked (stage 21)', () => {
+  for (const kind of ['rooms', 'cave']) {
+    const d = G.layDungeon(K, { kind }, 5);
+    assert.ok(d.torches.length >= 3 && d.torches.length <= 8, `${kind}: ${d.torches.length} torches`);
+    for (const t of d.torches) {
+      const cellOf = (x, z) => [Math.floor(x / d.cell + d.width / 2), Math.floor(z / d.cell + d.height / 2)];
+      const [fx, fz] = cellOf(t.at[0] + t.normal[0] * 0.25, t.at[1] + t.normal[1] * 0.25),
+        [bx, bz] = cellOf(t.at[0] - t.normal[0] * 0.25, t.at[1] - t.normal[1] * 0.25);
+      assert.equal(d.rows[fz][fx], '.', `${kind}: a torch faces a wall`);
+      assert.equal(d.rows[bz][bx], '#', `${kind}: a torch hangs in the air`);
+    }
+  }
+  assert.equal(G.layDungeon(K, { torches: 0 }, 5).torches.length, 0);
+});
+
+test('rain falls over the level, the same every time, and leaves the game alone (stage 22)', () => {
+  const def = rain => G.defineGame({
+    id: 'wet',
+    scene: G.makeDungeonScene({ kind: 'rooms', torches: 0 }),
+    actors: { hero: { spec: walker, hp: 5 } },
+    ...(rain && { weather: { kind: 'rain', rad: 5, n: 300, cols: [23, 24] } }),
+    init(game) {
+      const d = G.dungeonOf(game.world);
+      game.spawnActor({ actor: 'hero', kind: 'player', at: [d.start[0], null, d.start[1]], brain: 'player', tags: ['player'] });
+      return {};
+    }
+  });
+  const make = rain => G.createGame(def(rain), loadInk(), { scene: def(rain).scene, bones: 'cpu' });
+  const dry = make(false),
+    wet = make(true),
+    wet2 = make(true);
+  assert.ok(wet.world.count > dry.world.count + 100, `rain added ${wet.world.count - dry.world.count} splats`);
+  wet.run(2);
+  wet2.run(2);
+  assert.equal(wet.hash(), wet2.hash());
+  dry.run(2);
+  assert.deepEqual(wet.player.pos, dry.player.pos);
+});

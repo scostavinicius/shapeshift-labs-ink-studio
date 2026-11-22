@@ -330,7 +330,7 @@ Em 2026-11-21 o `main` do original (828 commits: geração procedural, simulaç�
 | 18 | IA dos inimigos: rotas, percepção, `hunter()` | ✅ |
 | 19 | Objetos destrutíveis, que continuam quebrados depois do save | ✅ |
 | 20 | Câmera com impacto (só na vista desenhada) | ✅ |
-| 21–22 | Luzes locais com sombra; chuva, neblina e raios | |
+| 21–22 | Luzes de tocha com sombra (assadas); chuva, neve, folhas e neblina | ✅ |
 | 23–24 | Som posicional; modelos GLB (cenário e personagens rígidos) | |
 | 25 | Jogo novo (`masmorra`) e o que melhora cada jogo atual | |
 
@@ -416,6 +416,16 @@ Resultados e decisões em [engine-performance.md](engine-performance.md), seçã
 - [`engine/src/ui/shake.ts`](../engine/src/ui/shake.ts) usa o `KIT.cameraImpulses` do kit: `crash` vindo do atacante quando o jogador apanha, `recoil` leve quando ele acerta, `crash` no ponto quando algo quebra e `recoil` quando um inimigo morre pela mão dele.
 - **Só a imagem.** O renderizador do kit aplica os impulsos com `frame.cameraImpulses` e `cameraTime`. O `core.shown`, por onde passa o clique, continua sendo a vista da engine, sem tremor. Como o HUD e o som, o módulo lê os eventos entre os passos, então a simulação e o hash não mudam.
 - `camera.shake` no jogo e `&shake=0` na página. O `ENGINE.shake` fica exposto para depurar. Conferido no Edge headless durante o replay da arena: os impulsos disparam e a página não dá erro.
+
+### Etapas 21–22 — Luzes e clima · ✅ concluídas
+
+- **Luzes ao vivo do kit (`K.lightEmitters` → `world.areaLights`): medidas e descartadas para jogos.** Numa masmorra com 8 tochas de linha, o navegador caiu para **24 fps**: 37–40 ms de CPU por quadro, com só 1 ms de GPU. O perfil mostrou 60% do tempo em `SplatFrames.sample`, que refaz o quadro de luz de cada splat na CPU sempre que algo se move, e num jogo os personagens se movem o tempo todo. A tremulação não mudou nada.
+- **O que entrou: luz assada.** Cada tocha vira um `S.lights` com sombra (`sh: true`), calculado no `S.bake()`. Os materiais da masmorra ganharam rampas `g` quentes (paleta 25–31), usadas onde a tocha domina. O resultado: 180 fps, desenho em 0,7 ms e GPU em 0,25 ms, o mesmo que sem luz, e igual no navegador e no `cli/render.js`. A masmorra fica escura (`amb` 0,08, sol 0,3) para as tochas contarem. As tochas não tremulam, porque tremular de verdade custaria CPU por quadro.
+- **Clima:** `def.weather` (chuva, neve, folhas) chama `K.weather.fall` antes do `B.finish`, com o chão tirado do mapa de colisão, então cai em cima do que for mais alto. Quem move é o shader, e o kit usa um dado próprio com semente: 900 gotas não mudaram o tempo de GPU (0,25 ms). A neblina já existia (`finish.fog`).
+- **Fora:**
+  - os raios do kit (`K.weather.lightning`) pertencem ao sistema de céu dele, que a engine não usa;
+  - a chuva em espaço de mundo com telhados e a superfície molhada rodam na CPU a cada quadro.
+- Testes em [`dungeon.test.mjs`](../engine/test/dungeon.test.mjs): as tochas ficam numa face de parede olhando para o aberto; a chuva acrescenta splats, é igual a cada partida e não mexe no jogo.
 
 ### O que fica de fora (e por quê)
 

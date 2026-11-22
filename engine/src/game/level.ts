@@ -93,6 +93,16 @@ export function buildLevel(def: GameDef<any>, ink: Ink, sceneFn: SceneFn, seed: 
           pools = reservePools(K, b, eo);
           reserved.push(...GameEffects.ranges(pools));
         }
+        // rain, snow, leaves (stage 22): splats the shader moves (K.weather.fall), landing on whatever is highest under
+        // them in the collision map (a roof, a wall's top, the floor). Nothing runs for them on the CPU, and they are
+        // not part of the game: their own seeded dice, no step touches them
+        for (const w of def.weather ? (Array.isArray(def.weather) ? def.weather : [def.weather]) : []) {
+          const ground = (x: number, z: number) => {
+            const g = collision!.ground(x, z);
+            return g < -1e8 || g > 1e8 ? -1 : g;
+          };
+          (K as any).weather.fall(b, { n: 400, ...w, ground });
+        }
         const toBind: { thing: { bind(world: World, at: number): void }; at: number }[] = [];
         built =
           def.build?.({

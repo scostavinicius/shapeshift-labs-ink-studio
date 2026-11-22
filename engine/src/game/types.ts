@@ -261,6 +261,11 @@ export interface GameDef<State = unknown> {
    * Broken ones open their place in the collision map, and stay broken through saves. See breakables.ts.
    */
   breakables?: BreakableDef[];
+  /**
+   * Rain, snow or falling leaves over part of the level (stage 22; K.weather.fall, src/kit/kz-weather.js): drawn and
+   * moved by the shader only, so it costs no CPU and is not part of the game. One or a list.
+   */
+  weather?: WeatherDef | WeatherDef[];
   actors?: Record<string, ActorDef>;
   /** named places. Give y as null to stand it on the ground there. */
   spawns?: Record<string, [number, number | null, number]>;
@@ -397,4 +402,24 @@ export interface Script {
   /** the size of the stage the player is looking at, in screen pixels: clicks are worked out through it (default 900 x 620) */
   view?: { w: number; h: number };
   events: ScriptEvent[];
+}
+
+/** What falls (def.weather): the options of K.weather.fall, with the ground filled in from the level. */
+export interface WeatherDef {
+  kind: 'rain' | 'snow' | 'leaf';
+  /** where: a box [x0, x1, z0, z1], or a radius round the middle (default 6) */
+  box?: [number, number, number, number];
+  rad?: number;
+  /** how many drops, flakes or leaves (default 400) and the height they start from (default 7) */
+  n?: number;
+  top?: number;
+  /** palette indices they are coloured from (default [3]) */
+  cols?: number[];
+  /** falling speed, size, a raindrop's length, how far a flake or leaf swings, the wind [vx, vz] (rain slants with it) */
+  speed?: number;
+  size?: number;
+  len?: number;
+  sway?: number;
+  wind?: [number, number];
+  seed?: number;
 }

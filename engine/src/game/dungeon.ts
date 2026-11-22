@@ -38,6 +38,8 @@ export interface DungeonLayout {
   exit: Spot;
   /** walking distance (cells) from start to exit */
   depth: number;
+  /** where torches go: on a wall face, world [x, z], and the way the face looks (into the open) [nx, nz] */
+  torches: { at: Spot; normal: [number, number] }[];
 }
 
 export interface DungeonOptions {
@@ -67,6 +69,11 @@ export interface DungeonOptions {
   steps?: number;
   /** spacing of spots, in cells (default 4) */
   spacing?: number;
+  /** wall torches whose light, with shadows, is baked into the level (stage 21): how many at most (default 8, at most
+   *  16; 0 for none and a brighter, unlit dungeon). One per room, or one every other spot in a cave. Baked light costs
+   *  nothing while the game runs (the toolkit's live emitters cost ~35 ms a frame once anything moves: see
+   *  docs/engine-plan.md, stage 21) */
+  torches?: number;
   /** the scene's id and name */
   id?: string;
   name?: string;
@@ -85,7 +92,9 @@ export const DUNGEON_PALETTE = [
   0x6e2a22, 0xa8432c, 0xd8743c, // 13-15 walker's body
   0xe2c6a4, 0xf6e7cf, // 16-17 walker's head
   0x7a3b14, 0xc9752a, 0xf2b14a, 0xfff0b0, // 18-21 torchlight
-  0x2a3d5c, 0x4d6c94, 0x8fb4d8 // 22-24 cold accents (water, crystals)
+  0x2a3d5c, 0x4d6c94, 0x8fb4d8, // 22-24 cold accents (water, crystals)
+  0x4a3524, 0x6e4e2e, 0x94693d, 0xb98a4f, // 25-28 flagstones in torchlight
+  0x5a4440, 0x7d5e50, 0xa07a5e // 29-31 stone in torchlight
 ];
 
 const SPAN = (a: number, b: number) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
@@ -156,6 +165,25 @@ export function layDungeon(K: any, o: DungeonOptions, seed: number): DungeonLayo
   }
   // only spots the start can walk to
   const reach = picked.filter(p => dist[p[1] * width + p[0]] >= 0);
+  // torches: from a room's middle (or every other spot in a cave) walk back, left, right or forward to the first wall,
+  // and hang one on that face
+  const torches: DungeonLayout['torches'] = [],
+    maxTorches = Math.max(0, Math.min(16, o.torches ?? 8));
+  const sources: [number, number][] =
+    kind === 'rooms' ? rooms.map(r => cellOf(r.center)).filter(([x, z]) => open(x, z)) : reach.filter((_, i) => i % 2 === 0);
+  for (const [sx, sz] of sources) {
+    if (torches.length >= maxTorches) break;
+    for (const [dx, dz] of [[0, -1], [-1, 0], [1, 0], [0, 1]]) {
+      let x = sx,
+        z = sz,
+        n = 0;
+      while (n < 6 && open(x + dx, z + dz)) (x += dx), (z += dz), n++;
+      if (n >= 6 || open(x + dx, z + dz)) continue;
+      const w = toWorld(x, z);
+      torches.push({ at: [w[0] + dx * cell * 0.5, w[1] + dz * cell * 0.5], normal: [-dx, -dz] });
+      break;
+    }
+  }
   return {
     kind,
     width,
@@ -166,7 +194,8 @@ export function layDungeon(K: any, o: DungeonOptions, seed: number): DungeonLayo
     spots: reach.map(p => toWorld(p[0], p[1])),
     start: toWorld(startCell[0], startCell[1]),
     exit: toWorld(exitCell[0], exitCell[1]),
-    depth
+    depth,
+    torches
   };
 }
 
@@ -183,7 +212,13 @@ export const makeDungeonScene =
       const B = kit.makeBuilder(seed, o.palette ?? DUNGEON_PALETTE);
       const S = K.sculpt(kit.makeSculpt(B));
       S.sun = B.norm([-0.35, 0.9, 0.3]);
-      S.amb = 0.3;
+      // lit by torches, the dungeon itself is dim; without them, bright enough to play
+      const lit = layout.torches.length > 0;
+      S.amb = lit ? 0.08 : 0.3;
+      if (lit) {
+        S.sky = 0.12;
+        S.sunK = 0.3;
+      }
       const layer = 0.25,
         wallLayers = Math.max(2, Math.round((o.wallHeight ?? 1.5) / layer)),
         { width, height, cell, rows } = layout;
@@ -198,11 +233,14 @@ export const makeDungeonScene =
       const T = K.tex,
         cave = layout.kind === 'cave';
       // flagstones each a shade of their own, walls laid in courses, moss and grit on the tops (K.tex: src/kit/kr-tex.js)
-      const floorMat = { r: floor, mod: T.range(T.voronoi(0.8, { out: 'id', seed: seed % 97 }), 0, 1, -0.35, 0.3) },
+      // g: the ramp a surface takes where a torch is its main light (warm browns and stones, palette 25-31)
+      const warmFloor = o.palette ? undefined : [25, 26, 27, 28],
+        warmStone = o.palette ? undefined : [29, 30, 31];
+      const floorMat = { r: floor, g: warmFloor, mod: T.range(T.voronoi(0.8, { out: 'id', seed: seed % 97 }), 0, 1, -0.35, 0.3) },
         wallMat = cave
-          ? { r: wall, mod: T.range(T.noise(0.9, 3), 0.2, 0.8, -0.4, 0.3) }
-          : { r: wall, mod: T.range(T.brick(0.6, 0.25, { dir: 'x' }), 0, 1, -0.45, 0.15) },
-        topMat = { r: top, mod: T.range(T.noise(1.6, 3), 0.25, 0.75, -0.5, 0.5) };
+          ? { r: wall, g: warmStone, mod: T.range(T.noise(0.9, 3), 0.2, 0.8, -0.4, 0.3) }
+          : { r: wall, g: warmStone, mod: T.range(T.brick(0.6, 0.25, { dir: 'x' }), 0, 1, -0.45, 0.15) },
+        topMat = { r: top, g: warmStone, mod: T.range(T.noise(1.6, 3), 0.25, 0.75, -0.5, 0.5) };
       S.vox(
         {
           cell: [cell, layer, cell],
@@ -213,7 +251,16 @@ export const makeDungeonScene =
         },
         { at: [0, -layer, 0], anchor: 'base', res: o.res ?? 0.2, round: 0.06 }
       );
+      // torches: an iron bracket on the wall and a flame that glows (ghost: no shadow, not a floor)
+      for (const t of layout.torches) {
+        const [x, z] = t.at,
+          [nx, nz] = t.normal;
+        S.box([x + nx * 0.06, 1.05, z + nz * 0.06], [0.05 + Math.abs(nz) * 0.03, 0.12, 0.05 + Math.abs(nx) * 0.03], { r: [1, 2, 3] }, { res: 0.05 });
+        S.ball([x + nx * 0.16, 1.24, z + nz * 0.16], [0.07, 0.11, 0.07], { r: [19, 20, 21], em: true }, { res: 0.04, ghost: true });
+      }
       if (o.dress) o.dress(S, K, layout, B);
+      // the torches' light, baked: each lights what it can see within 6 units (sh: shadows marched through the sculpt)
+      for (const t of layout.torches) S.lights.push({ p: [t.at[0] + t.normal[0] * 0.35, 1.3, t.at[1] + t.normal[1] * 0.35], r: 6, s: 0.95, sh: true });
       S.bake();
       const world = B.finish({
         cam: { target: [layout.start[0], 0.5, layout.start[1]], dist: 14, pitch: 0.95, yaw: 0.25 },
