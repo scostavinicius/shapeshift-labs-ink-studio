@@ -471,6 +471,35 @@ Resultados e decisões em [engine-performance.md](engine-performance.md), seçã
 
   Os cérebros **não** foram trocados por `hunter()`. São fases abertas, sem paredes para contornar, então o ganho seria pequeno, e a troca invalidaria os robôs gravados que os testes usam (arena e faróis). Tochas assadas nos faróis exigiriam mexer na cena compartilhada; ficou de fora pelo mesmo critério.
 
+### Depois do plano — A Cripta (2026-11-21)
+
+[`engine/examples/cripta/`](../engine/examples/cripta/game.ts) é um jogo maior que a masmorra, com objetivos em ordem.
+
+**A campanha:**
+- três relíquias nas salas mais longe do início, e cada uma acorda darters no escuro;
+- com as três, o selo de pedra sobre a saída se abre;
+- o Guardião (chefe, 10 de vida, golpe giratório) guarda a saída e chama dois ghouls na metade da vida;
+- vence quem derruba o Guardião e pisa na saída;
+- poções ficam escondidas dentro de caixas: só se bebe quebrando a caixa.
+
+**Detalhes de construção:**
+- relíquias, poções e selo são `breakables` com `by: ['nobody']`: nenhum golpe os quebra, só as regras (`breakIt`);
+- as poções são `ghost`, para não se fundirem com a caixa em volta.
+
+**Medido:**
+- montagem de 3,1 s, com amostragem uniforme (a adaptativa custava 1 s a mais neste mapa grande);
+- 103 705 splats e simulação de 3 ms por passo;
+- no navegador, mínimo de 158 fps no replay inteiro.
+
+O robô vence em 66 s, com 11 mortes e 2 quedas. O jogo é duro de propósito.
+
+**Consertos nas rotas (`nav.ts`), que também valem para o `hunter()`:**
+- **O destino de uma rota** agora é escolhido no mesmo piso de quem anda. Antes, uma rota até uma relíquia mirava o topo do pedestal (uma célula "de pé" sem ligação com o chão) e não existia.
+- **As retas da rota** respeitam a largura do corpo. Antes, raspavam quinas de parede, e quem as seguia ficava preso.
+- **Objetos postos pela cena** (caixas) só vão onde 5 × 5 células em volta são chão. Uma caixa na boca de um corredor de 2 células chegou a fechar a passagem.
+
+Testes: [`cripta.test.mjs`](../engine/test/cripta.test.mjs) e o validador.
+
 ### O que fica de fora (e por quê)
 
 - **Grafos de nós e tradução do Pixel Composer:** são ferramentas de autoria offline.

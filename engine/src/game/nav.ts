@@ -64,8 +64,11 @@ export function navGridFor(col: Collision, r = 0.3, h = 1.0): NavGrid {
   return g;
 }
 
-/** The grid cell nearest a world point that a body can stand in (searching outwards a few cells), or -1. */
-export function cellAt(g: NavGrid, x: number, z: number, search = 3): number {
+/**
+ * The grid cell nearest a world point that a body can stand in (searching outwards a few cells), or -1. With `y`, only
+ * cells whose floor is within a step of it: the floor round a pedestal, not the pedestal's top; not a wall's top.
+ */
+export function cellAt(g: NavGrid, x: number, z: number, search = 3, y?: number): number {
   const ci = Math.round((x - g.x0) / g.cell),
     ck = Math.round((z - g.z0) / g.cell);
   let best = -1,
@@ -77,6 +80,7 @@ export function cellAt(g: NavGrid, x: number, z: number, search = 3): number {
       if (i < 0 || k < 0 || i >= g.nx || k >= g.nz) continue;
       const c = k * g.nx + i;
       if (g.floor[c] !== g.floor[c]) continue;
+      if (y !== undefined && Math.abs(g.floor[c] - y) > STEP_UP) continue;
       const dd = di * di + dk * dk;
       if (dd < bd || (dd === bd && c < best)) {
         bd = dd;
@@ -103,8 +107,10 @@ export function findPath(g: NavGrid, from: Vec3 | [number, number], to: Vec3 | [
     fz = from.length === 3 ? (from as Vec3)[2] : from[1],
     tx = to[0],
     tz = to.length === 3 ? (to as Vec3)[2] : to[1];
-  const s = cellAt(g, fx, fz),
-    t = cellAt(g, tx, tz);
+  // the start is where the body stands (its own height when given); the goal, on that same floor if it can be
+  const s = from.length === 3 ? cellAt(g, fx, fz, 3, (from as Vec3)[1]) : cellAt(g, fx, fz);
+  if (s < 0) return null;
+  const t = cellAt(g, tx, tz, 3, g.floor[s]) >= 0 ? cellAt(g, tx, tz, 3, g.floor[s]) : cellAt(g, tx, tz);
   if (s < 0 || t < 0) return null;
   if (s === t) return [[tx, tz]];
   const N = g.nx * g.nz,
@@ -200,13 +206,18 @@ export function findPath(g: NavGrid, from: Vec3 | [number, number], to: Vec3 | [
 function walkable(g: NavGrid, a: number, b: number): boolean {
   const [ax, az] = centre(g, a),
     [bx, bz] = centre(g, b),
-    n = Math.ceil((Math.hypot(bx - ax, bz - az) / g.cell) * 2);
+    L = Math.hypot(bx - ax, bz - az),
+    n = Math.ceil((L / g.cell) * 4),
+    // the body's half-width, square to the line: a leg that grazes a wall's corner would leave it stuck there
+    w = g.radius + g.cell * 0.15,
+    px = L > 0 ? (-(bz - az) / L) * w : 0,
+    pz = L > 0 ? ((bx - ax) / L) * w : 0;
   let prev = a;
   for (let s = 1; s <= n; s++) {
     const x = ax + ((bx - ax) * s) / n,
       z = az + ((bz - az) * s) / n;
-    // the cells either side of the line too, for the body's width
-    for (const [ox, oz] of [[0, 0], [g.cell * 0.45, 0], [-g.cell * 0.45, 0], [0, g.cell * 0.45], [0, -g.cell * 0.45]]) {
+    // the line, and either side of it at the body's half-width
+    for (const [ox, oz] of [[0, 0], [px, pz], [-px, -pz]]) {
       const i = Math.round((x + ox - g.x0) / g.cell),
         k = Math.round((z + oz - g.z0) / g.cell);
       if (i < 0 || k < 0 || i >= g.nx || k >= g.nz) return false;

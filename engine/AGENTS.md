@@ -76,6 +76,7 @@ Os três exemplos completos, do menor ao maior:
 | `engine/examples/beacons/` | feito por uma IA **sem contexto, lendo só este guia**: acender três faróis com triggers, inimigos que acordam a cada farol aceso, vitória e derrota, e um roteiro (`win.json`) que vence |
 | `engine/examples/arena/` | **o jogo completo de demonstração**: arena circular, três ondas, dois tipos de inimigo, um chefe que chama reforços, cura entre ondas, vitória e derrota, mira assistida, e um **robô** (`bot.ts`) que vence e gravou o `win.json` |
 | `engine/examples/masmorra/` | **tudo o que veio depois**: masmorra gerada pela semente com tochas (`makeDungeonScene`), chuva na primeira sala, caixas de um GLB com textura que quebram (`placeAsset` + `breakables`), ghouls com `hunter()` que patrulham e procuram, um mímico cujo corpo é uma caixa (`placePart`) e um robô que acha a saída. `node engine/cli.js new meu-jogo --from dungeon` começa dela |
+| `engine/examples/cripta/` | **o maior**: objetivos em ordem (3 relíquias, e cada uma acorda inimigos; o selo que se abre com as três; o Guardião, chefe que chama reforços; a saída), poções escondidas dentro de caixas (só se bebe quebrando a caixa), coisas que as regras quebram e um golpe não quebra (`by: ['nobody']`), e onde pôr objetos sem bloquear corredores. O robô (`bot.ts`) faz a campanha toda |
 
 **Copie de um deles** em vez de começar de uma folha em branco.
 
