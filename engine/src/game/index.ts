@@ -14,3 +14,4 @@ export { saveGame, loadSave, saveProblem, storeLocal, readLocal, forgetLocal, sa
 export { validateGame, checkDefinition, checkRun, lintSource, codeOnly, type Problem, type RunStats } from './validate';
 export { makeDungeonScene, layDungeon, dungeonOf, DUNGEON_PALETTE, type DungeonLayout, type DungeonOptions, type DungeonRoom, type Spot } from './dungeon';
 export { Breakables, type BreakableDef, type BreakableData } from './breakables';
+export { placeAsset, placePart, type PlaceAssetOptions } from './assets';

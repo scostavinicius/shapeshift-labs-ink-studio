@@ -4,8 +4,9 @@
 // runs; just after, they are bound to the world and hidden until spawned.
 import type { Builder, Ink, Scene, Sculpt, World } from '../../types/ink-studio';
 import { CollisionBuilder, makeCollision, splatBox, type BakeStats } from './collision';
-import type { Collision, GameDef } from './types';
+import type { Box, Collision, GameDef } from './types';
 import { effectOptions, GameEffects, reservePools, type EffectPools } from './effects';
+import { setAssetKit } from './assets';
 
 /** One character of an actor pool, made at build time. */
 export interface Slot {
@@ -57,7 +58,10 @@ export function markSlot(rows: Uint8Array | undefined, s: Slot): void {
 export function buildLevel(def: GameDef<any>, ink: Ink, sceneFn: SceneFn, seed: number | undefined): Level {
   const t0 = now(),
     K = ink.KIT,
-    cb = new CollisionBuilder(def.collision);
+    _kit = setAssetKit(ink.KIT), // (placePart, inside an actor's sculpt, uses the level's kit)
+    // the scene can add solid boxes while it builds (kit.block: textured GLB props, stage 24), on top of def.collision.block
+    blocks: Box[] = [...(def.collision?.block || [])],
+    cb = new CollisionBuilder({ ...def.collision, block: blocks });
   let B: Builder | null = null,
     S: Sculpt | null = null,
     collision: Collision | null = null;
@@ -66,8 +70,13 @@ export function buildLevel(def: GameDef<any>, ink: Ink, sceneFn: SceneFn, seed: 
   let built: Record<string, unknown> = {};
   let pools: EffectPools | null = null;
 
-  const facade: Ink = {
+  const facade: Ink & { block(box: Box): void } = {
     ...ink,
+    /** make a box solid in the collision map (a prop that is not sculpted: a textured GLB's stamps) */
+    block(box: Box) {
+      if (collision) throw new Error(`${def.id}: kit.block() after B.finish: the collision map is already made`);
+      blocks.push({ min: [box.min[0], box.min[1], box.min[2]], max: [box.max[0], box.max[1], box.max[2]] });
+    },
     makeBuilder(...args: Parameters<Ink['makeBuilder']>) {
       if (B) throw new Error(`${def.id}: the scene made a second builder; a level is one builder and one world`);
       const b = ink.makeBuilder(...args);

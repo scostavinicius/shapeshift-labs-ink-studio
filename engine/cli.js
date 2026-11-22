@@ -35,6 +35,7 @@ const USAGE = `usage: node engine/cli.js <command> <game> [options]
   sheet <game> [--input s.json] [--times 0,1,2,4] [--cols 4] [--out f.png] [--colored]
   play  <game> [--port 5173] [--no-open]
   record <game> --bot bot.ts [--t 120] [--until won] [--out script.json]
+  asset <model.glb> [--size 1] --out recipe.json   a textured GLB as a recipe a scene places with placeAsset (stage 24)
   <game>: a folder of engine/examples/ (${listExamples().join(', ') || 'none yet'}) or a path to a game module`;
 
 function listExamples() {
@@ -503,10 +504,28 @@ export default defineGame({
 });
 `;
 
+/**
+ * A textured GLB as a model recipe (stage 24): geometry, UVs and its texture fitted to at most 64 pixels, as JSON, read
+ * with the toolkit's own GLB reader (PNG textures; JPEG ones need a decoder). The scene places it with placeAsset.
+ */
+async function asset(o) {
+  const file = o._[1];
+  if (!file || !fs.existsSync(file)) die('asset wants a .glb file: node engine/cli.js asset model.glb --size 1 --out recipe.json');
+  if (!o.out) die('asset wants --out recipe.json (next to the game: engine/examples/<game>/assets/)');
+  const size = +(o.size || 1);
+  const studio = require(path.join(REPO, 'index.js'));
+  const recipe = await studio.readAsset(path.resolve(file), { size });
+  const out = path.resolve(o.out);
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  fs.writeFileSync(out, JSON.stringify(recipe));
+  const tex = recipe.texture ? (recipe.texture.images || []).map(i => `${i.width}x${i.height}`) : null;
+  console.log(JSON.stringify({ ok: true, recipe: out, bytes: fs.statSync(out).size, triangles: (recipe.triangles || []).length / 3, texture: tex }));
+}
+
 // ---------------------------------------------------------------------------------------------------------- main
 
 const o = parse(process.argv.slice(2));
-const commands = { shot, sheet, check, play, record, new: newGame };
+const commands = { shot, sheet, check, play, record, asset, new: newGame };
 const run = commands[o._[0]];
 if (!run) die(USAGE);
 Promise.resolve(run(o)).catch(e => die(e && e.stack ? e.stack : String(e), { ok: false, error: String((e && e.message) || e) }));

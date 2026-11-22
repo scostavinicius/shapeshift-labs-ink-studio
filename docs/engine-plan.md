@@ -331,7 +331,7 @@ Em 2026-11-21 o `main` do original (828 commits: geração procedural, simulaç�
 | 19 | Objetos destrutíveis, que continuam quebrados depois do save | ✅ |
 | 20 | Câmera com impacto (só na vista desenhada) | ✅ |
 | 21–22 | Luzes de tocha com sombra (assadas); chuva, neve, folhas e neblina | ✅ |
-| 23–24 | Som posicional ✅; modelos GLB (cenário e personagens rígidos) | 23 ✅ |
+| 23–24 | Som posicional; modelos GLB (cenário e personagens rígidos) | ✅ |
 | 25 | Jogo novo (`masmorra`) e o que melhora cada jogo atual | |
 
 ### Etapa 12 — Saúde depois do merge · ✅ concluída
@@ -436,6 +436,18 @@ Resultados e decisões em [engine-performance.md](engine-performance.md), seçã
 - **Mudança em relação ao plano:** usei o `PannerNode` do navegador, não o `createSpatialAudioPlayer` do kit. O player do kit pede sons gravados em buffers e o sistema de cues dele, e a engine sintetiza os sons na hora. O `PannerNode` dá o mesmo efeito (HRTF, distância) sem nada disso.
 - Conferido no Edge headless durante o replay da arena: o contexto rodando, os sons tocando com posição e a página sem erro.
 - **Ajuste no teste dos exemplos:** os avisos de tempo (`slow-build`, `slow-step`) ficam de fora. Com todos os arquivos de teste rodando juntos, o farol passava de 4 s para montar numa máquina ocupada.
+
+### Etapa 24 — Modelos GLB com textura · ✅ concluída
+
+- **Fluxo:** `node engine/cli.js asset modelo.glb --size 1 --out receita.json` lê o GLB uma vez, com o leitor do próprio kit (`readAsset`), e grava uma receita JSON (geometria, UVs, textura de até 64 px). A cena coloca a receita de forma síncrona, igual no Node e na página.
+- **[`placeAsset`](../engine/src/game/assets.ts)** faz da malha um sólido da escultura (`K.mesh.solid`, um campo de distância). Por isso ganha sombra, colisão, `tag` (pode quebrar) e splats como todo o resto. A cor vem de um `tex` por ponto: acha o triângulo mais perto, amostra a textura (`assetMeshes.colorSampler`), multiplica pela luz da escultura e casa com a paleta.
+- **[`placePart`](../engine/src/game/assets.ts)** prende uma peça a um osso no `sculpt` de um personagem: são partes rígidas. O kit da cena em construção é passado por um slot global (`Symbol.for`), porque o módulo do jogo é empacotado à parte do da engine.
+- **Tentado e trocado:** os carimbos UV do kit (`assetSurfaces.splat`) mostram a textura no renderizador de terminal, mas no do navegador só com o caminho de material por pixel, que os jogos não usam. No navegador, as caixas saíam escuras e sem textura.
+- **Dois consertos que apareceram no caminho:**
+  - o adaptador passa a órbita como `frame.camera`, não como `frame.target`, que alguns passes do renderizador usam para o alvo de desenho;
+  - `spawnActor` com `[x, null, z]` agora resolve o chão na hora. Antes, a posição ficava com `null` até o primeiro passo, e a câmera seguia esse `null`.
+- **Modelo de exemplo, sem licença de terceiros:** [`engine/scripts/make-crate-glb.cjs`](../engine/scripts/make-crate-glb.cjs) escreve uma caixa de madeira com textura de 16 px, e a receita fica em `engine/assets/`.
+- Testes ([`assets.test.mjs`](../engine/test/assets.test.mjs)): a receita lê a textura; o modelo colocado bloqueia, aparece e quebra; a peça presa ao osso anda com o personagem.
 
 ### O que fica de fora (e por quê)
 

@@ -178,10 +178,9 @@ export class UpstreamRenderer {
       width: view.W,
       height: view.H,
       time: view.t,
-      yaw: view.yaw,
-      pitch: view.pitch,
-      dist: view.dist,
-      target: view.target,
+      // the orbit as a camera layer, not as frame.target: inside the renderer, some passes (textured surfaces) hand a
+      // frame on with `target` set to a draw target, and a frame-level target array would be read as that
+      camera: { yaw: view.yaw, pitch: view.pitch, dist: view.dist, target: view.target },
       lockCamera: true,
       colored: o.look === 'colored',
       dither: o.dither === undefined ? 0.35 : o.dither,

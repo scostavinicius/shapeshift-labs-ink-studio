@@ -175,6 +175,16 @@ export default defineGame({
   - **Luz numa cena sua:** `S.lights.push({ p: [x, y, z], r: alcance, s: força, sh: true })` antes do `S.bake()`. Com `g: [rampa quente]` no material, a superfície muda de cor onde essa luz domina.
 - **Neblina:** `finish: { fog: { c: índice, start: 0.6, max: 0.4 } }`.
 
+### Modelos 3D (GLB) com textura
+
+1. **Converta uma vez:** `node engine/cli.js asset modelo.glb --size 1 --out engine/examples/<jogo>/assets/modelo.json`. Isso gera uma receita JSON pequena, com a geometria e a textura reduzida a 64 px. Texturas PNG funcionam direto; JPEG precisa de decodificador. Há um modelo de exemplo em `engine/assets/crate.json`.
+2. **Na cena:** `placeAsset(K, S, receita, { at, size, turn, palette: PALETA, tag })` antes do `S.bake()`.
+   - O modelo vira um sólido como outro qualquer: faz e recebe sombra, é chão e parede na colisão e quebra se a `tag` estiver em `breakables`.
+   - As cores vêm da textura, iluminadas pela cena e casadas com a paleta, então a paleta precisa ter tons próximos aos dela.
+3. **Como parte de personagem:** dentro do `sculpt(S, T)` do `spec`, use `placePart(S, receita, { at, size, palette, bone: T('root') })`.
+   - A peça é rígida e vai presa ao osso, como um boneco articulado. Não há pele que dobra.
+   - `at` é a posição com o personagem parado, pés na origem e virado para +x.
+
 **O chão e as paredes saem da cena sozinhos.** A cada `S.bake()`, a engine amostra os sólidos daquele bake num mapa de colunas: o que é sólido em pé é parede; o que tem topo é chão. Onde não há nada embaixo, o personagem **não anda** (ele não cai da borda de uma ilha). Sólidos `ghost` e o que vem depois do último bake não contam.
 
 ---

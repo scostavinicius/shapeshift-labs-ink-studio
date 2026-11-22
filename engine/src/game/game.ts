@@ -63,7 +63,14 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
   let state = undefined as unknown as State;
   let stepping = false;
 
-  const posOf = (at: Vec3 | string): Vec3 => (typeof at === 'string' ? game.place(at) : [at[0], at[1], at[2]]);
+  // a place by name, or [x, y, z] where y null means "on the ground there" (as in def.spawns)
+  const posOf = (at: Vec3 | string): Vec3 => {
+    if (typeof at === 'string') return game.place(at);
+    if (at[1] !== null && at[1] !== undefined) return [at[0], at[1], at[2]];
+    const y = collision.ground(at[0], at[2]);
+    if (y <= -1e8) throw new Error(`${def.id}: (${at[0]}, ${at[2]}) has no ground under it`);
+    return [at[0], y, at[2]];
+  };
   const base = (kind: string, at: Vec3 | string, tags: string[] | undefined) => ({
     id: nextId++,
     kind,
