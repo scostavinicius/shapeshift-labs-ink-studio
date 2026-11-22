@@ -92,7 +92,7 @@ Os três exemplos completos, do menor ao maior:
 | `combat` | `{ invuln: 0.6, arc: 70, respawn: 1.5, respawnAt, knock, assist }`, ou `false`; ligado por padrão. `assist` (graus) é a mira assistida do jogador: ao golpear, ele se vira para o inimigo mais próximo dentro desse ângulo (180 = qualquer lado) |
 | `effects` | `true` ou `{ fx: 400, debris: 800, eco: true, fuel: 0.5, weather: { rain, winter } }` |
 | `hud` | `{ lines(game) => string[], message(evento, game) => string \| null \| undefined }` |
-| `sounds` | `{ evento: som }`. Sons: `swing`, `hit`, `death`, `respawn`, `blip`, `save` |
+| `sounds` | `{ evento: som }`. Sons: `swing`, `hit`, `death`, `respawn`, `blip`, `save`, `crash`. Cada som vem do lugar do evento (de `at`, do `target` ou do `id` dele): sai pelo lado certo e fica mais baixo de longe, ouvido do ponto que a câmera segue |
 | `brains` | `{ kind: brain }`: os cérebros dos atores que nascem **durante** a partida (para o save trazê-los de volta) |
 | `collision` | `{ cell: 0.25, bakes: 'all' \| [0, 2], block: [caixas], open: [caixas], region }` |
 | `breakables` | `[{ tag, hits: 1, mode: 'debris' \| 'rubble', pieces: 0.3, push: 3, by: [times] }]`: coisas que um golpe quebra (seção 5) |

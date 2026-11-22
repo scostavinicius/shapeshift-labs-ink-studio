@@ -331,7 +331,7 @@ Em 2026-11-21 o `main` do original (828 commits: geração procedural, simulaç�
 | 19 | Objetos destrutíveis, que continuam quebrados depois do save | ✅ |
 | 20 | Câmera com impacto (só na vista desenhada) | ✅ |
 | 21–22 | Luzes de tocha com sombra (assadas); chuva, neve, folhas e neblina | ✅ |
-| 23–24 | Som posicional; modelos GLB (cenário e personagens rígidos) | |
+| 23–24 | Som posicional ✅; modelos GLB (cenário e personagens rígidos) | 23 ✅ |
 | 25 | Jogo novo (`masmorra`) e o que melhora cada jogo atual | |
 
 ### Etapa 12 — Saúde depois do merge · ✅ concluída
@@ -426,6 +426,16 @@ Resultados e decisões em [engine-performance.md](engine-performance.md), seçã
   - os raios do kit (`K.weather.lightning`) pertencem ao sistema de céu dele, que a engine não usa;
   - a chuva em espaço de mundo com telhados e a superfície molhada rodam na CPU a cada quadro.
 - Testes em [`dungeon.test.mjs`](../engine/test/dungeon.test.mjs): as tochas ficam numa face de parede olhando para o aberto; a chuva acrescenta splats, é igual a cada partida e não mexe no jogo.
+
+### Etapa 23 — Som posicional · ✅ concluída
+
+- [`engine/src/ui/audio.ts`](../engine/src/ui/audio.ts): quando um som tem lugar, ele passa por um `PannerNode` do Web Audio (HRTF, distância inversa, volume cheio até 3 unidades).
+- **O ouvinte (`listen`)** fica no ponto que a câmera segue e gira com ela, a cada quadro. Um golpe à esquerda do jogador na tela soa à esquerda.
+- **O lugar de cada evento:** `at` (morte, quebra), o `target` ou o `id` (golpe, balanço) ou a caixa da coisa quebrável.
+- **Sons novos:** `crash` para `break`, e `hit-object` usa `hit`.
+- **Mudança em relação ao plano:** usei o `PannerNode` do navegador, não o `createSpatialAudioPlayer` do kit. O player do kit pede sons gravados em buffers e o sistema de cues dele, e a engine sintetiza os sons na hora. O `PannerNode` dá o mesmo efeito (HRTF, distância) sem nada disso.
+- Conferido no Edge headless durante o replay da arena: o contexto rodando, os sons tocando com posição e a página sem erro.
+- **Ajuste no teste dos exemplos:** os avisos de tempo (`slow-build`, `slow-step`) ficam de fora. Com todos os arquivos de teste rodando juntos, o farol passava de 4 s para montar numa máquina ocupada.
 
 ### O que fica de fora (e por quê)
 

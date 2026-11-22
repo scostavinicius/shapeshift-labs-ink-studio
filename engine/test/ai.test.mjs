@@ -122,7 +122,9 @@ for (const name of ['farol-walk', 'farol-fight', 'yard', 'beacons', 'arena'])
     const scene = typeof def.scene === 'string' ? sceneFn(def.scene) : def.scene;
     const text = fs.readFileSync(path.join(ROOT, 'examples', name, 'game.ts'), 'utf8');
     const { problems, stats } = G.validateGame(def, loadInk(), scene, { sources: [{ file: 'game.ts', text }], seconds: 1 });
-    assert.deepEqual(problems, []);
+    // slow-build and slow-step measure the machine as much as the game: with every test file running at once they can
+    // trip on a busy computer, so they are left to `check` itself
+    assert.deepEqual(problems.filter(p => !p.code.startsWith('slow-')), []);
     assert.ok(stats.groundColumns > 1000);
   });
 

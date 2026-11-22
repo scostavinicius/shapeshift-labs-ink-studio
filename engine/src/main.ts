@@ -209,7 +209,21 @@ async function start(): Promise<void> {
       const events = game.takeEvents(),
         sec = now / 1000;
       feed.feed(events, game, sec);
-      sound?.events(events);
+      // each sound from its place (stage 23), heard from the point the camera follows
+      if (sound) {
+        sound.listen(view.target, view.V);
+        sound.events(events, e => {
+          const d = (e.data || {}) as Record<string, unknown>;
+          if (Array.isArray(d.at)) return d.at as number[];
+          const id = d.target ?? d.id;
+          if (id !== undefined) return game.entities.find(x => x.id === id)?.pos ?? null;
+          if (typeof d.tag === 'string') {
+            const b = game.breakables?.boxOf(d.tag);
+            return b ? [(b.min[0] + b.max[0]) / 2, b.min[1], (b.min[2] + b.max[2]) / 2] : null;
+          }
+          return null;
+        });
+      }
       shake?.events(events, game);
       hud.render(hudModel(game, feed, sec), Math.max(2, Math.round(view.px * 0.6)));
       if (!frozen && now - savedAt >= 2000) {

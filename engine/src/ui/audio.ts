@@ -21,10 +21,17 @@ export interface Volumes {
 export const DEFAULT_VOLUMES: Volumes = { master: 0.8, sfx: 0.8, music: 0.35, musicOn: true, muted: false };
 
 /** the engine's events and the sounds they make; a game adds or changes these with def.sounds */
-export const DEFAULT_SOUNDS: Record<string, string> = { swing: 'swing', hit: 'hit', death: 'death', respawn: 'respawn' };
+export const DEFAULT_SOUNDS: Record<string, string> = {
+  swing: 'swing',
+  hit: 'hit',
+  death: 'death',
+  respawn: 'respawn',
+  'hit-object': 'hit',
+  break: 'crash'
+};
 
 /** the sounds the synthesizer knows */
-export const SOUND_NAMES = ['swing', 'hit', 'death', 'respawn', 'blip', 'save'] as const;
+export const SOUND_NAMES = ['swing', 'hit', 'death', 'respawn', 'blip', 'save', 'crash'] as const;
 export type SoundName = (typeof SOUND_NAMES)[number];
 
 /** Which sounds a batch of events makes, in order (no DOM, no audio: what tests check). */
@@ -133,16 +140,64 @@ export class Sound {
   }
 
   /** the sounds of the game's events since the last frame */
-  events(events: GameEvent[]): void {
-    for (const { sound } of soundsFor(events, this.extraSounds)) this.play(sound as SoundName);
+  /**
+   * The game's events as sounds. With `where` (an event's place in the world, or null), each sound comes from its place
+   * (stage 23): panned and quieter with distance, heard from the listener (listen()).
+   */
+  events(events: GameEvent[], where?: (e: GameEvent) => readonly number[] | null | undefined): void {
+    for (const { sound, event } of soundsFor(events, this.extraSounds)) this.play(sound as SoundName, where ? where(event) ?? undefined : undefined);
   }
 
-  play(name: SoundName): void {
+  /**
+   * Where the player hears from (stage 23): the point the camera follows, turned as the camera is, so a sound left of
+   * the player on screen comes from the left. V is the view matrix (column-major, the camera looking down -z).
+   */
+  listen(at: readonly number[], V: readonly number[]): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    const L = ctx.listener as AudioListener & { positionX?: AudioParam },
+      fwd = [-V[2], -V[6], -V[10]],
+      up = [V[1], V[5], V[9]];
+    if (L.positionX) {
+      const t = ctx.currentTime;
+      L.positionX.setValueAtTime(at[0], t);
+      L.positionY!.setValueAtTime(at[1], t);
+      L.positionZ!.setValueAtTime(at[2], t);
+      L.forwardX.setValueAtTime(fwd[0], t);
+      L.forwardY.setValueAtTime(fwd[1], t);
+      L.forwardZ.setValueAtTime(fwd[2], t);
+      L.upX.setValueAtTime(up[0], t);
+      L.upY.setValueAtTime(up[1], t);
+      L.upZ.setValueAtTime(up[2], t);
+    } else {
+      (L as any).setPosition(at[0], at[1], at[2]);
+      (L as any).setOrientation(fwd[0], fwd[1], fwd[2], up[0], up[1], up[2]);
+    }
+  }
+
+  play(name: SoundName, at?: readonly number[]): void {
     this.played[name] = (this.played[name] || 0) + 1;
     const ctx = this.ctx;
     if (!ctx || ctx.state !== 'running') return;
-    const t = ctx.currentTime,
-      out = this.gain.sfx!;
+    const t = ctx.currentTime;
+    // a sound with a place goes through a panner (HRTF): from its side, fainter the farther it is (full within 3 units)
+    let out: AudioNode = this.gain.sfx!;
+    if (at) {
+      const p = ctx.createPanner();
+      p.panningModel = 'HRTF';
+      p.distanceModel = 'inverse';
+      p.refDistance = 3;
+      p.rolloffFactor = 0.9;
+      p.maxDistance = 60;
+      if (p.positionX) {
+        p.positionX.value = at[0];
+        p.positionY.value = at[1] + 0.8;
+        p.positionZ.value = at[2];
+      } else (p as any).setPosition(at[0], at[1] + 0.8, at[2]);
+      p.connect(out);
+      out = p;
+      setTimeout(() => p.disconnect(), 1500);
+    }
     const env = (g: GainNode, peak: number, a: number, d: number) => {
       g.gain.setValueAtTime(0.0001, t);
       g.gain.exponentialRampToValueAtTime(peak, t + a);
@@ -192,6 +247,11 @@ export class Sound {
         break;
       case 'blip':
         tone('square', 880, 880, 0.05, 0.12);
+        break;
+      case 'crash':
+        hiss(1200, 90, 0.5, 0.5);
+        tone('square', 150, 45, 0.3, 0.2);
+        hiss(3000, 800, 0.15, 0.25);
         break;
       case 'save':
         tone('triangle', 660, 660, 0.06, 0.18);
