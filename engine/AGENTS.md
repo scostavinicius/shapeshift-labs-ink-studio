@@ -209,6 +209,9 @@ export default defineGame({
 - Nada esconde o que está na frente: um poste entre a câmera e o jogador o tapa. Leve isso em conta ao pôr coisas altas.
 - `camera.bounds: { min: [x, y, z], max: [x, y, z] }` prende o ponto seguido dentro de uma caixa (a câmera não mostra além da borda do nível).
 - `minDist` e `maxDist` limitam o zoom; `minPitch` e `maxPitch` limitam a inclinação.
+- **Tranco da câmera:** a imagem trepida quando o jogador apanha (vindo de quem bateu), quando acerta, quando derruba um inimigo e quando quebra alguma coisa.
+  - `camera.shake` escala a força: 1 é o padrão, 0,5 é mais suave e 0 desliga. Na página, `&shake=0` também desliga.
+  - Só a imagem se move: o clique e o jogo não mudam, e o `shot` sem navegador não trepida.
 
 ### Cérebros
 

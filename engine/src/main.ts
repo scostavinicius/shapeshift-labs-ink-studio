@@ -20,6 +20,7 @@ import { Core, DomInput, project, type Sample } from './core/index';
 import { forgetLocal, loadSave, readLocal, saveGame, saveProblem, storeLocal } from './game/save';
 import { ScriptPlayer } from './game/script';
 import { Sound } from './ui/audio';
+import { CameraShake } from './ui/shake';
 import { Hud, HudFeed, hudModel } from './ui/hud';
 import { createGame, type RunningGame } from './game/game';
 import { runHeadless } from './headless/run';
@@ -116,6 +117,9 @@ async function start(): Promise<void> {
   const hud = game ? new Hud(document.body, world.pal) : null,
     feed = new HudFeed(),
     sound = game ? new Sound(game.def.sounds) : null;
+  // the picture jolts on hits, smashes and kills (stage 20): def.camera.shake scales it, &shake=0 turns it off
+  const shakeScale = q.get('shake') === '0' ? 0 : game?.def.camera?.shake ?? 1;
+  const shake = game && shakeScale > 0 ? new CameraShake(ink().KIT, shakeScale) : null;
   if (loadedFrom) feed.say('WELCOME BACK', performance.now() / 1000);
   // what happened before the first frame (a scripted run) is not news
   game?.takeEvents();
@@ -186,6 +190,9 @@ async function start(): Promise<void> {
     }
     if (perfMode) tUp = performance.now();
     if (fresh) {
+      // camera impulses: the toolkit's renderer jolts the drawn view; core.shown (clicks) stays the unshaken one
+      if (shake && renderer instanceof UpstreamRenderer)
+        renderer.frame.extra = { ...renderer.frame.extra, cameraImpulses: shake.motion, cameraTime: core.t };
       renderer.draw(world, view, { look });
       drawnKey = key;
       drawn++;
@@ -203,6 +210,7 @@ async function start(): Promise<void> {
         sec = now / 1000;
       feed.feed(events, game, sec);
       sound?.events(events);
+      shake?.events(events, game);
       hud.render(hudModel(game, feed, sec), Math.max(2, Math.round(view.px * 0.6)));
       if (!frozen && now - savedAt >= 2000) {
         savedAt = now;
@@ -280,6 +288,8 @@ sound: ${sound!.ctx ? sound!.ctx.state : 'waits for a key'} · music ${sound!.vo
     core,
     cam: core.camera,
     renderer,
+    /** the camera impulses (stage 20), or null */
+    shake,
     /** the view last drawn */
     get view() {
       return view;

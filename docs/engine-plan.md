@@ -329,7 +329,7 @@ Em 2026-11-21 o `main` do original (828 commits: geração procedural, simulaç�
 | 17 | Fases procedurais (salas e cavernas pela semente) | ✅ |
 | 18 | IA dos inimigos: rotas, percepção, `hunter()` | ✅ |
 | 19 | Objetos destrutíveis, que continuam quebrados depois do save | ✅ |
-| 20 | Câmera com impacto (só na vista desenhada) | |
+| 20 | Câmera com impacto (só na vista desenhada) | ✅ |
 | 21–22 | Luzes locais com sombra; chuva, neblina e raios | |
 | 23–24 | Som posicional; modelos GLB (cenário e personagens rígidos) | |
 | 25 | Jogo novo (`masmorra`) e o que melhora cada jogo atual | |
@@ -410,6 +410,12 @@ Resultados e decisões em [engine-performance.md](engine-performance.md), seçã
 - **O mapa de colisão passou a ser editável:** `collision.openBox(caixa)` corta o sólido acima do chão e aumenta `collision.version`. As grades de rota da etapa 18 se refazem sozinhas.
 - **Save:** cada objeto é uma prop cujo `data` diz se quebrou e em que direção. Ao carregar, `loadSave` chama `breakables.sync`, que quebra de novo da mesma forma, dentro do dado do jogo.
 - Testes ([`breakables.test.mjs`](../engine/test/breakables.test.mjs)): dois golpes quebram a caixa, o lugar se abre e o chão fica; o save mantém quebrado; duas partidas dão o mesmo hash; uma tag inexistente é recusada com a explicação.
+
+### Etapa 20 — Câmera com impacto · ✅ concluída
+
+- [`engine/src/ui/shake.ts`](../engine/src/ui/shake.ts) usa o `KIT.cameraImpulses` do kit: `crash` vindo do atacante quando o jogador apanha, `recoil` leve quando ele acerta, `crash` no ponto quando algo quebra e `recoil` quando um inimigo morre pela mão dele.
+- **Só a imagem.** O renderizador do kit aplica os impulsos com `frame.cameraImpulses` e `cameraTime`. O `core.shown`, por onde passa o clique, continua sendo a vista da engine, sem tremor. Como o HUD e o som, o módulo lê os eventos entre os passos, então a simulação e o hash não mudam.
+- `camera.shake` no jogo e `&shake=0` na página. O `ENGINE.shake` fica exposto para depurar. Conferido no Edge headless durante o replay da arena: os impulsos disparam e a página não dá erro.
 
 ### O que fica de fora (e por quê)
 

@@ -20,6 +20,11 @@ export interface CameraOptions {
   maxDist?: number;
   /** the followed point is kept inside this box */
   bounds?: { min: Vec3; max: Vec3 };
+  /**
+   * How hard the picture jolts on hits, smashes and kills (stage 20; src/ui/shake.ts): 1 (default), 0.5 gentler, 0 none.
+   * Only the drawn picture moves: clicks and the game itself are untouched. &shake=0 in the page turns it off too.
+   */
+  shake?: number;
 }
 
 const clamp = (x: number, a: number, b: number) => (x < a ? a : x > b ? b : x);
