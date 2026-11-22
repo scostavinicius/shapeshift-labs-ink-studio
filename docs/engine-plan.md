@@ -328,7 +328,7 @@ Em 2026-11-21 o `main` do original (828 commits: geração procedural, simulaç�
 | 16 | Custo de render: o que se pagou foi a amostragem adaptativa (−41% de splats na arena densa) | ✅ |
 | 17 | Fases procedurais (salas e cavernas pela semente) | ✅ |
 | 18 | IA dos inimigos: rotas, percepção, `hunter()` | ✅ |
-| 19 | Objetos destrutíveis, que continuam quebrados depois do save | |
+| 19 | Objetos destrutíveis, que continuam quebrados depois do save | ✅ |
 | 20 | Câmera com impacto (só na vista desenhada) | |
 | 21–22 | Luzes locais com sombra; chuva, neblina e raios | |
 | 23–24 | Som posicional; modelos GLB (cenário e personagens rígidos) | |
@@ -402,6 +402,14 @@ Resultados e decisões em [engine-performance.md](engine-performance.md), seçã
 - **`hunter()`** ([`brains.ts`](../engine/src/game/brains.ts)): vê à frente, ouve de perto, segue rotas, procura onde viu o alvo por último e patrulha. Calcula no máximo 3 rotas por passo no jogo todo. Tudo o que lembra é dado simples em `self.data.brain`.
 - Testes ([`hunter.test.mjs`](../engine/test/hunter.test.mjs)): a rota da masmorra é válida e sempre igual; o `hunter` contorna as paredes até o alvo, onde o `chaser` fica preso; duas partidas dão o mesmo hash; ao perder o alvo, ele vai até onde o viu por último.
 - Os jogos atuais continuam com o `chaser` por ora. A troca fica para a etapa 25, porque obriga a gravar de novo os robôs que vencem.
+
+### Etapa 19 — Objetos destrutíveis · ✅ concluída
+
+- [`engine/src/game/breakables.ts`](../engine/src/game/breakables.ts): `def.breakables` lista as tags que a cena usou ao esculpir. O `K.destruction` do kit pega os splats pela seleção `{ object: tag }` (é assim que a `tag` da escultura aparece) e os joga como `debris` ou `rubble`.
+- **Golpes:** a regra de alcance e ângulo é a mesma do combate, e cada golpe conta uma vez por objeto. A engine conta os golpes. Os limiares de dano do kit não são usados.
+- **O mapa de colisão passou a ser editável:** `collision.openBox(caixa)` corta o sólido acima do chão e aumenta `collision.version`. As grades de rota da etapa 18 se refazem sozinhas.
+- **Save:** cada objeto é uma prop cujo `data` diz se quebrou e em que direção. Ao carregar, `loadSave` chama `breakables.sync`, que quebra de novo da mesma forma, dentro do dado do jogo.
+- Testes ([`breakables.test.mjs`](../engine/test/breakables.test.mjs)): dois golpes quebram a caixa, o lugar se abre e o chão fica; o save mantém quebrado; duas partidas dão o mesmo hash; uma tag inexistente é recusada com a explicação.
 
 ### O que fica de fora (e por quê)
 

@@ -225,7 +225,11 @@ function cut(list: number[], lo: number, hi: number): number[] {
 
 /** The queries over a finished map. */
 export function makeCollision(data: CollisionData): Collision {
-  const { cell, i0, k0, nx, nz, start, spans } = data;
+  // the map can change while a game runs (openBox: a wall knocked down, stage 19), so its arrays are kept in variables
+  const { cell, i0, k0, nx, nz } = data;
+  let start = data.start,
+    spans = data.spans,
+    version = 0;
   const col = (i: number, k: number) => {
     const a = i - i0,
       b = k - k0;
@@ -267,8 +271,48 @@ export function makeCollision(data: CollisionData): Collision {
     return (h00 * (1 - tx) + h10 * tx) * (1 - tz) + (h01 * (1 - tx) + h11 * tx) * tz;
   };
 
-  return {
-    data,
+  const self: Collision = {
+    get data() {
+      return data;
+    },
+    get version() {
+      return version;
+    },
+    openBox(box: Box) {
+      // every column whose centre lies in the box loses what is solid between box.min[1] and box.max[1]
+      const lists: number[][] = [];
+      let changed = false;
+      for (let a = 0; a < nx; a++)
+        for (let b = 0; b < nz; b++) {
+          const c = a * nz + b,
+            x = (i0 + a) * cell,
+            z = (k0 + b) * cell;
+          let list = Array.from(spans.subarray(start[c] * 2, start[c + 1] * 2));
+          if (x >= box.min[0] && x <= box.max[0] && z >= box.min[2] && z <= box.max[2]) {
+            const before = list.length;
+            list = cut(list, box.min[1], box.max[1]);
+            if (list.length !== before || list.some((v, i) => v !== spans[start[c] * 2 + i])) changed = true;
+          }
+          lists.push(list);
+        }
+      if (!changed) return false;
+      let total = 0;
+      for (const l of lists) total += l.length / 2;
+      const ns = new Uint32Array(nx * nz + 1),
+        sp = new Float32Array(total * 2);
+      let at = 0;
+      lists.forEach((l, c) => {
+        ns[c] = at;
+        sp.set(l, at * 2);
+        at += l.length / 2;
+      });
+      ns[nx * nz] = at;
+      start = ns;
+      spans = sp;
+      data = { cell, i0, k0, nx, nz, start, spans };
+      version++;
+      return true;
+    },
     height: (x, z, y) => height(x, z, y),
     ground: (x, z) => heightCol(near(x, z), BIG / 2, BIG),
     blocked(p: Vec3, r: number, h: number) {
@@ -290,4 +334,5 @@ export function makeCollision(data: CollisionData): Collision {
       return true;
     }
   };
+  return self;
 }

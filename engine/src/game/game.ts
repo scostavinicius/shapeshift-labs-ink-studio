@@ -7,6 +7,7 @@ import type { InputState, Sample, StepInput } from '../core/input';
 import { buildLevel, hideSlot, markSlot, type Level, type SceneFn, type Slot } from './level';
 import { Dice } from './rng';
 import { Combat } from './combat';
+import { Breakables } from './breakables';
 import { effectOptions, GameEffects } from './effects';
 import type { Actor, Brain, Collision, Entity, Game, GameDef, GameEvent, Prop, Snapshot, Trigger } from './types';
 
@@ -83,6 +84,11 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
       })
   );
 
+  // breakable things (stage 19): bound to the toolkit's destruction once the world is ready
+  const breakables = def.breakables && def.breakables.length
+    ? dice.during(K, () => new Breakables(def.breakables!, world, K, (ink as unknown as { TargetSelectors: any }).TargetSelectors, collision))
+    : null;
+
   const effects = level.pools ? new GameEffects(effectOptions(def.effects)!, level.pools, world, collision, a => slotOf.get(a.id)) : null;
 
   const game: RunningGame<State> = {
@@ -94,6 +100,7 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
     level,
     built: level.built,
     effects,
+    breakables,
     get entities() {
       return entities;
     },
@@ -323,6 +330,8 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
         }
       // 3b. blows land, the dead fall, the player comes back
       combat?.step(game, actors, dt, effects);
+      // 3c. blows on breakable things
+      breakables?.strike(game, actors);
       // 4. triggers
       for (const tr of now) {
         if (tr.type !== 'trigger' || !tr.alive) continue;
@@ -358,6 +367,7 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
 
   // the world is ready: put the cast on stage
   dice.during(K, () => {
+    breakables?.spawn(game);
     state = def.init(game);
   });
   return game;

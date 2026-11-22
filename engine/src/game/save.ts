@@ -105,6 +105,8 @@ export function loadSave(game: RunningGame<any>, s: SaveData): void {
       else e.pos = [saved.pos[0], saved.pos[1], saved.pos[2]];
     }
     game.state = clone(s.state);
+    // what the save says was smashed is smashed again, the same way (stage 19)
+    game.breakables?.sync(game);
     const p = game.player;
     if (p) {
       game.core.camera.follow(p.pos);

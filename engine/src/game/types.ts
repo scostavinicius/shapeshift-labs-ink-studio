@@ -10,6 +10,7 @@ import type { Builder, Kit, Scene, Sculpt, Vec3, World, Ink } from '../../types/
 import type { CameraOptions } from '../core/camera';
 import type { Core } from '../core/core';
 import type { Action, StepInput } from '../core/input';
+import type { BreakableDef, Breakables } from './breakables';
 
 // ---------------------------------------------------------------------------------------------------------- the level
 
@@ -62,6 +63,13 @@ export interface CollisionData {
 
 export interface Collision {
   readonly data: CollisionData;
+  /** counts up each time the map changes while the game runs (openBox); route grids are made again when it does */
+  readonly version: number;
+  /**
+   * Make the inside of a box empty from now on (what was solid there between box.min[1] and box.max[1] is gone): a wall
+   * knocked down, a crate smashed. Part of the simulation: call it from the game's step. True if anything changed.
+   */
+  openBox(box: Box): boolean;
   /**
    * What K.character asks of its world, with the meaning of the sculpt's own S.heightAt(x, z, y): the first surface at
    * or below y (looking down at most 6 units); 1e9 if (x, y, z) is inside something; -1e9 if there is nothing below
@@ -248,6 +256,11 @@ export interface GameDef<State = unknown> {
    * Gaussian. A scene that sets look.splatCoverage itself keeps its own.
    */
   coverage?: 'legacy' | 'continuous' | 'soft';
+  /**
+   * Things a blow can smash (stage 19): each a tag the scene sculpted solids with (S.box(..., { tag: 'crate-1' })).
+   * Broken ones open their place in the collision map, and stay broken through saves. See breakables.ts.
+   */
+  breakables?: BreakableDef[];
   actors?: Record<string, ActorDef>;
   /** named places. Give y as null to stand it on the ground there. */
   spawns?: Record<string, [number, number | null, number]>;
@@ -291,6 +304,8 @@ export interface Game<State = unknown> {
   readonly built: Record<string, unknown>;
   /** the kit's effects, when def.effects asked for them */
   readonly effects: Effects | null;
+  /** breakable things (def.breakables): intact(tag), boxOf(tag), breakIt(game, tag, dir) for a rule that smashes one */
+  readonly breakables: Breakables | null;
   /** simulation time in seconds, and steps run */
   readonly t: number;
   readonly steps: number;

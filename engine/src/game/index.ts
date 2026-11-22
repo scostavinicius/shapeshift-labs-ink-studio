@@ -13,3 +13,4 @@ export { buildNavGrid, cellAt, findPath, navGridFor, type NavGrid, type Path } f
 export { saveGame, loadSave, saveProblem, storeLocal, readLocal, forgetLocal, saveKey, SAVE_FORMAT, SAVE_VERSION, type SaveData, type SavedEntity } from './save';
 export { validateGame, checkDefinition, checkRun, lintSource, codeOnly, type Problem, type RunStats } from './validate';
 export { makeDungeonScene, layDungeon, dungeonOf, DUNGEON_PALETTE, type DungeonLayout, type DungeonOptions, type DungeonRoom, type Spot } from './dungeon';
+export { Breakables, type BreakableDef, type BreakableData } from './breakables';

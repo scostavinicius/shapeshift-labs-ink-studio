@@ -95,6 +95,8 @@ Os três exemplos completos, do menor ao maior:
 | `sounds` | `{ evento: som }`. Sons: `swing`, `hit`, `death`, `respawn`, `blip`, `save` |
 | `brains` | `{ kind: brain }`: os cérebros dos atores que nascem **durante** a partida (para o save trazê-los de volta) |
 | `collision` | `{ cell: 0.25, bakes: 'all' \| [0, 2], block: [caixas], open: [caixas], region }` |
+| `breakables` | `[{ tag, hits: 1, mode: 'debris' \| 'rubble', pieces: 0.3, push: 3, by: [times] }]`: coisas que um golpe quebra (seção 5) |
+| `coverage` | `'continuous'` (padrão), `'legacy'` ou `'soft'`: como os splats cobrem o pixel de arte |
 | `build(ctx)` | reserva mais splats antes do `B.finish` (`ctx.reserve(() => K.play.fx(ctx.B, 200))`); o que devolve vira `game.built` |
 
 ---
@@ -276,6 +278,14 @@ O que nasce durante um passo começa a agir no seguinte.
   - `freeze(x, z, raio, segundos)` congela o chão;
   - `fx.sparks(x, y, z, cor, n, velocidade)` e `fx.ring(x, y, z, cor, r0, r1, vida, n)`, onde a cor é um índice da paleta.
 - **HUD e som:** as `hud.lines` aparecem no canto (placar, objetivo), e `hud.message` dá palavras próprias aos eventos.
+- **Coisas que quebram:** caixas, pilares, paredes.
+  - **Na cena:** esculpa com uma `tag`: `S.box([2, 0.5, 0], [0.5, 0.5, 0.5], madeira, { tag: 'caixa-1' })`. Tudo o que tem a mesma tag quebra junto.
+  - **No jogo:** `breakables: [{ tag: 'caixa-1', hits: 2 }]`.
+  - **O golpe:** como num inimigo, conta quem está ao alcance e à frente, uma vez por golpe.
+  - **Eventos:** `hit-object` `{ tag, by, hits }` a cada golpe e `break` `{ tag, by, at }` quando quebra.
+  - **Ao quebrar:** os pedaços voam (`mode: 'debris'` some aos poucos; `'rubble'` fica no chão), e o lugar se abre no mapa de colisão. Os inimigos com `hunter()` passam a usar a passagem.
+  - **Save:** o save guarda o que quebrou, e ao carregar a coisa continua quebrada.
+  - **Por uma regra:** `game.breakables.breakIt(game, 'caixa-1', [dx, dz])` quebra sem golpe, como numa explosão.
 
 ---
 
