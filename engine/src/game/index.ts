@@ -11,3 +11,4 @@ export { GameEffects } from './effects';
 export { chaser, dummy, nearestFoe, type ChaserOptions } from './brains';
 export { saveGame, loadSave, saveProblem, storeLocal, readLocal, forgetLocal, saveKey, SAVE_FORMAT, SAVE_VERSION, type SaveData, type SavedEntity } from './save';
 export { validateGame, checkDefinition, checkRun, lintSource, codeOnly, type Problem, type RunStats } from './validate';
+export { makeDungeonScene, layDungeon, dungeonOf, DUNGEON_PALETTE, type DungeonLayout, type DungeonOptions, type DungeonRoom, type Spot } from './dungeon';

@@ -326,7 +326,7 @@ Em 2026-11-21 o `main` do original (828 commits: geração procedural, simulaç�
 | 14 | Trocar o renderizador próprio pelo do original (`webgl.mjs`) | ✅ |
 | 15 | Tamanho do pixel controlável (`&px=`, `[` `]`) e cobertura contínua (sem buracos) | ✅ |
 | 16 | Custo de render: o que se pagou foi a amostragem adaptativa (−41% de splats na arena densa) | ✅ |
-| 17 | Fases procedurais (salas e cavernas pela semente) | |
+| 17 | Fases procedurais (salas e cavernas pela semente) | ✅ |
 | 18 | IA dos inimigos: rotas, percepção, `hunter()` | |
 | 19 | Objetos destrutíveis, que continuam quebrados depois do save | |
 | 20 | Câmera com impacto (só na vista desenhada) | |
@@ -386,6 +386,14 @@ Resultados e decisões em [engine-performance.md](engine-performance.md), seçã
 - **Recorte e ordem estática + móvel:** medidos ou analisados, ficaram de fora porque não se pagam nestes jogos.
 - **Renderizador antigo:** mantido com `&renderer=old`. Ele gasta metade da GPU, mas não tem os recursos novos. (O plano previa removê-lo; ficou por ser útil em placas fracas.)
 - `npm run perf` aceita `--games` e `--query`.
+
+### Etapa 17 — Fases procedurais · ✅ concluída
+
+- [`engine/src/game/dungeon.ts`](../engine/src/game/dungeon.ts): `makeDungeonScene` usa os layouts do kit (`KIT.procedural.layouts.bsp` e `.cave`) e monta tudo com `S.vox`. Salas ficam em blocos retos, cavernas numa massa arredondada. O chão das lajes tem um tom por laje (`K.tex.voronoi`), as paredes têm fiadas (`K.tex.brick`) e o topo tem musgo (`K.tex.noise`). A amostragem adaptativa vem ligada.
+- **A colisão sai da escultura, como em qualquer nível.** O teste confere o chão em 0 e que um personagem empurrado contra a parede não entra nela.
+- **`world.dungeon` (`dungeonOf`)** é dado simples: salas, pontos livres alcançáveis, início, saída (o ponto mais longe andando, por busca em largura) e a grade.
+- **Determinismo:** os layouts do kit têm o próprio dado com semente e não usam `**`. A mesma semente dá a mesma masmorra.
+- Teste: [`engine/test/dungeon.test.mjs`](../engine/test/dungeon.test.mjs). Guia: AGENTS.md, seção 3.
 
 ### O que fica de fora (e por quê)
 

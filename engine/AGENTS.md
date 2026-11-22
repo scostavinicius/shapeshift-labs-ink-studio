@@ -143,6 +143,31 @@ scene: kit => ({
   - `dither` é o quanto os tons vizinhos da paleta se misturam em xadrez nas transições de luz (0 nenhum; 0,2 a 0,3 é o normal).
 - **Cenas prontas do repositório:** `showcase/farol.js` (uma ilha flutuante). As demos do kit (`burn`, `idol`, `cabinet`, `watcher`) são cenas para olhar, não níveis.
 
+### Fases geradas pela semente
+
+`makeDungeonScene(opções)` (de `engine/src/game/index`) monta uma masmorra de salas e corredores (`kind: 'rooms'`) ou de cavernas (`kind: 'cave'`) a partir da semente, com chão, paredes e colisão prontos:
+
+```ts
+import { defineGame, dungeonOf, makeDungeonScene } from '../../src/game/index';
+
+export default defineGame({
+  id: 'minha-masmorra',
+  scene: makeDungeonScene({ kind: 'rooms', width: 28, height: 20 }),   // células; cada uma mede 1 unidade
+  actors: { hero: { spec: walker, hp: 5 } },
+  init(game) {
+    const d = dungeonOf(game.world);           // o que foi gerado: salas, pontos livres, início e saída
+    game.spawnActor({ actor: 'hero', kind: 'player', at: [d.start[0], null, d.start[1]], brain: 'player', tags: ['player'] });
+    return { exit: d.exit };
+  }
+});
+```
+
+- **O que `dungeonOf` dá:** `rooms` (meio e tamanho de cada sala), `spots` (pontos com espaço em volta, todos alcançáveis a pé), `start`, `exit` (o ponto mais longe do início, andando), `depth` (essa distância, em células) e `rows` (a grade: `.` livre e `#` parede).
+- **Spawns:** a posição muda com a semente, então use esses pontos no `init` em vez de `spawns` fixos.
+- **A semente:** a mesma semente dá a mesma masmorra. O `"seed"` de um roteiro gera outra.
+- **Enfeitar:** `dress(S, K, layout, B)` esculpe mais coisas antes do bake, como tochas, caixas e colunas.
+- **Opções:** `palette` (a padrão é `DUNGEON_PALETTE`, com as cores do `walker` em 13–17), `floor`, `wall`, `top`, `wallHeight`, `res`, `adaptive` e `finish`.
+
 **O chão e as paredes saem da cena sozinhos.** A cada `S.bake()`, a engine amostra os sólidos daquele bake num mapa de colunas: o que é sólido em pé é parede; o que tem topo é chão. Onde não há nada embaixo, o personagem **não anda** (ele não cai da borda de uma ilha). Sólidos `ghost` e o que vem depois do último bake não contam.
 
 ---
