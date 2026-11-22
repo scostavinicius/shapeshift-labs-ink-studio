@@ -29,7 +29,7 @@ const R = require(path.join(REPO, 'cli', 'render.js'));
 const PNG = require(path.join(REPO, 'cli', 'png.js'));
 
 const USAGE = `usage: node engine/cli.js <command> <game> [options]
-  new   <name> [--from blank|walk|fight]        start a game in engine/examples/<name>/
+  new   <name> [--from blank|walk|fight|dungeon]  start a game in engine/examples/<name>/
   check <game> [--seconds 2] [--parity [--input s.json] [--t 3]]
   shot  <game> [--input s.json] [--t 5] [--out f.png] [--state st.json] [--save s.json] [--load s.json] [--trace 0.5] [--colored] [--no-hud]
   sheet <game> [--input s.json] [--times 0,1,2,4] [--cols 4] [--out f.png] [--colored]
@@ -420,7 +420,7 @@ async function record(o) {
 
 // ---------------------------------------------------------------------------------------------------------- new
 
-const TEMPLATES = { blank: 'blank', walk: 'farol-walk', fight: 'farol-fight' };
+const TEMPLATES = { blank: 'blank', walk: 'farol-walk', fight: 'farol-fight', dungeon: 'masmorra' };
 
 function newGame(o) {
   const name = o._[1];
@@ -437,7 +437,9 @@ function newGame(o) {
     const src = path.join(ENGINE, 'examples', TEMPLATES[from]);
     for (const f of fs.readdirSync(src)) {
       let text = fs.readFileSync(path.join(src, f), 'utf8');
-      if (f === 'game.ts') text = text.replace(/id: '[^']+'/, `id: '${name}'`).replace(/from '\.\.\/farol-walk\/game'/g, "from '../farol-walk/game'");
+      // the dungeon names itself in several places (scene, game, saves, the robot's script path)
+      if (from === 'dungeon') text = text.replace(/'masmorra'/g, `'${name}'`).replace(/masmorra\//g, `${name}/`);
+      else if (f === 'game.ts') text = text.replace(/id: '[^']+'/, `id: '${name}'`).replace(/from '\.\.\/farol-walk\/game'/g, "from '../farol-walk/game'");
       fs.writeFileSync(path.join(dir, f), text);
     }
   }

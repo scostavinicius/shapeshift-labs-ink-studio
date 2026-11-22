@@ -17,7 +17,8 @@ escreve → check → shot (ou sheet) → olha o PNG → corrige → repete
 1. **Comece de um modelo:** `node engine/cli.js new meu-jogo` cria `engine/examples/meu-jogo/game.ts` e um roteiro `walk.json`. Há três modelos:
    - `--from blank` (padrão): uma cena própria escrita no arquivo, um herói e um inimigo;
    - `--from walk`: o `farol` com um personagem andando;
-   - `--from fight`: o `farol` com uma luta.
+   - `--from fight`: o `farol` com uma luta;
+   - `--from dungeon`: a masmorra completa (fase gerada, tochas, caixas que quebram, inimigos que caçam).
 2. **Confira:** `node engine/cli.js check meu-jogo`. Ele lista **todos** os problemas de uma vez, cada um com o lugar, o que está errado e o que provavelmente se quis (`->`). Só siga em frente com 0 erros.
 3. **Olhe:**
    - `node engine/cli.js shot meu-jogo --input engine/examples/meu-jogo/walk.json --t 3` grava o quadro de 3 s em `engine/out/meu-jogo-3.png`;
@@ -74,6 +75,7 @@ Os três exemplos completos, do menor ao maior:
 | `engine/examples/yard/` | **um nível escrito do zero**, um gerador de inimigos durante a partida, um portão que dá a vitória, chão que congela, `def.brains` para o save |
 | `engine/examples/beacons/` | feito por uma IA **sem contexto, lendo só este guia**: acender três faróis com triggers, inimigos que acordam a cada farol aceso, vitória e derrota, e um roteiro (`win.json`) que vence |
 | `engine/examples/arena/` | **o jogo completo de demonstração**: arena circular, três ondas, dois tipos de inimigo, um chefe que chama reforços, cura entre ondas, vitória e derrota, mira assistida, e um **robô** (`bot.ts`) que vence e gravou o `win.json` |
+| `engine/examples/masmorra/` | **tudo o que veio depois**: masmorra gerada pela semente com tochas (`makeDungeonScene`), chuva na primeira sala, caixas de um GLB com textura que quebram (`placeAsset` + `breakables`), ghouls com `hunter()` que patrulham e procuram, um mímico cujo corpo é uma caixa (`placePart`) e um robô que acha a saída. `node engine/cli.js new meu-jogo --from dungeon` começa dela |
 
 **Copie de um deles** em vez de começar de uma folha em branco.
 

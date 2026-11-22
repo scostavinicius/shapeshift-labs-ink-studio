@@ -20,6 +20,8 @@ Fatos do código que moldam o plano:
 
 ## Como retomar em outro computador
 
+**Estado (2026-11-21):** **etapas 12 a 25 concluídas** (seção "Etapas 12+" mais abaixo). A engine carrega o kit novo com o `**` reescrito, desenha com o renderizador do próprio kit (com uma alteração local listada em [engine-kit-patches.md](engine-kit-patches.md)) e ganhou fases procedurais, `hunter()`, objetos que quebram, tranco de câmera, tochas assadas, clima, som posicional e modelos GLB. O jogo que junta tudo é a `masmorra`. Depois de cada merge do original, rode `npm test`, `npm run parity -- --min 75` e confira as alterações locais.
+
 **Estado (2026-11-17):** **todas as etapas (0 a 11) concluídas** (renderizador, núcleo do jogo, modelo de jogo com colisão, determinismo e modo sem navegador, combate e inimigos, HUD, áudio e save, camada para a IA, jogo de demonstração, desempenho). O determinismo vale **entre motores de JavaScript** (Math determinístico; ver [engine-determinism.md](engine-determinism.md)). **O plano terminou.** O que ficou para depois, com custo estimado, está na seção 4 de [engine-performance.md](engine-performance.md) (desempenho em GPUs integradas antigas) e no item 1 das decisões dele (personagens carregados por ossos na GPU). Os resultados medidos de cada etapa estão nas seções abaixo.
 
 **Preparar a máquina** (Node 18 ou mais novo, Git, e o Microsoft Edge ou o Chrome para o teste de paridade):
@@ -332,7 +334,7 @@ Em 2026-11-21 o `main` do original (828 commits: geração procedural, simulaç�
 | 20 | Câmera com impacto (só na vista desenhada) | ✅ |
 | 21–22 | Luzes de tocha com sombra (assadas); chuva, neve, folhas e neblina | ✅ |
 | 23–24 | Som posicional; modelos GLB (cenário e personagens rígidos) | ✅ |
-| 25 | Jogo novo (`masmorra`) e o que melhora cada jogo atual | |
+| 25 | Jogo novo (`masmorra`); os jogos atuais ganham o que é automático | ✅ |
 
 ### Etapa 12 — Saúde depois do merge · ✅ concluída
 
@@ -448,6 +450,26 @@ Resultados e decisões em [engine-performance.md](engine-performance.md), seçã
   - `spawnActor` com `[x, null, z]` agora resolve o chão na hora. Antes, a posição ficava com `null` até o primeiro passo, e a câmera seguia esse `null`.
 - **Modelo de exemplo, sem licença de terceiros:** [`engine/scripts/make-crate-glb.cjs`](../engine/scripts/make-crate-glb.cjs) escreve uma caixa de madeira com textura de 16 px, e a receita fica em `engine/assets/`.
 - Testes ([`assets.test.mjs`](../engine/test/assets.test.mjs)): a receita lê a textura; o modelo colocado bloqueia, aparece e quebra; a peça presa ao osso anda com o personagem.
+
+### Etapa 25 — A masmorra · ✅ concluída
+
+- **[`engine/examples/masmorra/`](../engine/examples/masmorra/game.ts)** junta as etapas 17 a 24:
+  - uma masmorra de 30 × 20 gerada pela semente, com 8 tochas assadas;
+  - chuva vazando pelo teto da primeira sala;
+  - 6 caixas do GLB de exemplo, que quebram com 2 golpes;
+  - 5 ghouls com `hunter()` que patrulham os pontos livres;
+  - um mímico com corpo de caixa que espera entre as caixas e acorda ao apanhar;
+  - a saída, que brilha no chão, e 3 vidas.
+- **O robô** ([`bot.ts`](../engine/examples/masmorra/bot.ts)) segue as mesmas rotas dos ghouls até a saída e luta com quem chega perto. O `win.json` vence em 10,9 s com 3 mortes, e o `record` confere que o roteiro sozinho dá o mesmo hash.
+- **Medido no navegador** (replay do robô): 180 fps, 64 547 splats, GPU 0,66 ms (1,02 no `colored`), desenho 1,1 ms, simulação 1 ms por passo. A montagem leva cerca de 3,2 s: masmorra 1,15 s, tochas 0,46 s, amostragem adaptativa 0,5 s (que deixa 30% menos splats), e o resto são as caixas e o mímico.
+- `node engine/cli.js new meu-jogo --from dungeon` começa uma cópia. Os testes do validador e [`masmorra.test.mjs`](../engine/test/masmorra.test.mjs) cobrem o jogo.
+- **Os jogos atuais** (arena, pátio, faróis, farol) ganham sozinhos:
+  - a cobertura contínua;
+  - o tranco da câmera;
+  - o som posicional;
+  - o renderizador novo.
+
+  Os cérebros **não** foram trocados por `hunter()`. São fases abertas, sem paredes para contornar, então o ganho seria pequeno, e a troca invalidaria os robôs gravados que os testes usam (arena e faróis). Tochas assadas nos faróis exigiriam mexer na cena compartilhada; ficou de fora pelo mesmo critério.
 
 ### O que fica de fora (e por quê)
 

@@ -115,7 +115,7 @@ test('a run: an actor that falls off the world, and a game that is not the same 
   assert.ok(find(G.checkRun(twice, ink, flatScene(), 0.2).problems, 'not-deterministic'));
 });
 
-for (const name of ['farol-walk', 'farol-fight', 'yard', 'beacons', 'arena'])
+for (const name of ['farol-walk', 'farol-fight', 'yard', 'beacons', 'arena', 'masmorra'])
   test(`the example ${name} passes the validator with no errors and no warnings`, async () => {
     const mod = await loadTs(`examples/${name}/game.ts`);
     const def = mod.default;
