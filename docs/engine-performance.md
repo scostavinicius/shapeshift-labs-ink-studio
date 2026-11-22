@@ -133,3 +133,17 @@ A engine passou a desenhar com o renderizador WebGL2 do próprio ink-studio (`we
 - **A ordenação fica na página.** O renderizador do ink-studio ordena com um counting sort de 16 bits e reaproveita a ordem quando nada se moveu. Entregar a ordem pronta do Worker sai mais caro, porque ele confere e reenvia o `Int32Array` inteiro a cada quadro. O Worker continua para o renderizador antigo e com `&sort=worker`.
 - **Primeiro quadro:** sem a alteração listada em [engine-kit-patches.md](engine-kit-patches.md), o primeiro quadro levava **cerca de 110 s** no Edge do Windows (Direct3D), só para ligar um shader que os jogos nem usam. Com ela, menos de 3 s.
 - Todos os casos ficam bem dentro dos 16,7 ms de um quadro a 60 fps. A etapa 16 procura cortar esse custo de volta.
+
+## 7. Etapa 16: onde cortar o custo de desenho (2026-11-21)
+
+Cada alavanca foi medida com `npm run perf` (agora com `--games` e `--query`). Só ficou o que se pagou.
+
+| Alavanca | Resultado | Decisão |
+|---|---|---|
+| **Amostragem adaptativa** (`S.adaptiveSampling = true` antes do `S.bake()`): faces largas com amostras mais espaçadas, bordas e curvas mais finas | Arena densa: 303 205 → **179 636 splats** (−41%); ordenação na página 3,2 → 1,9 ms; GPU no `colored` 4,0 → 2,4 ms. A imagem na mesma câmera fica igual a olho. Na arena normal o corte é pequeno (50 239 → 45 873, −9%), porque ela já é esparsa. | **Usar em cenas densas e em fases novas.** `makeArenaScene(densidade, adaptive)` aceita a opção. A arena e a arena densa ficaram como estavam, para servir de referência. |
+| Recorte por visibilidade (`FrameBudget.visibleIndices`) | Nos jogos vistos de cima o nível inteiro fica quase sempre no quadro, então sobra pouco para cortar. O renderizador do kit só recorta grupos de instâncias, e entregar uma ordem parcial não é aceito. | Não usar agora. Volta a valer em níveis maiores que a tela. |
+| Ordem estática + móvel (`P.splatOrder.merge`) | Entregar qualquer ordem pronta ao renderizador custa mais na página (3,2 → 4,2 ms na arena densa) do que deixá-lo ordenar sozinho. | Não usar. |
+| Passes extras do renderizador | O renderizador do kit só roda o desenho dos splats e o resolve especializado. O passe de limpeza entra só com `look.clean`. O dobro de GPU em relação ao renderizador antigo vem do shader de splats, mais completo. | Nada a desligar sem reescrever o shader do kit. |
+| Renderizador antigo (`&renderer=old`) | Gasta cerca de metade da GPU no estilo padrão, mas não tem os recursos novos (cobertura contínua, luzes, looks). | **Mantido como opção** para placas fracas e para comparar. Não foi removido. |
+
+**Regra prática:** o custo é o número de splats. Esculpa com o `res` que o pixel de arte pede, ligue a amostragem adaptativa e meça.

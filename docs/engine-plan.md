@@ -325,7 +325,7 @@ Em 2026-11-21 o `main` do original (828 commits: geração procedural, simulaç�
 | 13 | Peso de carregamento: kit minificado e comprimido (cenas pré-montadas adiadas) | ✅ |
 | 14 | Trocar o renderizador próprio pelo do original (`webgl.mjs`) | ✅ |
 | 15 | Tamanho do pixel controlável (`&px=`, `[` `]`) e cobertura contínua (sem buracos) | ✅ |
-| 16 | Custo de render: recorte por visibilidade, ordem estática + móvel, menos splats no bake | |
+| 16 | Custo de render: o que se pagou foi a amostragem adaptativa (−41% de splats na arena densa) | ✅ |
 | 17 | Fases procedurais (salas e cavernas pela semente) | |
 | 18 | IA dos inimigos: rotas, percepção, `hunter()` | |
 | 19 | Objetos destrutíveis, que continuam quebrados depois do save | |
@@ -378,6 +378,14 @@ Medido no Edge, servidor local, 2026-11-21:
   - a cobertura contínua quase não custa: arena 0,42 ms de GPU nos dois modos; arena densa 3,67 → 3,82 ms;
   - um pixel menor também sai barato: a arena densa com px 3 (grade 427 × 240, 5 vezes mais pixels que com px 7) gastou 2,1 ms de GPU;
   - **mas abaixo do tamanho automático aparece pouco detalhe novo.** O automático já põe mais ou menos um splat por pixel de arte. Com pixels menores, cada splat (um disco sólido) só ocupa mais pixels. O detalhe real vem de mais splats (`res` menor ao esculpir, como na arena densa), e o que custa é o número de splats: ordenação e GPU.
+
+### Etapa 16 — Custo de render · ✅ concluída
+
+Resultados e decisões em [engine-performance.md](engine-performance.md), seção 7.
+- **Amostragem adaptativa do kit:** reduz os splats sem perda visível (−41% na arena densa) e corta a ordenação e a GPU na mesma proporção. Vira a recomendação para fases novas; `makeArenaScene` ganhou a opção.
+- **Recorte e ordem estática + móvel:** medidos ou analisados, ficaram de fora porque não se pagam nestes jogos.
+- **Renderizador antigo:** mantido com `&renderer=old`. Ele gasta metade da GPU, mas não tem os recursos novos. (O plano previa removê-lo; ficou por ser útil em placas fracas.)
+- `npm run perf` aceita `--games` e `--query`.
 
 ### O que fica de fora (e por quê)
 

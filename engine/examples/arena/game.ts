@@ -24,9 +24,10 @@ const PALETTE = [
 /**
  * The arena: a sand disc 20 across with a stone rim, a ring wall with four gates, pillars and torches. `density` scales
  * how finely its surfaces are sampled (splats grow with its square): 1 is the game's own, ~2.8 makes ~300 000 splats
- * (engine/examples/arena-dense, for measuring).
+ * (engine/examples/arena-dense, for measuring). `adaptive` turns on the kit's adaptive sampling (docs/adaptive-sculpt-sampling.md):
+ * broad faces sampled coarser, bevels and curves finer.
  */
-export const makeArenaScene = (density = 1) => (kit: any) => ({
+export const makeArenaScene = (density = 1, adaptive: boolean | Record<string, unknown> = false) => (kit: any) => ({
   id: 'arena',
   name: 'The Arena',
   seed: 9,
@@ -60,6 +61,7 @@ export const makeArenaScene = (density = 1) => (kit: any) => ({
     }
     // a worn mark at the middle
     S.lathe([0, 0.02, 0], 0.03, 2.2, { r: [7, 8] }, { res: 0.2 / density });
+    if (adaptive) S.adaptiveSampling = adaptive;
     S.bake();
     return B.finish({ cam: { target: [0, 0.5, 0], dist: 22, pitch: 0.82, yaw: 0.3 }, detail: 7, radius: 12, dither: 0.2 });
   }
