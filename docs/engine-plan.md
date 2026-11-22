@@ -327,7 +327,7 @@ Em 2026-11-21 o `main` do original (828 commits: geração procedural, simulaç�
 | 15 | Tamanho do pixel controlável (`&px=`, `[` `]`) e cobertura contínua (sem buracos) | ✅ |
 | 16 | Custo de render: o que se pagou foi a amostragem adaptativa (−41% de splats na arena densa) | ✅ |
 | 17 | Fases procedurais (salas e cavernas pela semente) | ✅ |
-| 18 | IA dos inimigos: rotas, percepção, `hunter()` | |
+| 18 | IA dos inimigos: rotas, percepção, `hunter()` | ✅ |
 | 19 | Objetos destrutíveis, que continuam quebrados depois do save | |
 | 20 | Câmera com impacto (só na vista desenhada) | |
 | 21–22 | Luzes locais com sombra; chuva, neblina e raios | |
@@ -394,6 +394,14 @@ Resultados e decisões em [engine-performance.md](engine-performance.md), seçã
 - **`world.dungeon` (`dungeonOf`)** é dado simples: salas, pontos livres alcançáveis, início, saída (o ponto mais longe andando, por busca em largura) e a grade.
 - **Determinismo:** os layouts do kit têm o próprio dado com semente e não usam `**`. A mesma semente dá a mesma masmorra.
 - Teste: [`engine/test/dungeon.test.mjs`](../engine/test/dungeon.test.mjs). Guia: AGENTS.md, seção 3.
+
+### Etapa 18 — IA dos inimigos · ✅ concluída
+
+- **Rotas** ([`engine/src/game/nav.ts`](../engine/src/game/nav.ts)): uma grade de 0,5 sobre o mapa de colisão marca onde um corpo cabe em pé e os degraus que dá para subir. O A* anda em 8 direções, sem cortar quinas, e desempata pelo índice da célula. Depois, a rota é esticada em poucas retas. A grade é feita uma vez por mapa e por corpo, e refeita quando o mapa muda (etapa 19).
+- **Mudança em relação ao plano:** não usei as `navigationTiles` do kit. Elas pertencem ao runtime de mundo do kit (campos, consultas, ticks), que a engine não roda. O mapa de colisão da engine já diz tudo o que uma rota precisa, e assim o determinismo fica todo sob controle da engine. A percepção também é da engine (`perceive`): campo de visão, alcance com linha livre e audição de perto.
+- **`hunter()`** ([`brains.ts`](../engine/src/game/brains.ts)): vê à frente, ouve de perto, segue rotas, procura onde viu o alvo por último e patrulha. Calcula no máximo 3 rotas por passo no jogo todo. Tudo o que lembra é dado simples em `self.data.brain`.
+- Testes ([`hunter.test.mjs`](../engine/test/hunter.test.mjs)): a rota da masmorra é válida e sempre igual; o `hunter` contorna as paredes até o alvo, onde o `chaser` fica preso; duas partidas dão o mesmo hash; ao perder o alvo, ele vai até onde o viu por último.
+- Os jogos atuais continuam com o `chaser` por ora. A troca fica para a etapa 25, porque obriga a gravar de novo os robôs que vencem.
 
 ### O que fica de fora (e por quê)
 

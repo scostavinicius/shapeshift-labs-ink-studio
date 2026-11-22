@@ -2,6 +2,8 @@
 // (types.ts Brain): an enemy is a player with another hand on the stick. What a brain remembers between steps lives in
 // self.data.brain (plain data: it goes into snapshots and the hash). Chance comes from game.rng() only.
 import type { Actor, Brain, Game } from './types';
+import type { StepInput } from '../core/input';
+import { findPath, navGridFor } from './nav';
 
 export interface ChaserOptions {
   /** how far it notices a foe (default 9) */
@@ -100,3 +102,195 @@ export function chaser(o: ChaserOptions = {}): Brain {
 
 /** A brain that does nothing: a training dummy. */
 export const dummy: Brain = () => ({});
+
+// ---------------------------------------------------------------------------------------------------------- hunter
+
+export interface HunterOptions extends ChaserOptions {
+  /** field of view in degrees (default 140): a foe behind it goes unseen unless it is already after that foe */
+  fov?: number;
+  /** a foe this close is noticed from any side and through walls: footsteps (default 2.5) */
+  hearing?: number;
+  /** seconds it keeps looking where it last saw its foe (default 5) */
+  memory?: number;
+  /** seconds between route plans while chasing (default 0.5) */
+  replan?: number;
+  /** where to walk while it has no one to hunt: world [x, z] points visited in turn, or 'spots' for the dungeon's
+   *  open spots (world.dungeon, stage 17). Default: stand still */
+  patrol?: [number, number][] | 'spots';
+  /** stick length while patrolling or searching (default 0.45) */
+  stroll?: number;
+}
+
+/** what a hunter remembers: plain data, in self.data.brain */
+interface HunterMemory {
+  mode: 'idle' | 'patrol' | 'chase' | 'search' | 'swing' | 'back';
+  left: number;
+  cool: number;
+  foe: number;
+  /** where and when (game.t) the foe was last seen or heard */
+  seen: [number, number] | null;
+  seenT: number;
+  /** the walk it is on, the goal it was planned for and when */
+  path: [number, number][];
+  goal: [number, number] | null;
+  planT: number;
+  /** which patrol point is next */
+  next: number;
+}
+
+/** route plans allowed per step across all hunters, so a crowd does not plan at once (the others plan next step) */
+const PLANS_PER_STEP = 3;
+const planned = new WeakMap<object, { step: number; used: number }>();
+
+function mayPlan(game: Game<any>): boolean {
+  let b = planned.get(game);
+  if (!b || b.step !== game.steps) planned.set(game, (b = { step: game.steps, used: 0 }));
+  if (b.used >= PLANS_PER_STEP) return false;
+  b.used++;
+  return true;
+}
+
+/**
+ * Seeing and hearing: the nearest standing foe within `hearing` (any side), or within `sight` in front (inside `fov`)
+ * with a clear line. The foe it is already after is kept in view from any side while it can be seen.
+ */
+export function perceive(self: Actor, game: Game<any>, o: { sight: number; fov: number; hearing: number; needsLine: boolean; current: number }): Actor | null {
+  const half = ((o.fov * Math.PI) / 180) * 0.5,
+    fx = Math.cos(self.face),
+    fz = Math.sin(self.face);
+  let best: Actor | null = null,
+    bd = Infinity;
+  for (const e of game.entities) {
+    if (e.type !== 'actor' || !e.alive || e === self || e.team === self.team || e.deadFor >= 0) continue;
+    const dx = e.pos[0] - self.pos[0],
+      dz = e.pos[2] - self.pos[2],
+      d = Math.hypot(dx, dz);
+    if (d >= bd) continue;
+    let noticed = d <= o.hearing;
+    if (!noticed && d <= o.sight) {
+      const inFront = e.id === o.current || (dx * fx + dz * fz) / (d || 1) >= Math.cos(half);
+      noticed = inFront && (!o.needsLine || game.collision.clear([self.pos[0], self.pos[1] + 1, self.pos[2]], [e.pos[0], e.pos[1] + 1, e.pos[2]]));
+    }
+    if (noticed) {
+      best = e;
+      bd = d;
+    }
+  }
+  return best;
+}
+
+/**
+ * Hunt: like the chaser, but it sees only in front of it and hears close up; it walks routes round walls to its foe
+ * (nav.ts); when it loses sight it goes to where it last saw it and looks about for a while; with no one to hunt it
+ * patrols. Its route and memory are plain data in self.data.brain, so saves and the hash keep them.
+ */
+export function hunter(o: HunterOptions = {}): Brain {
+  const sight = o.sight ?? 10,
+    fov = o.fov ?? 140,
+    hearing = o.hearing ?? 2.5,
+    needsLine = o.needsLine ?? true,
+    speed = o.speed ?? 0.8,
+    stroll = o.stroll ?? 0.45,
+    cooldown = o.cooldown ?? 1.1,
+    retreat = o.retreat ?? 0.45,
+    memory = o.memory ?? 5,
+    replan = o.replan ?? 0.5;
+  return (self, game, dt) => {
+    const m = ((self.data.brain as HunterMemory) ||= {
+      mode: 'idle',
+      left: 0,
+      cool: 0,
+      foe: 0,
+      seen: null,
+      seenT: -1e9,
+      path: [],
+      goal: null,
+      planT: -1e9,
+      next: 0
+    });
+    m.cool = Math.max(0, m.cool - dt);
+    m.left = Math.max(0, m.left - dt);
+    if (self.deadFor >= 0) return {};
+    const grid = navGridFor(game.collision, self.radius, 1.0);
+    // walk the route to `goal`, planning again when the goal moved or the plan is old (within the step's budget)
+    const walkTo = (goal: [number, number], stick: number, fresh: boolean): Partial<StepInput> | null => {
+      const moved = !m.goal || Math.hypot(goal[0] - m.goal[0], goal[1] - m.goal[1]) > 0.75;
+      if ((moved || (fresh && game.t - m.planT >= replan) || !m.path.length) && mayPlan(game)) {
+        m.path = findPath(grid, self.pos, goal) || [];
+        m.goal = [goal[0], goal[1]];
+        m.planT = game.t;
+      }
+      while (m.path.length && Math.hypot(m.path[0][0] - self.pos[0], m.path[0][1] - self.pos[2]) < 0.35) m.path.shift();
+      const to = m.path[0];
+      if (!to) return null;
+      const dx = to[0] - self.pos[0],
+        dz = to[1] - self.pos[2],
+        d = Math.hypot(dx, dz) || 1;
+      return { move: (dx / d) * stick, mz: (dz / d) * stick };
+    };
+    const current = game.entities.find(e => e.id === m.foe && e.type === 'actor' && e.alive && (e as Actor).deadFor < 0) as Actor | undefined;
+    const foe = perceive(self, game, { sight, fov, hearing, needsLine, current: current ? current.id : 0 });
+    if (foe) {
+      m.foe = foe.id;
+      m.seen = [foe.pos[0], foe.pos[2]];
+      m.seenT = game.t;
+    }
+    // swinging and backing off play out as the chaser's do
+    if (m.mode === 'swing') {
+      if (m.left > 0) return foe ? { face: Math.atan2(foe.pos[2] - self.pos[2], foe.pos[0] - self.pos[0]) } : {};
+      m.mode = retreat > 0 ? 'back' : 'chase';
+      m.left = retreat;
+    }
+    if (m.mode === 'back' && foe) {
+      const dx = foe.pos[0] - self.pos[0],
+        dz = foe.pos[2] - self.pos[2],
+        d = Math.hypot(dx, dz) || 1;
+      if (m.left > 0) return { move: (-dx / d) * 0.6, mz: (-dz / d) * 0.6, face: Math.atan2(dz, dx) };
+    }
+    if (foe) {
+      m.mode = 'chase';
+      const dx = foe.pos[0] - self.pos[0],
+        dz = foe.pos[2] - self.pos[2],
+        d = Math.hypot(dx, dz) || 1,
+        face = Math.atan2(dz, dx),
+        range = o.range ?? (self.ch.reach as number) * 0.9;
+      if (d <= range + foe.radius && m.cool <= 0) {
+        m.mode = 'swing';
+        m.left = 0.3;
+        m.cool = cooldown * (0.75 + 0.5 * game.rng());
+        m.path = [];
+        return { attack: true, face };
+      }
+      if (d <= range * 0.8 + foe.radius) return { face };
+      // in the open and close: straight at it; otherwise the route
+      if (d < 3 && game.collision.clear([self.pos[0], self.pos[1] + 0.5, self.pos[2]], [foe.pos[0], foe.pos[1] + 0.5, foe.pos[2]]))
+        return { move: (dx / d) * speed, mz: (dz / d) * speed };
+      return walkTo([foe.pos[0], foe.pos[2]], speed, true) || { move: (dx / d) * speed, mz: (dz / d) * speed };
+    }
+    // lost it: go where it was last seen, then look about until memory runs out
+    if (m.seen && game.t - m.seenT < memory) {
+      m.mode = 'search';
+      const step = walkTo(m.seen, stroll + 0.2, false);
+      if (step) return step;
+      return { face: self.face + dt * 2.2 }; // there: turn on the spot, looking
+    }
+    m.seen = null;
+    m.foe = 0;
+    // patrol
+    const dungeon = (game.world as { dungeon?: { spots: [number, number][] } }).dungeon;
+    const points = o.patrol === 'spots' ? dungeon?.spots ?? [] : o.patrol ?? [];
+    if (!points.length) {
+      m.mode = 'idle';
+      return {};
+    }
+    m.mode = 'patrol';
+    const target = points[m.next % points.length];
+    if (Math.hypot(target[0] - self.pos[0], target[1] - self.pos[2]) < 0.6) {
+      m.next = (m.next + 1) % points.length;
+      m.path = [];
+      m.goal = null;
+      return {};
+    }
+    return walkTo(target, stroll, false) || {};
+  };
+}

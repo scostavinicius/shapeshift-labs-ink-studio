@@ -218,7 +218,14 @@ type Brain = (self: Actor, game: Game, dt: number) => Partial<StepInput>;
 //              run, jump, jumpHeld, dash, attack, cast, crouch, face? (radianos) }
 ```
 
-- `chaser({ sight, needsLine, range, speed, cooldown, retreat })` persegue o adversário mais próximo que vê, golpeia ao alcance, recua e volta. `dummy` fica parado.
+- `chaser({ sight, needsLine, range, speed, cooldown, retreat })` persegue o adversário mais próximo que vê, golpeia ao alcance, recua e volta. Anda em linha reta: atrás de uma parede, fica preso. `dummy` fica parado.
+- `hunter({ ...as do chaser, fov, hearing, memory, replan, patrol, stroll })` é o inimigo para níveis com paredes (masmorras):
+  - **vê** só à frente (`fov` em graus, padrão 140) e **ouve** de perto através de paredes (`hearing`, padrão 2,5);
+  - **anda por rotas** em volta das paredes, recalculadas a cada `replan` segundos (no máximo 3 cálculos por passo no jogo todo);
+  - **ao perder o alvo**, vai até onde o viu por último e procura em volta por `memory` segundos;
+  - **sem alvo**, patrulha `patrol`: uma lista de pontos `[x, z]`, ou `'spots'` para os pontos livres da masmorra.
+  - A rota e a memória ficam em `self.data.brain`, então o save e o `hash` as guardam.
+- `findPath(navGridFor(game.collision, raio, altura), de, para)` dá uma rota para o seu próprio cérebro: cantos `[x, z]` sobre o chão, sem cortar quinas.
 - Para escrever o seu, olhe `engine/src/game/brains.ts`. **A memória do cérebro fica em `self.data`** (dados simples), nunca em variáveis de fora: o save e o `hash` dependem disso.
 - **Sorte só com `game.rng()`.**
 
