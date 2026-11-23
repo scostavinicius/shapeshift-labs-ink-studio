@@ -51,7 +51,15 @@ function cached(name, make) {
     const tmp = file + '.' + process.pid + '.' + Date.now() + '.tmp';
     try {
       fs.writeFileSync(tmp, make());
-      fs.renameSync(tmp, file);
+      try {
+        fs.renameSync(tmp, file);
+      } catch (err) {
+        // On Windows a file another process has open cannot be replaced (EPERM, EBUSY, EACCES). That happens when test
+        // files run in parallel all find the cache stale at once: one of them got there first, and what it wrote is the
+        // same bytes (the cache is made from the same sources). Use it; anything else is a real failure.
+        const now = fs.statSync(file, { throwIfNoEntry: false });
+        if (!['EPERM', 'EBUSY', 'EACCES'].includes(err.code) || !now || now.mtimeMs < newestSource()) throw err;
+      }
     } finally {
       if (fs.existsSync(tmp)) fs.unlinkSync(tmp);
     }

@@ -42,7 +42,7 @@ O aviso de `allow-scripts` do esbuild no `npm install` pode ser ignorado: tudo f
 - `node cli.js shot farol-fight --t 4 --input ... --save s.json` grava um save; `--load s.json` começa dele (o mesmo formato do save da página).
 - `npm test`: typecheck e testes.
 - `npm run live`: abre a página ao vivo no navegador headless, mede fps, tempo por quadro e linhas enviadas, e confere se a ordem do Worker é idêntica à calculada na página. Depois testa o núcleo do jogo com o mouse de verdade (arrastar o `farol`, clicar no `idol`; só essa parte: `npm run live -- --only core`). Falha se algo der errado.
-- `npm run parity -- --min 99`: compara o renderizador da engine com o do terminal em 60 casos (os dois estilos) e falha se algum cair abaixo de 99%. As imagens ficam em `engine/test/parity/out/` (não vão para o git).
+- `npm run parity -- --min 75`: compara o renderizador da engine com o do terminal, nos dois estilos, e falha se algum caso cair abaixo de 75%. Desde a Etapa 14 a engine desenha com o renderizador WebGL do próprio kit, que não promete pixel exato contra o `cli/render.js`: o normal é 97–100% nos jogos e 86–100% nas cenas de demonstração (ver Etapa 14). O que tem de ser exato é o `hash` dos jogos: o harness falha se o do navegador diferir do Node. As imagens ficam em `engine/test/parity/out/` (não vão para o git).
 - `npm test` na **raiz** do repositório roda os 171 testes do ink-studio; a engine não altera `src/`, `cli/`, nem `demos/`.
 
 **O que não está no repositório** (é gerado de novo): `node_modules/`, `studio/out/`, `engine/test/parity/out/`, `engine/test/live/out/`, `engine/out/`.
