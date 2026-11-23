@@ -86,6 +86,8 @@ const groups = {
     entry('dither-dissolve', 'Dither dissolve', 0.72, single('dither'), { cellSize: 1 }),
     entry('color-by-color-dissolve', 'Color-by-color dissolve', 0.81, single('colors'), { steps: 5 }),
     entry('strip-pull-apart', 'Strip pull-apart', 0.51, single('strips'), { bands: 10 }),
+    entry('column-melt', 'Column melt', 1.3,
+      [pass('columnMelt', 1, 'from', 'to', { mask: 'melt' })], { cellSize: 3 }),
     entry('rush-to-black', 'Rush to black', 0.56,
       [out('rush', 0.69, { easing: 'in' }), hold('cover', 0.17), hold('to', 0.14)], { bands: 45, strength: 0.82 }),
     entry('freeze-flash-swap', 'Freeze, flash, swap', 0.52,

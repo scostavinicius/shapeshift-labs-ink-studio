@@ -1,6 +1,6 @@
 /* Headless typed graphs with exposed inputs, reusable groups and inspectable cached outputs. */
 (function (K) {
-  const P = K.procedural;
+  const P = K.procedural, U = K.quantities;
   const record = value => value && typeof value === 'object' && !Array.isArray(value);
   const id = value => typeof value === 'string' && /^[a-zA-Z][\w.-]{0,99}$/.test(value) &&
     !['constructor', 'prototype', '__proto__'].includes(value);
@@ -14,7 +14,10 @@
         throw new RangeError('Unknown graph socket ' + name);
       if (Object.hasOwn(config, 'default') && !valid(config.default))
         throw new TypeError('Wrong default type for graph socket ' + name);
-      return [name, { ...config }];
+      const quantity = U.normalize(config.quantity,'Graph socket '+name);
+      if (quantity && (config.type === 'any' || !['number','vec2','vec3'].some(type => compatible(config.type,type))))
+        throw new TypeError('Physical graph socket ' + name + ' needs a scalar or vector type');
+      return [name, { ...config, ...(quantity && {quantity}) }];
     }));
   }
 
@@ -28,7 +31,8 @@
     if (!record(stored.nodes) || !record(stored.outputs) || Object.keys(stored.nodes).length > 2000)
       throw new RangeError('A graph needs named nodes and outputs within its node budget');
     const specs = stored.nodes, configs = new Map(), stack = new Set(), order = [];
-    const pending = new Map(), marks = new Map();
+    const marks = new Map();
+    let awaiting = false;
     let placement, schedule;
 
     function binding(value) {
@@ -40,13 +44,15 @@
       if (Object.hasOwn(value, 'value')) return literal(value.value);
       if (Object.hasOwn(value, 'input')) {
         if (!Object.hasOwn(specInputs, value.input)) throw new RangeError('Unknown graph input ' + value.input);
-        return { kind: 'input', id: value.input, type: specInputs[value.input].type };
+        const {type, quantity} = specInputs[value.input];
+        return { kind: 'input', id: value.input, type, quantity };
       }
       if (Object.hasOwn(value, 'node')) {
         visit(value.node);
         const config = configs.get(value.node), port = value.port || 'value';
         if (!Object.hasOwn(config.outputs, port)) throw new RangeError('Unknown graph output ' + value.node + '.' + port);
-        return { kind: 'node', id: value.node, port, type: config.outputs[port].type };
+        const {type, quantity} = config.outputs[port];
+        return { kind: 'node', id: value.node, port, type, quantity };
       }
       if (Object.hasOwn(value, 'keys')) {
         const mode = value.mode || 'number';
@@ -66,7 +72,8 @@
       const spec = specs[name];
       if (!record(spec) || !id(spec.op)) throw new TypeError('Invalid graph node ' + name);
       const template = Object.hasOwn(operations, spec.op) ? operations[spec.op] :
-        Object.hasOwn(groups, spec.op) ? groups[spec.op] : Object.hasOwn(P.graph.operations || {}, spec.op) ? P.graph.operations[spec.op] : null;
+        Object.hasOwn(groups, spec.op) ? groups[spec.op] : K.world?.kernels?.operation(spec.op) ??
+          (Object.hasOwn(P.graph.operations || {}, spec.op) ? P.graph.operations[spec.op] : null);
       const operation = template?.specialize ? template.specialize(spec,groups) : template;
       if (typeof operation?.run !== 'function' && typeof operation?.instantiate !== 'function')
         throw new TypeError('Unknown graph operation ' + spec.op);
@@ -78,12 +85,14 @@
         if (!Object.hasOwn(given, key) && !Object.hasOwn(socket, 'default'))
           throw new RangeError('Missing graph socket ' + name + '.' + key);
         const link = binding(Object.hasOwn(given, key) ? given[key] : { value: socket.default });
+        const source = link.kind === 'node' ? link.id + '.' + link.port : link.kind === 'input' ? 'input ' + link.id : 'keyframes';
         if (link.kind !== 'value' && (link.kind !== 'track' || planOnly) && !compatible(link.type,socket.type)) {
-          const source = link.kind === 'node' ? link.id + '.' + link.port : link.kind === 'input' ? 'input ' + link.id : 'keyframes';
           const convert = conversion(link.type, socket.type);
           throw new TypeError('Incompatible graph socket ' + name + '.' + key + ': ' + source + ' provides ' +
             description(link.type) + ', expected ' + description(socket.type) + (convert ? '. Use ' + convert + '.' : '.'));
         }
+        if (link.kind === 'node' || link.kind === 'input')
+          U.assertLink(link.quantity,socket.quantity,source,name+'.'+key);
         const valid=validator(socket.type);
         if (link.kind === 'value' && !valid(link.value))
           throw new TypeError('Wrong value for graph socket ' + name + '.' + key + ': expected ' + description(socket.type));
@@ -104,7 +113,7 @@
       return [name, binding(link)];
     });
 
-    const resolve = (link, values, time) => {
+    const resolve = (link, values, time, pending) => {
       if (link.kind === 'value') return link.value;
       if (link.kind === 'input') return values[link.id];
       if (link.kind === 'track') return link.track.sample(time).value;
@@ -148,7 +157,7 @@
       return schedule;
     }
 
-    function evaluate(input = {}, { take, sequence, time = take?.start ?? 0, seed = 0, workers } = {}) {
+    function begin(input, { take, sequence, time = take?.start ?? 0, seed = 0, workers }) {
       if (take !== undefined) {
         P.takeTime.requireFrame(take);
         if (time !== take.start) throw new RangeError('Graph seconds must match the take frame start');
@@ -156,11 +165,11 @@
       if (planOnly) throw new Error('A graph plan cannot be evaluated');
       if (!Number.isFinite(time) || !Number.isSafeInteger(seed)) throw new TypeError('Invalid graph run options');
       const values = parameters(input);
-      pending.clear();
+      const pending = new Map();
       function prepare(name) {
         const config = configs.get(name), { bindings, clock } = config;
         const entries = bindings.map(([key, socket, link, valid]) => {
-          const value = resolve(link, values, time);
+          const value = resolve(link, values, time, pending);
           if (!valid(value))
             throw new TypeError('Wrong linked value for graph socket ' + name + '.' + key + ': expected ' + description(socket.type));
           return [key, value];
@@ -176,11 +185,20 @@
           ...(sequence !== undefined && { sequence }), seed: P.data.hash(name, seed), node: name };
         return { config, inputs: reused ? undefined : Object.fromEntries(entries), context, comparable, reused, previous };
       }
-      function complete(row, answer) {
-        const { config: { name, run, outputs, nested }, inputs, context, comparable, reused, previous } = row;
+      function invoke(row, asynchronous = false) {
+        const { config: { run, nested }, inputs, context } = row;
+        if (asynchronous && run.async) return run.async(inputs, context);
+        return nested && workers ? run(inputs, context, workers) : run(inputs, context);
+      }
+      function complete(row, ...answers) {
+        const { config: { name, run, outputs }, comparable, reused, previous } = row;
         if (reused) pending.set(name, previous);
         else {
-          const produced = answer ?? (nested && workers ? run(inputs, context, workers) : run(inputs, context));
+          const produced = answers.length ? answers[0] : invoke(row);
+          if (produced?.then) {
+            void Promise.resolve(produced).catch(() => {});
+            throw new TypeError('Graph node ' + name + ' needs asynchronous evaluation');
+          }
           if (!record(produced)) throw new TypeError('Graph node must return named outputs: ' + name);
           for (const [key, socket] of Object.entries(outputs))
             if (!Object.hasOwn(produced, key) || !validator(socket.type)(produced[key]))
@@ -188,6 +206,27 @@
           pending.set(name, { seed, time, take, sequence, values: comparable, outputs: produced, subgraph: run.inspect?.() });
         }
       }
+      function finish() {
+        const status = Object.fromEntries(order.map(name => [name, pending.get(name) === marks.get(name) ? 'cached' : 'evaluated']));
+        const outputs = Object.fromEntries(results.map(([key, link]) => [key, resolve(link, values, time, pending)]));
+        const snapshot = new Map(pending);
+        for (const [name, item] of snapshot) marks.set(name, item);
+        return { outputs, status, preview(node, port = 'value') {
+          const [name, ...nested] = node.split('/');
+          const result = snapshot.get(name);
+          if (nested.length && result?.subgraph) return result.subgraph.preview(nested.join('/'), port);
+          if (!result || !Object.hasOwn(result.outputs, port))
+            throw new RangeError('Unknown graph preview output ' + node + '.' + port);
+          return result.outputs[port];
+        }, inspectGroup(name) { return snapshot.get(name)?.subgraph || null; } };
+      }
+
+      return { prepare, invoke, complete, finish, forget: name => pending.delete(name) };
+    }
+
+    function evaluate(input = {}, options = {}) {
+      if (awaiting) throw new Error('An asynchronous graph evaluation is already running');
+      const { workers } = options, { prepare, complete, finish, forget } = begin(input, options);
       if (!workers || !workers.enabled) for (const name of order) complete(prepare(name));
       else for (const item of layout(workers)) {
         if (typeof item === 'string') complete(prepare(item));
@@ -199,31 +238,43 @@
         } catch {
           // Pure nodes can be replayed in serial order to surface the original graph error.
           workers.cancel();
-          for (const name of item.nodes) pending.delete(name);
+          for (const name of item.nodes) forget(name);
           for (const name of item.nodes) complete(prepare(name));
         }
       }
-      const status = Object.fromEntries(order.map(name => [name, pending.get(name) === marks.get(name) ? 'cached' : 'evaluated']));
-      const outputs = Object.fromEntries(results.map(([key, link]) => [key, resolve(link, values, time)]));
-      const snapshot = new Map(pending);
-      for (const [name, item] of snapshot) marks.set(name, item);
-      return { outputs, status, preview(node, port = 'value') {
-        const [name, ...nested] = node.split('/');
-        const result = snapshot.get(name);
-        if (nested.length && result?.subgraph) return result.subgraph.preview(nested.join('/'), port);
-        if (!result || !Object.hasOwn(result.outputs, port))
-          throw new RangeError('Unknown graph preview output ' + node + '.' + port);
-        return result.outputs[port];
-      }, inspectGroup(name) { return snapshot.get(name)?.subgraph || null; } };
+      return finish();
+    }
+
+    async function evaluateAsync(input = {}, { profile = false, ...options } = {}) {
+      if (awaiting) throw new Error('An asynchronous graph evaluation is already running');
+      if (options.workers?.enabled) throw new TypeError('Asynchronous graph evaluation uses a serial schedule');
+      awaiting = true;
+      try {
+        const { prepare, invoke, complete, finish } = begin(input, options);
+        const timings = {};
+        for (const name of order) {
+          const start = profile ? performance.now() : 0;
+          const row = prepare(name);
+          if (row.reused) complete(row);
+          else {
+            const answer = invoke(row, true);
+            complete(row, answer?.then ? await answer : answer);
+          }
+          if (profile) timings[name] = performance.now() - start;
+        }
+        return { ...finish(), ...(profile && { timings }) };
+      } finally {
+        awaiting = false;
+      }
     }
 
     function plan({ bindings: detailed = false } = {}) {
       function describe(link) {
-        const { kind, id, port, type } = link;
+        const { kind, id, port, type, quantity } = link;
         if (kind === 'track') return { kind, type, mode:link.mode, keyCount:link.track.keys.length,
           ...(detailed && { keys:link.track.keys }) };
         if (kind === 'value') return { kind, type, ...(detailed && { value:link.value }) };
-        return { kind, type, id, ...(port !== undefined && {port}) };
+        return { kind, type, id, ...(port !== undefined && {port}), ...(quantity && {quantity}) };
       }
       return P.data.clone({
         inputs: specInputs,
@@ -231,7 +282,7 @@
           const {op,group,type,outputs,bindings,clock,seed,asset} = configs.get(name);
           return {id:name,op,...(group!==undefined && {group}),...(type!==undefined && {type}),time:clock,outputs,
             ...(detailed && seed !== undefined && {seed}), ...(detailed && asset !== undefined && {asset}),
-            inputs:Object.fromEntries(bindings.map(([key,socket,link]) => [key,{type:socket.type,source:describe(link)}]))};
+            inputs:Object.fromEntries(bindings.map(([key,socket,link]) => [key,{type:socket.type,...(socket.quantity && {quantity:socket.quantity}),source:describe(link)}]))};
         }),
         outputs: Object.fromEntries(results.map(([name,link]) => [name,describe(link)]))
       });
@@ -244,7 +295,8 @@
         outputs: config.outputs, time: config.clock });
     }
 
-    return Object.freeze({ spec: stored, evaluate, parameters, plan, sockets, clear() {
+    return Object.freeze({ spec: stored, evaluate, evaluateAsync, parameters, plan, sockets, clear() {
+      if (awaiting) throw new Error('Cannot clear a graph during asynchronous evaluation');
       marks.clear();
       for (const config of configs.values()) config.run?.clear?.();
     } });
@@ -252,12 +304,18 @@
 
   function group(spec, { operations, groups, outputs } = {}) {
     const inputTypes = schema(spec.inputs || {});
-    const outputTypes = schema(outputs || Object.fromEntries(Object.keys(spec.outputs || {}).map(name => [name, 'any'])));
+    const inferred = outputs === undefined && create(spec,{operations,groups,planOnly:true}).plan().outputs;
+    const outputTypes = schema(outputs ?? Object.fromEntries(Object.entries(inferred).map(([name,{type,quantity}]) =>
+      [name,quantity ? {type,quantity} : 'any'])));
     return { inputs: inputTypes, outputs: outputTypes, expandedNodes:Object.keys(spec.nodes ?? {}).length, time: true, instantiate() {
       const graph = create(spec, { operations, groups });
       let latest;
       const run = (inputs, context, workers) => {
         latest = graph.evaluate(inputs, workers ? { ...context, workers } : context);
+        return latest.outputs;
+      };
+      run.async = async (inputs, context) => {
+        latest = await graph.evaluateAsync(inputs, context);
         return latest.outputs;
       };
       run.inspect = () => latest;

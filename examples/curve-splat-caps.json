@@ -1,0 +1,259 @@
+{
+  "format": "ink-studio/curve-splat-scene",
+  "version": 1,
+  "id": "curve-caps-and-joins",
+  "background": "#152638",
+  "camera": {
+    "target": [
+      0,
+      0,
+      0
+    ],
+    "dist": 12.5,
+    "yaw": 0.1,
+    "pitch": 0.09
+  },
+  "strands": [
+    {
+      "edge": "gaussian",
+      "width": 0.42,
+      "opacity": 0.93,
+      "color": "#ecc693",
+      "object": "round-ended",
+      "caps": "rounded",
+      "source": {
+        "kind": "spline",
+        "points": [
+          [
+            -8.13,
+            1.04,
+            -0.2
+          ],
+          [
+            -6.82,
+            1.51,
+            0.32
+          ],
+          [
+            -5.46,
+            1.06,
+            -0.23
+          ],
+          [
+            -4.31,
+            0.87,
+            0.28
+          ],
+          [
+            -3.23,
+            1.46,
+            0.07
+          ]
+        ]
+      }
+    },
+    {
+      "edge": "gaussian",
+      "width": 0.42,
+      "opacity": 0.93,
+      "color": "#ecc693",
+      "object": "blunt-ended",
+      "caps": "blunt",
+      "source": {
+        "kind": "spline",
+        "points": [
+          [
+            -2.45,
+            1.04,
+            -0.2
+          ],
+          [
+            -1.14,
+            1.51,
+            0.32
+          ],
+          [
+            0.22,
+            1.06,
+            -0.23
+          ],
+          [
+            1.37,
+            0.87,
+            0.28
+          ],
+          [
+            2.45,
+            1.46,
+            0.07
+          ]
+        ]
+      }
+    },
+    {
+      "edge": "gaussian",
+      "width": 0.42,
+      "opacity": 0.93,
+      "color": "#ecc693",
+      "object": "pointed",
+      "caps": {
+        "start": {
+          "type": "tapered",
+          "length": 0.29
+        },
+        "end": {
+          "type": "tapered",
+          "length": 0.29
+        }
+      },
+      "source": {
+        "kind": "spline",
+        "points": [
+          [
+            3.23,
+            1.04,
+            -0.2
+          ],
+          [
+            4.54,
+            1.51,
+            0.32
+          ],
+          [
+            5.9,
+            1.06,
+            -0.23
+          ],
+          [
+            7.05,
+            0.87,
+            0.28
+          ],
+          [
+            8.13,
+            1.46,
+            0.07
+          ]
+        ]
+      }
+    },
+    {
+      "edge": "gaussian",
+      "width": 0.42,
+      "opacity": 0.93,
+      "color": "#ecc693",
+      "object": "soft-fade",
+      "caps": {
+        "start": {
+          "type": "fading",
+          "length": 0.31
+        },
+        "end": {
+          "type": "fading",
+          "length": 0.31
+        }
+      },
+      "source": {
+        "kind": "spline",
+        "points": [
+          [
+            -8.13,
+            -1.4,
+            -0.2
+          ],
+          [
+            -6.82,
+            -0.93,
+            0.32
+          ],
+          [
+            -5.46,
+            -1.38,
+            -0.23
+          ],
+          [
+            -4.31,
+            -1.57,
+            0.28
+          ],
+          [
+            -3.23,
+            -0.98,
+            0.07
+          ]
+        ]
+      }
+    },
+    {
+      "edge": "gaussian",
+      "width": 0.42,
+      "opacity": 0.57,
+      "color": "#e7b389",
+      "object": "pooled-corner",
+      "joins": [
+        {
+          "type": "pool",
+          "at": 0.503,
+          "length": 0.32,
+          "strength": 2,
+          "spread": 0.9,
+          "color": "#ff9b99"
+        }
+      ],
+      "source": {
+        "kind": "path",
+        "points": [
+          [
+            -2.4,
+            -1.72,
+            -0.18
+          ],
+          [
+            0.02,
+            -0.65,
+            0.22
+          ],
+          [
+            2.4,
+            -1.72,
+            -0.14
+          ]
+        ]
+      }
+    },
+    {
+      "edge": "gaussian",
+      "width": 0.42,
+      "opacity": 0.84,
+      "color": "#e7b389",
+      "object": "dry-break",
+      "joins": [
+        {
+          "type": "break",
+          "at": 0.503,
+          "length": 0.076
+        }
+      ],
+      "source": {
+        "kind": "path",
+        "points": [
+          [
+            3.28,
+            -1.72,
+            -0.18
+          ],
+          [
+            5.7,
+            -0.65,
+            0.22
+          ],
+          [
+            8.08,
+            -1.72,
+            -0.14
+          ]
+        ]
+      }
+    }
+  ]
+}

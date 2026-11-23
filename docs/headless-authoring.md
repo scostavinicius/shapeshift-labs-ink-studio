@@ -496,6 +496,8 @@ Declare these types on project inputs, group ports, or library operations.
 
 ### Convert coordinates, time and colour explicitly
 
+Use [physical port quantities](physical-ports.md) to check dimensional units, coordinate frames, directions, and sample rates on numeric connections.
+
 `graph validate` and `graph plan` identify incompatible typed links by
 source and destination port and suggest a conversion when one is available.
 The named types describe ordinary arrays, numbers and raster records.
@@ -670,6 +672,7 @@ Use another `data.record` to name those layers and `data.collect` with a
 | `raster.crop` | Set `x`, `y`, `width`, and `height` of an in-bounds rectangle. |
 | `raster.resize` | Set `width` and `height`. Choose `nearest` (default) or `bilinear` for `filter`. Bilinear filters colors with premultiplied alpha by default. Set `premultiply: false` for independent numerical channels. |
 | `raster.nineSlice` | Set `width`, `height`, and `insets: [left, top, right, bottom]`. Choose `stretch` or `repeat` for `fill`. Corners retain their original dimensions. |
+| `raster.spriteLayer` | Composite individually placed sprites into one transparent layer with optional per-row admission, priority, and rotation. Read dropped rows from the `report` port. [Sprite scanline budgets](sprite-scanline-budgets.md) |
 | `raster.spriteStack` | Pass one raster or a bottom-to-top array as `source`. Set the repeat `count`, per-slice pixel `shift`, rotation `angle` in radians, first or last slice `anchor`, base `tint`, or `endOpacity`. Set `size` and optional `position` for a fixed canvas. Omit them to fit the full stack. |
 | `raster.pack` | Set `sprites` and options such as `maxWidth`, `maxHeight`, transparent `padding`, edge `extrude`, and alpha `trim`. Outputs the color raster, native `atlas` and `metadata`. |
 
@@ -761,6 +764,8 @@ separately and pass the resulting raster as a layer's alpha mask in
 last observation time and confidence, and its `tracked`, `held`, or
 `hidden` status. Sampling uses the graph clock or `options.time`.
 For direct use, call `drawing2d.trackedAnchors(observations, bindings).sample(time)`.
+Use the sampled position in a [tracked source window](render-graph.md#tracked-source-windows)
+to reveal a different image branch at the tracked feature.
 
 [Browser demo](../examples/tracked-drawing-anchors.cjs)
 
@@ -906,22 +911,27 @@ outside the original image.
 | `fx.pathBlur` | Link a 2D `path`. It samples the path at equal arc-length intervals. Set `samples`, `anchor: "start" \| "center" \| "end"`, `falloff: "uniform" \| "start" \| "end"`, and `filter: "linear" \| "nearest"`. Path coordinates are pixel displacements relative to the anchor. |
 | `fx.outline` | Set `outer`, `inner`, and `feather` in pixels, plus `color` and `innerColor`. The `outer` and `inner` outputs are separate byte masks. |
 | `fx.bevel` | Set `width`, 2D light `direction`, `strength` from 0 to 1, and `highlight` and `shadow` colours. The `height` output is a one-channel relief map in 0–1. |
+| `fx.emissionBands` | Send [palette bands through a distance field](emission-bands.md) with a sharp crest, a transparent gap, and independent emission and halo outputs. |
 | `fx.glow` | Blur a selected `channel` above `threshold` using `radius`, `sigma`, `strength` and `color`. Set `placement: "behind"` for a sprite halo or `"over"` with `mode: "screen" \| "add" \| "normal"` for an opaque image. Exports the separate `glow` raster and byte `mask`. |
 | `fx.erode` | Recede from exposed edges by a Euclidean `radius` in pixels. Returns the edited raster and its surviving byte `mask`. |
 | `fx.repair` | Use `method: "close"` and a Euclidean `radius` for holes and narrow gaps, or `"bridge"` and `maxGap` for breaks along rows, columns or diagonals. New pixels take the nearest selected source colour or an explicit `color`. Inspect them in the separate `added` mask. |
 | `fx.pixelSort` | Sort contiguous eligible pixels along a horizontal, vertical, diagonal, or antidiagonal `axis`. Choose a `key`, optional inclusive `range`, `order`, and `minLength`. An aligned raster `mask` can limit sorting further. |
 | `fx.tvStatic` | Blend [seekable TV static](#broadcast-patterns-and-tv-static) into the source RGB. Keeps the source's dimensions, pivot, and alpha. |
+| `fx.compositeVideo` | Decode horizontal luma and chroma with phase-driven interference. Keeps the source's dimensions, pivot, and alpha. |
 | `fx.tileScramble` | Copy, omit, or swap whole tiles on a fixed grid. Set `tileSize`, `mode`, `amount`, `seed`, `rate`, and an optional `mask`. The `addresses` output shows where each destination tile reads from. |
 | `fx.tileBleed` | Replace selected whole tiles with tiles from a separate `bank` raster. Set `tileSize`, `amount`, `seed`, `rate`, and optional `mask` and `bankMask`. The `addresses` output identifies donor tiles. |
 | `fx.tileStrideSlip` | Read successive tile rows using an authored `stride`, `offset`, and `wrapAt`. The `addresses` output shows where each whole tile reads from. |
 | `fx.scanlineRemap` | Repeat, skip, or blank whole rows with `options.edits`. The `addresses` output shows the source row for each destination row. |
 | `fx.rasterSchedule` | [Write indexed palette slots, source offsets, and pixel sizes](#schedule-raster-register-writes) on authored output rows. |
+| `fx.tileAttributes` | [Paint per-tile ink and paper](#paint-tile-color-attributes) on a one-bit image and resolve competing sprite and effect writes. |
 | `fx.signalRecovery` | [Hold the last usable raster after a fault and relock](#recover-from-signal-loss). Outputs the raster, receiver status, and stage transition events. |
 | `fx.blockSubstitute` | Replace rectangles with samples from the original `source` or the named rasters in `banks`. The `mask` output marks copied pixels. |
 | `fx.bitplane` | Flip a bit, clear a bit, or borrow a bit from an aligned `bank` of palette indices. Connect a one-channel `source` and its ordered `palette`. Outputs RGBA `value` and edited `indices`. |
 | `fx.paletteCycle` | [Rotate named palette ranges](#cycle-an-indexed-palette) independently. Outputs the display image, unchanged indices, and rotated palette. |
 | `fx.paletteFault` | Swap pairs of palette slots, or force selected slots to a fixed one. Use `options.mask` to localize edits. Outputs RGBA `value` and edited `indices`. |
 | `fx.trackRegions` | Track connected regions across a sequence of `frames`. Outputs persistent region records, ID `labels`, lineage `events`, source `frame`, and source `time`. |
+| `fx.moveRegions` | [Move painted regions by ID](raster-region-move.md) with independent transforms and depth. Outputs the image, visible IDs, and gaps exposed by the move. |
+| `fx.relight` | [Light a masked raster receiver](raster-relight.md) from a separate colored emission pass. Outputs a compositable display layer, linear RGB irradiance, and scalar intensity. |
 
 Both blurs filter premultiplied colour and alpha with `edge` set to
 `clamp`, `transparent`, or `wrap`. Kernel blur defaults to clamped edges.
@@ -1136,6 +1146,14 @@ Use the same cycle definitions on an [indexed surface](projected-effects.md#inde
 or the [Copper render pass](render-graph.md#copper-style-raster-schedules).
 Run `node examples/palette-cycling.cjs chromatic-current.html` to see two
 cycles advance at different speeds over one fixed index grid.
+
+### Paint tile color attributes
+
+Use [tile color attributes](tile-attributes.md) to assign ink and paper
+swatches to each cell of a one-bit raster. The `fx.tileAttributes` node
+accepts an editable palette map and prioritized writes from sprite
+silhouettes or effect coverage. Use the output as a raster or feed it
+into a named render-graph layer.
 
 ### Schedule raster register writes
 
@@ -1412,6 +1430,7 @@ either axis with `edgeU` or `edgeV`.
 
 | Node | Authoring |
 | --- | --- |
+| `warp.curveMap` | Build [curve-local UVs and coordinate planes](curve-raster-map.md) from a path in art pixels. Set a full `strokeWidth` or a width per vertex and choose `nearest`, `first` or `last` at crossings. |
 | `warp.mesh` | Set `control.from` and `control.to` to corresponding normalized 2D landmarks. Supply `triangles` as triples of indices or a flat index buffer. Each destination triangle pulls pixels from its source triangle. Later triangles win overlaps. Uncovered pixels are transparent. |
 | `warp.scanlines` | Deform a registered raster in asset space with [source-row offsets and scales](#deform-registered-scanlines). Returns the result, UV field, relocated anchors, and remapped image planes. |
 | `warp.grid` | Set `control.columns`, `rows`, and row-major `points` for the destination lattice. The source is a regular grid. |
@@ -1774,6 +1793,12 @@ defaults to 128 × 96. The effect takes its dimensions from the source.
 | `band` | Override `height` as a fraction of the image, `speed` in screen heights per second, and `strength` from 0 to 1. Negative speed reverses direction. |
 | `opacity`, `density` | Set the alpha of active noise cells and the fraction of cells that are active, both from 0 to 1. |
 
+Use `pixelEffects.compositeVideo(source, options)` or `fx.compositeVideo`
+to apply composite decoding to a standalone raster. The same bandwidth and
+phase controls are available per [camera atlas view](camera-atlas.md#decode-a-composite-video-feed).
+The graph node follows the graph clock. Set `time` in its options to
+sample a specific time.
+
 Run the [broadcast patterns demo](../examples/broadcast-patterns.cjs) to
 compare the test patterns, play or scrub the static presets, and see
 tracking interference applied to a pixel-art feed.
@@ -1798,12 +1823,13 @@ port to hide a layer during that hold.
 | Operation | Inputs and outputs |
 | --- | --- |
 | `anim.keyframes` | Sample named `channels` from `keys`. A key has `time`, a named `value` for each channel, and optional `ease`. Uses Ink’s scalar, vector, angle, positive, quaternion and orientation interpolation. Returns the channel record and track duration. |
+| `anim.cueTrack` | Sample a scalar track whose keys use absolute `at` seconds or a name in the `cues` time table and an optional signed `offset`. Resolved keys must increase in lane order within `duration`. See [editable effect clips](effect-clips.md). |
 | `anim.clock` | Map the project clock to `options.range`, with `delay`, `rate`, `reverse`, and a `mode` of `hold`, `loop` or `pingpong`. Add `phase` and `cues` for authored layer clocks. Returns mapped time, progress, playback direction and activity. |
 | `anim.stagger` | Sample several clocks with `count`, `options.interval` and `offset`. `reverseOrder` switches which item starts first. Returns mapped times and per-item clock records. |
 | `anim.frame` | Select from raster `frames` with `fps` and a half-open interval from `first` to `end` in frame indices. Accepts the same delay, rate, reverse and looping controls. |
 | `anim.visualSample` | Replay a [captured visual span](graph-clips.md#capture-a-reusable-visual-span) with independent timing, alpha, raw data, depth and motion. |
 | `anim.frameBank` | Retain and selectively refresh raster pixels. Outputs the banked image, refresh mask, capture tick, and optional history for [per-pixel time](#per-pixel-time). |
-| `anim.datamosh` | Pull the previous image through signed motion and blend it with the current image. Outputs the image and retained weight. |
+| `anim.datamosh` | Pull the previous image through signed motion and blend it with the current image. Supports per-block holds and staggered recovery in a feed. Outputs the image and retained weight. |
 | `anim.subjectFeedback` | Retain marks in a [subject’s UV or rest-space chart](motion-afterimages.md#subject-attached-feedback). Outputs the retained texture and deposit mask. |
 | `anim.spriteDesync` | Composite a layered raster `source` with independent frame holds or offsets on named parts and pixel rectangles. Returns RGBA `value` and the sampled `frames`. |
 | `anim.captureTransforms` | Snapshot the pose channels of a `source` array of instance records with stable IDs. |
@@ -1838,14 +1864,20 @@ across blocks and `filter: "linear"` for interpolated donors.
 Advance in observation order, with warm-up for exported clips that
 start midway through a shot. A repeated timestamp reuses the stored
 result. A backward seek, size change, cut, or explicit `reset`
-starts clean. A `null` motion sample also copies the current image.
+starts clean. A `null` motion sample copies the current image except where block holds are active.
 
 ```js
 const datamosh = KIT.procedural.datamosh.create({ halfLife: 0.8 });
 const { value, carry } = datamosh.sample(image, motion, time, { valid, refresh });
 ```
 
-Use the same settings with a [screen pass](render-graph.md#feed-signed-motion)
+Set `options.blockMemory` to share `refresh` and an optional aligned byte
+`hold` mask across `blockSize`. Define a feed-local rectangle and an optional
+grouped recovery schedule. Pass `hold` alongside `valid` and `refresh` when
+calling `sample`, or connect the graph's `hold` input. Output `carry` is 1
+for a full hold and 0 for a fresh pixel.
+
+Use the same settings with the [block memory screen pass](render-graph.md#corrupt-one-feed-with-block-memory)
 for CPU or WebGL scene rendering.
 
 ### Selectively refresh a frame bank
@@ -2054,17 +2086,17 @@ Cloth and strands also accept Z and a two-axis `projection` offset per Z unit.
 | `grain` | A falling-cell material solver with seeded emitters, diagonal settling, optional initial rectangular fills and a grain palette. |
 | `rigid` | Ink’s native rigid-body mechanics rasterized from an XY camera. Author boxes, fixed colliders, gravity, floor and tick-indexed `impulses`. A body specifies `id`, pixel `at`, pixel `size` and optional `velocity`, `spin`, `mass` and `fixed`. |
 | `flip` | Planar free-surface liquid with raster `fill` regions, gravity, particle density, pressure iterations and optional baffles. `flip: 0` gathers PIC velocities, `flip: 1` applies FLIP velocity increments, and intermediate values blend the two. |
+| `mpm` | Planar material points with an affine particle-grid transfer, compressible fluid and fixed-corotated elastic materials. Use [`sim.mpm`](material-point-impacts.md) for per-material passes, compression and contact, with timed impulses and moving masks. |
 | `feedback` | The equivalent recipe for `anim.feedback`, with the input frame array in `settings.frames`. |
 
-Particles, smoke, grain and liquid accept `walls` as
+Particles, smoke, grain, FLIP and MPM accept `walls` as
 `[x, y, width, height]` rectangles or an aligned raster `mask`. Solid pixels
 are selected by `maskChannel` and `maskThreshold` (alpha at least 128 by
 default). Cloth and strands accept spherical 3D colliders by `at` and `r`.
 Settings are captured in each recipe. Changes to a recipe start a new solve.
 
 Every workflow returns transparent RGBA `value`, a numeric `field`,
-`points`, `report` and a portable `checkpoint`. The field reports smoke or
-liquid density, grain occupancy, or alpha coverage for the other workflows.
+`points`, `report` and a portable `checkpoint`. The field reports smoke, FLIP or MPM density, grain occupancy, or alpha coverage for the other workflows.
 Point records expose positions and available velocities or pin state. The
 report records the sampled tick, checkpoint used, and replayed steps. The
 liquid report also includes divergence before and after pressure projection.
@@ -2087,7 +2119,7 @@ const branch = rasterSimulation.session(undefined, { checkpoint })
 const frame = branch.seek(1.25)
 ```
 
-The Tideworks review renders all eight workflows. A second CLI run restores
+The Tideworks review renders eight workflows. A second CLI run restores
 three checkpoints and verifies that their PNGs match the original graph
 byte for byte.
 
@@ -2095,6 +2127,34 @@ byte for byte.
 node examples/raster-simulations.cjs tideworks-review
 ink-studio graph run tideworks-review/resume-tideworks.json --out tideworks-review/branch
 ```
+
+## Procedural pixel effects
+
+Use [the Effects Atlas](../examples/pixel-effects-atlas/README.md) to find
+examples of these native-grid generators and the material-point solver.
+`ink-studio graph describe <operation> --example` prints runnable inputs.
+
+| Node | Controls and outputs |
+| --- | --- |
+| `proc.sphereMap` | Set pixel center, radius, and yaw, pitch and roll in radians. Exports UV and coverage, view-space normals, front-hemisphere depth, and banded illumination. |
+| `proc.projectSphere` | Map an equirectangular image onto that sphere. Longitude wraps and latitude clamps. Nearest and linear sampling are available. Reuse depth, UV and illumination to layer separate terrain, cloud and atmospheric passes. |
+| `proc.fieldSprite` | Raymarch a bounded signed field at an orthographic pose. Connect [graph-authored material slots](field-sprite-materials.md). Outputs RGBA, depth, normal, hit position, illumination, coverage, and material ID. |
+| `proc.fieldMaterial` / `proc.fieldSpriteShade` | Prepare object-space textures, field masks, and palette ramps. Repaint a shared surface trace to compare finishes on the same geometry. |
+| `proc.discharge` | Trace a seeded, continuously jittering branch path through authored pixel points. Exports paths, filament, colored fringe, halo, and the composite. All parts share the same looping clock. |
+| `proc.cellEdges` | Sample seeded jittered Voronoi tiles. Exports distance to the closest boundary, distance to the owning site, and a stable lattice index. Drive the geometry or color of a seam independently of each tile. |
+| `proc.flowPlume` | Animate a taper and turbulent advection along an authored axis. Use the width profile, pressure-band count, palette, and time to author plume and thrust layers. Exports color, heat, and coverage. |
+| `proc.vortex` | Draw rotating, shaded contours along a tapered vortex with editable radius knots, lean, tilt, twist, and breakup. Exports composited RGBA, near and far layers, and the projected paths. |
+
+For `mpm`, define materials as `{ type: 'fluid' | 'elastic', color, density,
+stiffness, shear }`. A body takes `{ rect, material, spacing, velocity,
+release }` or uses an explicit `points` array in place of the rectangle.
+Pixel spacing determines each point's mass and volume. The solver returns
+the raster density and per-point position, velocity and body index. Set
+`cell`, `substeps` and `maxSpeed` to fit the fixed clock. Increasing speed or
+stiffness can require a smaller step. A `release` time holds the body's
+initial pose before letting its points join the shared grid.
+See [Material-point passes and impacts](material-point-impacts.md) for
+coverage, mass, compression, contact, timed impulses and moving obstacles.
 
 ## 3D scenes, signed fields and sprite rigs
 

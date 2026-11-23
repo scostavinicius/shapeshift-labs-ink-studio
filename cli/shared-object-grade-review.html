@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shared-object grade · Ink Studio</title>
+<style>
+  :root { color-scheme: dark; --bg: #15181b; --card: #20262a; --line: #3c494d; --ink: #edf1ed; --muted: #b6c5c4; --accent: #adffe3; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, sans-serif; }
+  main { max-width: 1380px; margin: auto; padding: 38px clamp(14px, 4vw, 46px) 55px; }
+  header, .toolbar, .heading { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 11px; }
+  header { margin-bottom: 21px; }
+  h1 { margin: 4px 0 0; font-size: clamp(28px, 5vw, 44px); line-height: 1.05; letter-spacing: -.045em; }
+  h2 { margin: 0; font-size: 15px; }
+  p { margin: 0; }
+  .meta { color: var(--muted); font: 12px/1.4 ui-monospace, monospace; }
+  button, .toggle { border: 1px solid var(--line); border-radius: 6px; background: var(--card); color: var(--ink); font: inherit; padding: 7px 10px; cursor: pointer; }
+  button:hover, .toggle:hover { border-color: var(--muted); }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  button[aria-pressed="true"] { border-color: var(--accent); background: #303f3f; }
+  button.primary { color: #152621; background: var(--accent); border-color: var(--accent); font-weight: 650; }
+  input { accent-color: var(--accent); }
+  .controls { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+  .toolbar { margin-bottom: 10px; }
+  .frames { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+  figure { margin: 0; overflow: hidden; border: 1px solid var(--line); background: var(--card); border-radius: 8px; }
+  figcaption { padding: 7px 11px; font-weight: 650; }
+  .picture { position: relative; background: #111417; }
+  img { display: block; width: 100%; image-rendering: pixelated; }
+  .mask { position: absolute; top: 0; left: 0; pointer-events: none; }
+  .details { margin-top: 22px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 285px), 1fr)); gap: 9px; margin-top: 9px; }
+  .anchor { background: var(--card); border: 1px solid var(--line); border-radius: 7px; padding: 11px; }
+  .anchor.active { border-color: var(--accent); }
+  .colors { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin: 9px 0; }
+  .sample { min-width: 0; }
+  .swatch { display: block; height: 24px; border-radius: 3px; border: 1px solid #ffffff3c; margin-bottom: 3px; }
+  .sample small, .foot { color: var(--muted); }
+  .sample .meta { display: block; color: var(--ink); }
+  .foot { margin-top: 11px; }
+  [hidden] { display: none !important; }
+  @media (max-width: 785px) { .frames { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  @media (max-width: 490px) { main { padding-top: 21px; } .frames { grid-template-columns: 1fr; } }
+</style>
+<main>
+  <header>
+    <div><p class="meta">Ink Studio · Shared-object grade</p><h1 id="title"></h1></div>
+    <button id="save" class="primary">Download grade</button>
+  </header>
+  <div class="toolbar">
+    <div class="controls" id="anchors" aria-label="Sample outlines"></div>
+    <label class="toggle"><input id="lightness" type="checkbox"> Lightness only</label>
+  </div>
+  <div class="frames" id="frames"></div>
+  <section class="details" aria-labelledby="samples-title">
+    <div class="heading"><h2 id="samples-title">Matched objects</h2><p id="summary" class="meta"></p></div>
+    <div class="cards" id="cards"></div>
+    <p class="foot">The grade matches color relative to lightness. Switch to Lightness only to compare shadows and highlights across the three frames.</p>
+  </section>
+</main>
+<script>
+'use strict';
+const data = /*GRADE_DATA*/;
+const byId = id => document.getElementById(id);
+const { anchors, name, beforeError, afterError, maxLightnessDrift } = data.report;
+let selected = -1;
+byId('title').textContent = name;
+const fixed = value => value.toFixed(3);
+byId('summary').textContent = 'Chroma error ' + fixed(beforeError) + ' → ' + fixed(afterError) + ' · Max lightness change ' + fixed(maxLightnessDrift);
+
+const frames = [['source', 'Source'], ['matched', 'Matched grade'], ['reference', 'Approved reference']].map(([id, title]) => {
+  const section = document.createElement('figure'), caption = document.createElement('figcaption');
+  caption.textContent = title;
+  const box = document.createElement('div'); box.className = 'picture';
+  const image = document.createElement('img'); image.alt = title;
+  const mask = document.createElement('img'); mask.alt = ''; mask.className = 'mask'; mask.hidden = true;
+  box.append(image, mask); section.append(caption, box); byId('frames').append(section);
+  return { id, image, mask };
+});
+const buttons = ['Hide outlines', ...anchors.map(anchor => anchor.label)].map((label, index) => {
+  const button = document.createElement('button'); button.type = 'button'; button.textContent = label;
+  button.addEventListener('click', () => { selected = index - 1; update(); });
+  byId('anchors').append(button); return button;
+});
+const cards = anchors.map(anchor => {
+  const article = document.createElement('article'); article.className = 'anchor';
+  const title = document.createElement('h2'); title.textContent = anchor.label;
+  const colors = document.createElement('div'); colors.className = 'colors';
+  for (const [label, color] of [['Source', anchor.before], ['Matched', anchor.after], ['Approved', anchor.approved ?? anchor.referenceColor]]) {
+    const sample = document.createElement('div'); sample.className = 'sample';
+    const swatch = document.createElement('span'); swatch.className = 'swatch'; swatch.style.backgroundColor = color;
+    const description = document.createElement('small'); description.textContent = label;
+    const hex = document.createElement('span'); hex.className = 'meta'; hex.textContent = color;
+    sample.append(swatch, description, hex); colors.append(sample);
+  }
+  const contrast = document.createElement('p'); contrast.className = 'meta';
+  contrast.textContent = 'Lightness span ' + fixed(anchor.lighting.before.range) + ' → ' + fixed(anchor.lighting.after.range) +
+    ' · Ref ' + fixed(anchor.lighting.reference.range);
+  contrast.title = '10th to 90th percentile OKLab lightness span';
+  article.append(title, colors, contrast); byId('cards').append(article); return article;
+});
+function update() {
+  const mode = byId('lightness').checked ? 'lightness' : 'image';
+  for (const { id, image, mask } of frames) {
+    image.src = data.pictures[id][mode];
+    mask.hidden = selected < 0;
+    if (selected >= 0) mask.src = data.masks[selected][id === 'matched' ? 'source' : id];
+  }
+  buttons.forEach((button, index) => button.setAttribute('aria-pressed', String(index === selected + 1)));
+  cards.forEach((card, index) => card.classList.toggle('active', index === selected));
+}
+byId('lightness').addEventListener('change', update);
+byId('save').addEventListener('click', () => {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data.stack, null, 2) + '\n'], { type: 'application/json' }));
+  const link = document.createElement('a'); link.href = url; link.download = 'shared-object-grade.json'; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+update();
+</script>
+</html>

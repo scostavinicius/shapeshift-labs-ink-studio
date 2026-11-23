@@ -1,0 +1,55 @@
+{
+  "format": "ink-studio/lumped-network",
+  "version": 1,
+  "id": "reference-oscillator",
+  "units": {
+    "effort": "m/s",
+    "flow": "N"
+  },
+  "numerics": {
+    "method": "adaptive",
+    "step": 0.02,
+    "maxStep": 0.05,
+    "absoluteTolerance": 1e-12,
+    "relativeTolerance": 1e-10
+  },
+  "nodes": {
+    "anchor": {
+      "kind": "reference"
+    },
+    "cart": {
+      "kind": "storage",
+      "capacity": 1.2
+    }
+  },
+  "elements": {
+    "spring": {
+      "kind": "spring",
+      "from": "cart",
+      "to": "anchor",
+      "stiffness": 24,
+      "initialDisplacement": 0.6
+    },
+    "damper": {
+      "kind": "damper",
+      "from": "cart",
+      "to": "anchor",
+      "damping": 1.2
+    }
+  },
+  "outputs": {
+    "displacement": {
+      "element": "spring",
+      "measure": "displacement",
+      "quantity": {
+        "unit": "m"
+      }
+    },
+    "speed": {
+      "node": "cart"
+    },
+    "dissipated": {
+      "ledger": "dissipated"
+    }
+  }
+}

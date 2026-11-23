@@ -230,8 +230,14 @@ const CameraLens = (() => {
     const ortho = options.ortho ?? (options.projection === undefined ? base.ortho : options.projection === 'orthographic');
     const animation = options.lockCamera ? undefined : world.anim;
     const dist0 = options.dist ?? base.dist / zoom;
-    const { yaw, pitch, dist } = constrain({ yaw: options.yaw ?? base.yaw, pitch: options.pitch ?? base.pitch,
-      dist: dist0 / (animation?.zoom || 1) }, orbit);
+    const offset = probe ? undefined : options.cameraOrbitOffset;
+    if (offset !== undefined) {
+      check(Array.isArray(offset) && offset.length === 2 && Array.from(offset).every(finite), 'orbit offset needs two finite angles');
+      check(!base.pose || !offset.some(Boolean), 'orbit offset requires an orbit-authored camera');
+    }
+    const yawOffset = offset?.[0] ?? 0, pitchOffset = offset?.[1] ?? 0;
+    const { yaw, pitch, dist } = constrain({ yaw: (options.yaw ?? base.yaw) + yawOffset,
+      pitch: (options.pitch ?? base.pitch) + pitchOffset, dist: dist0 / (animation?.zoom || 1) }, orbit);
     check([yaw, pitch, dist].every(finite) && dist > 0, 'finite orbit and positive distance required');
     const output = options.target && Object.hasOwn(options.target, 'framebuffer');
     const at = !output && options.target != null ? options.target : base.target;

@@ -198,11 +198,11 @@
         looks.push(...material.map(rule => ({ stage: 'material', maskWeight: 1, ...rule })));
       }
       if (slot) {
-        const { settings, light } = world.surfaces[slot - 1];
+        const { settings, light, facingRamp } = world.surfaces[slot - 1];
         if (!surfaces.has(slot)) {
           const liveLight = world.surfaceLight === undefined ? light : SurfaceLook.prepareLightTrack(world.surfaceLight)(site.time);
           surfaces.set(slot, SurfaceLook.prepare(settings, world.pal, liveLight, world.surfaceEffects, {
-            paletteRoles: world.paletteRoles, blueNoise, paletteConstraints: false
+            paletteRoles: world.paletteRoles, facingRamp, blueNoise, paletteConstraints: false
           }));
         }
         const { target: center, yaw, pitch, dist } = world.cam ?? {};

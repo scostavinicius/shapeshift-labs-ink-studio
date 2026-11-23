@@ -8,6 +8,8 @@
   "files": [
     "index.js",
     "webgl.mjs",
+    "webgpu.mjs",
+    "show-control.mjs",
     "src/",
     "cli/",
     "scripts/",
@@ -18,6 +20,7 @@
     "catalog.json",
     "storage-retention.json",
     "dist/ink-studio.browser.js",
+    "dist/ink-studio.bake.js",
     "dist/ink-studio.node.cjs",
     "dist/ink-studio.player.mjs"
   ],

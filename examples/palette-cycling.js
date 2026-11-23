@@ -4,6 +4,7 @@ module.exports = ({ KIT: K, makeBuilder, makeSculpt }) => ({
   seed: 29,
   build(seed, { cycle = true, controls } = {}) {
     const cycling = controls?.cycle ?? cycle;
+    const foam = controls?.foam === true;
     const palette = [
       0x111f2a, 0x172934, 0x22333d, 0x33454b, 0x495452, 0x66655a, 0x8b7962, 0xb19a78,
       0x142f2b, 0x1d4436, 0x2c5c43, 0x3f7550, 0x598c5b, 0x79a26b, 0xa8b875,
@@ -207,6 +208,7 @@ module.exports = ({ KIT: K, makeBuilder, makeSculpt }) => ({
         const x=(u-.52)*2;
         const reach=.65+.10*Math.sin(x*15)+.09*Math.cos(x*32);
         if ((x/.92)**2+(v/reach)**2>1) return null;
+        if (foam && Math.abs(x) < .23 && v > .36) return null;
         const wavefront = .52-.12*x*x+.038*Math.sin(u*19);
         const curl = v*19+3*Math.sin(u*17+v*2)+2*Math.sin(u*34-v*6);
         if (Math.abs(v-wavefront)<.061 && Math.abs(x)<.79) return swatch('splash',curl+2);
@@ -216,15 +218,37 @@ module.exports = ({ KIT: K, makeBuilder, makeSculpt }) => ({
     }});
     S.ball([0,-.053,1.71],[3.39,.082,1.79],pool,{res:.079});
 
-    for (const [x,y,z,s] of [[1.61,.20,1.01,.25],[-1.60,.22,1.07,.32],[-2.19,.08,2.14,.33],[2.42,.12,2.15,.37]])
+    const catches = foam ? [[-1.01,.115,1.10,.37],[1.12,.112,1.04,.41]] :
+      [[1.61,.20,1.01,.25],[-1.60,.22,1.07,.32]];
+    for (const [x,y,z,s] of [...catches,[-2.19,.08,2.14,.33],[2.42,.12,2.15,.37]])
       rock([x,y,z],[s,s*.66,s*.77],wetRock,.087);
     for (const [x,z,r] of [[-1.84,2.23,.14],[-1.57,2.56,.16],[1.36,2.28,.13],[2.10,2.56,.18]]) {
       S.ball([x,.035,z],[r,.024,r*.86],brush,{res:.045});
       S.ball([x+r*.31,.064,z],[.054,.035,.050],{r:[34,35,36,37]},{res:.039});
     }
     S.bake();
+    let shoreFoam;
+    if (foam) {
+      const level = .028;
+      const rim = [[-.96,0],[-.61,.63],[-.28,.49],[.12,.78],[.89,.32],[.76,-.49],[0,-.69],[-.74,-.47],[-.96,0]];
+      const paths = catches.map(([x,,z,s]) => rim.map(([dx,dz]) => [x+dx*s,level,z+dz*s]));
+      const body = K.procedural.waterBodies.create({
+        id:'fernfall-pool', bounds:{min:[-2.7,.48],max:[2.7,2.55]}, resolution:[64,40],
+        sample(x,z) {
+          if (catches.some(([rx,,rz,s]) => ((x-rx)/(s*.92))**2+((z-rz)/(s*.66))**2<1)) return null;
+          return {bed:-.25,surface:level,current:[x<0?-.10:.10,.25]};
+        }
+      });
+      shoreFoam = K.shoreFoam.create(body,{
+        paths, spacing:.27, corner:.66, inset:.073, period:1.5, push:.19, lift:.063, seed:23,
+        mask:(x,z) => Math.abs(x-.055)>.39 && z>.86 && z<1.92,
+        swatches:{wake:'#376976',wash:'#648f93',edge:'#9acbb7',crest:'#c9e8d1',spark:'#f7f0c9'}
+      });
+    }
     return B.finish({
-      cam:{target:[0,2.05,.10],dist:11.65,yaw:.17,pitch:.36,ortho:true,sway:0},
+      ...(shoreFoam && {shoreFoam}),
+      cam:controls?.foamDetail ? {target:[.04,.72,1.00],dist:6.6,yaw:.15,pitch:.46,ortho:true,sway:0} :
+        {target:[0,2.05,.10],dist:11.65,yaw:.17,pitch:.36,ortho:true,sway:0},
       radius:11,detail:26,dither:0,paletteRoles:roles,look:{splatCoverage:'continuous'},
       atmosphere:[
         K.atmosphere.sphere({at:[.13,.14,.79],radius:.59,color:'#a4c7ba',density:.36}),

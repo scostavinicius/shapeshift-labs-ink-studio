@@ -1,6 +1,15 @@
 # Stable dithering and camera review
 
-Choose how the headless renderer places its dither pattern. Screen space follows the native art grid. World space fixes the pattern to scene coordinates, which works well for terrain during a camera pan. Object space uses rest coordinates so the pattern moves with a rigged prop. Camera-facing atlas cards use their image-plane coordinates. Pixels without a visible surface position use the screen grid.
+Choose how Ink places its dither pattern on the native art grid.
+
+| Space | Where the pattern lands |
+| --- | --- |
+| `screen` | The native art grid. |
+| `world` | A fixed three-axis scene lattice. |
+| `object` | The rig’s rest coordinates, or the image plane of a camera-facing atlas card. |
+| `view` | A fixed two-axis projection of the scene, selected by camera direction. |
+
+Pixels without a visible surface position use the screen grid.
 
 Set `look.stable` on a built world, `finish.look.stable` in a diorama, or `visual.look.stable` in a simulation world. In the library, use `render(world, { stable: settings })` to override individual scene settings, or `stable: false` to turn stability options off.
 
@@ -16,18 +25,43 @@ Set `look.stable` on a built world, `finish.look.stable` in a diorama, or `visua
 }
 ```
 
-`spacing` is the size of a pattern cell in world or rest units. `origin` shifts the pattern grid independently of the camera snap `anchor`. A target can specify an object, a material, or both. The last matching target wins. Omitted target settings inherit from the scene. An empty `targets` array clears scene target rules when overriding them.
+`spacing` is the size of a pattern cell in world, rest, or projected scene units. `origin` shifts the pattern grid independently of the camera snap `anchor`. A target can specify an object, a material, or both. The last matching target wins. Omitted target settings inherit from the scene. An empty `targets` array clears scene target rules when overriding them.
 
-Anchors are used for the scene dither, tone maps, local palette constraints, the palette render stage, and effect ramp dithering where there is a surface hit. The same spaces work with native, coverage, and cluster resolve. The settings place the pattern. Set the dither strength on the scene, palette, or effect to decide how much of it appears.
+The headless renderer uses anchors for the scene dither, tone maps, local palette constraints, the palette render stage, and effect ramp dithering where there is a surface hit. The same spaces work with its native, coverage, and cluster resolves. The settings place the pattern. Set the dither strength on the scene, palette, or effect to decide how much of it appears.
 
-The CLI accepts `--stable on|off|file.json`, `--dither-space screen|world|object`, `--dither-spacing n`, and `--dither-origin x,y,z`. Put per-target rules in the scene or JSON file. Orthographic camera snapping is a separate `--snap` option.
+The CLI accepts `--stable on|off|file.json`, `--dither-space screen|world|object|view`, `--dither-spacing n`, and `--dither-origin x,y,z`. Put per-target rules in the scene or JSON file. Orthographic camera snapping is a separate `--snap` option.
+
+## Hold the pattern through a slow turn
+
+Set `look.stable.dither` to `"view"`, or use `dither.space: "view"` on
+one palette policy. Ink rounds the rendered camera’s yaw and elevation to
+45° increments and projects each visible surface hit onto that plane.
+The grid stays fixed inside a direction sector and drops the depth axis
+along the projection. Camera translation, zoom and roll leave its
+orientation and phase in scene units. Crossing a sector boundary switches
+planes and can visibly change the pattern.
+
+View space suits curved scenery or a fixed relief during a small camera
+turn. Use object space for a pattern that should ride a rotating prop.
+The regular `spacing`, `origin`, `scale`, and `fade` controls apply.
+For fade, Ink measures the pixel footprint on the projected plane.
+
+[The Moon Dial](../examples/view-direction-dithering.js) makes the same turn
+in all four modes. The enamel dial is fixed and the smaller copper shutter
+rotates on its own. The demo writes a clean comparison and a shimmer report
+with matched-surface swatch reversals.
+
+```sh
+node examples/view-direction-dithering.js moon-dial-review
+```
 
 ## Choose the space per palette policy
 
 Set `space` inside a palette policy's `dither` settings. Screen space
 places the pattern on the final art-pixel grid. World space places it
 on the scene surface. Object space uses the rig's rest coordinates as
-it moves. These settings work with [authorized pairs](pixel-look.md#authorize-dither-pairs).
+it moves. View space projects onto the direction-selected plane.
+These settings work with [authorized pairs](pixel-look.md#authorize-dither-pairs).
 
 ```json
 {
@@ -52,13 +86,19 @@ The same fields work on a scene target or default, a material's
 `paletteConstraint`, a native look asset, and a palette policy at the
 frame or palette stage. A policy with a space takes precedence over
 `look.stable`, including when it explicitly chooses `screen`. Omit
-the space to inherit the existing target or scene anchor. World and
-object policies default to cells of 0.08 scene units and origin
+the space to inherit the existing target or scene anchor. World, view,
+and object policies default to cells of 0.08 scene units and origin
 `[0, 0, 0]`. Pixels without a surface hit use screen coordinates.
 
-The headless library and CLI resolve all three spaces. WebGL uses
-screen space for palette dither. Use `look inspect --renderer webgl`
-to identify authored palette policies that request a spatial anchor.
+The headless library and CLI resolve all four spaces. In the native WebGL
+resolve, scene dithering and tone maps follow opaque indexed meshes,
+finite curves, and native splats. Scene and per-target anchors work across
+these representations. WebGL palette rows attached to native draw rows
+can supply their own space, spacing, and origin. The WebGL path uses
+`EXT_color_buffer_float` to store per-pixel world and rest coordinates.
+Blended fragments without an opaque owner and reconstructed impostors
+fall back to the screen grid. Coverage-aware and portable render-stage
+resolves continue to use their existing browser resolve paths.
 
 The [print and cloth workshop](../examples/palette-dither-spaces.js)
 shows screen-space print dots, a cloak with a rest-space weave, and
@@ -72,7 +112,7 @@ ink-studio clip examples/palette-dither-spaces.js --ortho --w 288 --h 152 --px 1
 
 Set `dither.scale` to change the size of each pattern cell. A value of
 `2` makes screen cells two art pixels wide, or doubles `spacing` in
-world or rest space. A value of `0.5` uses half-size cells. A scale of
+world, rest, or projected space. A value of `0.5` uses half-size cells. A scale of
 `1` preserves the original pattern.
 
 ```json
@@ -109,13 +149,24 @@ including perspective, surface angle and the object's pose. Screen
 cells have a fixed size at a given art resolution. Omit `fade` to keep
 the authored pattern density at every distance.
 
-The headless renderer uses all these settings. WebGL scene targets use
-the base scale and fade on the screen grid. `look inspect --renderer webgl`
-identifies policies with regional or spatial settings outside that path.
+The headless renderer uses all these settings. The native WebGL resolve
+uses base scale and fade, with a footprint estimated from adjacent pixels
+on the same anchor rule. Regional overrides use the headless renderer.
 
 ```sh
 ink-studio render examples/palette-dither-scale.js --w 300 --h 162 --px 1 --t 0.35 --out near.png
 ink-studio clip examples/palette-dither-scale.js --w 300 --h 162 --px 1 --fps 12 --out dither-scale.png
+```
+
+## Review the interactive renderer
+
+The [Rest Marks Cabinet](../examples/interactive-rest-marks.js) turns an
+indexed copper astrolabe and deforms a splat coat with finite-curve seams.
+Its review command captures raw engraving, object-space dither, and
+screen-space dither through the same motion and reports the browser and GPU.
+
+```sh
+node examples/interactive-rest-marks-review.js rest-marks-review --hardware
 ```
 
 ## Check a slow camera move
@@ -139,7 +190,8 @@ ink-studio palette shimmer examples/stable-dithering.js --ortho --camera-pan .65
 ```
 
 The review renders each time and camera pose with screen, world, and
-object dither. It overrides the anchor space in scene, target, material,
+object dither. Add `--include-view` or pass `includeView: true` to
+`reviewPaletteShimmer` to include view direction. It overrides the anchor space in scene, target, material,
 and stage palette settings while keeping the authored spacing, origin,
 strength, pattern and pair rules. A fixed camera can review animated
 lighting or palette changes on the same surfaces.

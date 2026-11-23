@@ -10,7 +10,10 @@
     number(value.dry,min,max)&&number(value.wet,min,max);
   const rules={
     friction:[0,4],permeability:[0,100],dryingRate:[0,100],
-    thermal:{heatCapacity:[1e-6,1e12],conductance:[0,1e12]},
+    density:[1e-12,1e12],damping:[0,100],intrinsicPermeability:[0,1e12],
+    elastic:{youngModulus:[1e-9,1e15],poissonRatio:[-0.999999,0.499999]},
+    thermal:{heatCapacity:[1e-6,1e12],conductance:[0,1e12],specificHeat:[1e-9,1e12],
+      conductivity:[0,1e12],expansion:[-1,1]},
     fracture:{energy:[0,1e12],parts:[2,32]},
     fatigue:{endurance:[1e-6,1e12],life:[1e-4,1e12],exponent:[1,12]},
     plastic:{yield:[1e-6,1e12],creep:[0,1e4],limit:[0,4]},
@@ -51,10 +54,12 @@
       if(key==='fatigue'||key==='plastic'){checkStructural(key,value);continue;}
       if(Array.isArray(range))check(coefficient(value,...range),fail);
       else {
-        check(hasKeys(value,Object.keys(range))&&Object.keys(value).length===Object.keys(range).length,fail);
-        for(const [property,[min,max]] of Object.entries(range)) {
-          const valid=property==='parts'?Number.isSafeInteger(value[property])&&number(value[property],min,max):
-            coefficient(value[property],min,max);
+        check(hasKeys(value,Object.keys(range))&&Object.keys(value).length>0&&
+          (key==='thermal'?Object.hasOwn(value,'heatCapacity')===Object.hasOwn(value,'conductance'):
+            key==='elastic'||Object.keys(value).length===Object.keys(range).length),fail);
+        for(const [property,authored] of Object.entries(value)) {
+          const [min,max]=range[property];
+          const valid=property==='parts'?Number.isSafeInteger(authored)&&number(authored,min,max):coefficient(authored,min,max);
           check(valid,fail+'.'+property);
         }
       }

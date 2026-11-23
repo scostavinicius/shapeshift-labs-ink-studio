@@ -15,6 +15,16 @@
       return [f - k * x * x, -k * x * y, -k * x * z, f - k * y * y, -k * y * z, f - k * z * z];
     },
     square = ([x, y, z]) => [x * x, x * y, x * z, y * y, y * z, z * z];
+
+  function boxDistanceSquared(position, { min, max }) {
+    let distance = 0;
+    for (let axis = 0; axis < 3; axis++) {
+      const gap = Math.max(0, min[axis] - position[axis], position[axis] - max[axis]);
+      distance += gap * gap;
+    }
+    return distance;
+  }
+
   function covariance(raw) {
     if (!Array.isArray(raw) || raw.length !== 6 || !raw.every(v => finite(v, -1e12, 1e12)))
       throw new Error('Splat covariances need six finite symmetric components');
@@ -60,6 +70,7 @@
       silhouette = 0.17,
       lockSeams = true,
       seamDistance = maxDistance,
+      maxSeamPairs = 1900000,
       maxPairs = 1900000,
       candidateLimit = 8,
       guard
@@ -82,6 +93,7 @@
       (guard !== undefined && typeof guard !== 'function') ||
       !finite(silhouette, 0, 1) ||
       typeof lockSeams !== 'boolean' ||
+      !integer(maxSeamPairs, 1, 10000000) ||
       !integer(maxPairs, 1, 10000000) ||
       !integer(candidateLimit, 1, 64)
     )
@@ -90,7 +102,7 @@
       goal = target ?? Math.floor(input.length * ratio),
       ids = new Set(),
       grid = new Map(),
-      work = { pairs: 0, merged: 0, protected: 0, maxError: 0 },
+      work = { pairs: 0, seamPairs: 0, seamUnverified: 0, merged: 0, protected: 0, maxError: 0 },
       nodes = Array.from(input, (raw, i) => {
         const {
           id = String(i),
@@ -144,14 +156,20 @@
           first: i
         };
       });
-    const cell = p => p.map(v => Math.floor(v / seamDistance)),
+    // Allow for rounding between this squared bound and the exact distance check.
+    const seamLimit = seamDistance ** 2 * (1 + 4 * Number.EPSILON),
+      cell = p => p.map(v => Math.floor(v / seamDistance)),
       key = q => q.join('/');
     function put(n) {
       const slot = key(cell(n.position));
-      let groups = grid.get(slot);
-      if (!groups) grid.set(slot, (groups = new Map()));
-      let group = groups.get(n.group);
-      if (!group) groups.set(n.group, (group = []));
+      let bucket = grid.get(slot);
+      if (!bucket) grid.set(slot, (bucket = { groups: new Map(), min: n.position.slice(), max: n.position.slice() }));
+      for (let axis = 0; axis < 3; axis++) {
+        bucket.min[axis] = Math.min(bucket.min[axis], n.position[axis]);
+        bucket.max[axis] = Math.max(bucket.max[axis], n.position[axis]);
+      }
+      let group = bucket.groups.get(n.group);
+      if (!group) bucket.groups.set(n.group, (group = []));
       group.push(n);
     }
     function* otherGroups(n) {
@@ -159,38 +177,37 @@
       for (let c = -1; c <= 1; c++)
         for (let b = -1; b <= 1; b++)
           for (let a = -1; a <= 1; a++) {
-            const groups = grid.get(key([x + a, y + b, z + c]));
-            if (!groups) continue;
-            for (const [label, group] of groups) if (label !== n.group) yield group;
+            const bucket = grid.get(key([x + a, y + b, z + c]));
+            if (!bucket || boxDistanceSquared(n.position, bucket) > seamLimit) continue;
+            for (const [label, group] of bucket.groups) if (label !== n.group) yield group;
           }
     }
-    let capped = false;
-    function compare() {
-      if (work.pairs >= maxPairs) {
-        capped = true;
-        return false;
-      }
-      work.pairs++;
-      return true;
-    }
-    if (lockSeams && goal < nodes.length) {
-      if (new Set(nodes.map(n => n.group)).size > 1) {
-        for (const n of nodes) put(n);
-        scan: for (const n of nodes) {
-          if (n.locked) continue;
-          neighbors: for (const group of otherGroups(n))
-            for (const m of group) {
-              if (!compare()) break scan;
-              if (V.dist(n.position, m.position) <= seamDistance) {
-                n.locked = m.locked = true;
-                break neighbors;
-              }
+    let seamChecked = nodes.length;
+    if (lockSeams && goal < nodes.length && nodes.some(n => n.group !== nodes[0].group)) {
+      for (const n of nodes) put(n);
+      scan: for (let i = 0; i < nodes.length; i++) {
+        const n = nodes[i];
+        if (n.locked) continue;
+        neighbors: for (const group of otherGroups(n))
+          for (const m of group) {
+            if (work.seamPairs >= maxSeamPairs) {
+              seamChecked = i;
+              break scan;
             }
-        }
-        grid.clear();
+            work.seamPairs++;
+            if (V.dist(n.position, m.position) <= seamDistance) {
+              n.locked = m.locked = true;
+              break neighbors;
+            }
+          }
       }
+      grid.clear();
     }
-    work.protected = nodes.filter(n => n.locked).length;
+    for (const node of nodes) {
+      if (node.locked) work.protected++;
+      else if (node.first >= seamChecked) work.seamUnverified++;
+    }
+    let mergeLimited = false;
     const makeHeap = () =>
       new ProceduralHeap(
         (a, b) =>
@@ -199,7 +216,11 @@
       );
     function enqueue(heap, a, b) {
       if (a.first > b.first) [a, b] = [b, a];
-      if (a.locked || b.locked || a.group !== b.group || !compare()) return;
+      if (work.pairs >= maxPairs) {
+        mergeLimited = true;
+        return;
+      }
+      work.pairs++;
       const d = V.dist(a.position, b.position),
         c = V.dist(a.color, b.color),
         alignment = V.dot(a.normal, b.normal);
@@ -263,11 +284,7 @@
     }
 
     function closest(node, tree, best) {
-      let bound = 0;
-      for (let axis = 0; axis < 3; axis++) {
-        const gap = Math.max(0, tree.min[axis] - node.position[axis], node.position[axis] - tree.max[axis]);
-        bound += gap * gap;
-      }
+      const bound = boxDistanceSquared(node.position, tree);
       if (bound > distanceLimit) return;
       if (best.length === candidateLimit) {
         const last = best[best.length - 1];
@@ -305,10 +322,11 @@
     }
 
     let active = nodes.length;
-    while (!capped && active > goal) {
+    while (!mergeLimited && active > goal) {
       const groups = new Map();
       for (const node of nodes) {
-        if (!node.alive || node.locked) continue;
+        // Only checked interiors can merge. Leave unverified rows available for a retry.
+        if (!node.alive || node.locked || node.first >= seamChecked) continue;
         let group = groups.get(node.group);
         if (!group) groups.set(node.group, (group = []));
         group.push(node);
@@ -327,7 +345,7 @@
             if (pairs.has(id)) continue;
             pairs.add(id);
             enqueue(heap, node, peer);
-            if (capped) break search;
+            if (mergeLimited) break search;
           }
         }
       }
@@ -389,7 +407,8 @@
           work: { ...work, attemptedMerges: work.merged, merged: 0 }
         });
     }
-    return P.data.freeze({ status: active <= goal ? 'ok' : capped ? 'budget' : 'constrained', splats, work });
+    const limited = mergeLimited || work.seamUnverified > 0;
+    return P.data.freeze({ status: active <= goal ? 'ok' : limited ? 'budget' : 'constrained', splats, work });
   }
 
   function writeRow(data, i, p, alpha) {

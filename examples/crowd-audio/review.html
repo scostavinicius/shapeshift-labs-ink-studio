@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Station overflow · Ink Studio</title>
+<style>
+  :root {color-scheme: dark; --panel:#1b2425; --border:#3c4c4c; --text:#f3f3e8; --muted:#bbc7c0; --steps:#a7dfac; --debris:#ffbc7d; --bell:#e2d6ff}
+  * {box-sizing:border-box}
+  body {margin:0; color:var(--text); background:#101717; font:16px/1.48 system-ui,sans-serif}
+  main {max-width:860px; margin:auto; padding:clamp(22px,6vw,64px) clamp(16px,4vw,30px)}
+  header {margin-bottom:22px}
+  h1 {font:normal clamp(42px,8vw,76px)/1 Georgia,serif; margin:0 0 13px; letter-spacing:-.05em}
+  h2 {font-size:1rem; margin:0 0 9px}
+  p {color:var(--muted); margin:0}
+  .panel {padding:clamp(14px,4vw,23px); background:var(--panel); border:1px solid var(--border); border-radius:14px}
+  button {padding:8px 13px; border:1px solid var(--border); border-radius:7px; background:#111a1a; color:var(--text); font:inherit; cursor:pointer}
+  button[aria-pressed="true"] {background:var(--steps); color:#13251a; border-color:var(--steps); font-weight:650}
+  button:focus-visible {outline:2px solid var(--bell); outline-offset:3px}
+  .controls,.jumps {display:flex; flex-wrap:wrap; gap:8px}
+  audio {width:100%; margin:14px 0 10px}
+  .stats {margin:0 0 24px}
+  .row {display:grid; grid-template-columns:6.4rem 1fr; gap:8px; align-items:center; margin:8px 0; font-size:.875rem}
+  .steps {color:var(--steps)} .debris {color:var(--debris)} .bell {color:var(--bell)}
+  .track {height:12px; background:#121a1a; border-radius:2px; position:relative; overflow:hidden}
+  .track i {display:block; width:2px; top:1px; bottom:1px; position:absolute; background:currentColor; opacity:.67}
+  .needle {position:absolute; height:100%; width:2px; background:#fff; z-index:1}
+  .jumps {margin-top:16px}
+  .jumps button {font-size:.875rem}
+  @media(max-width:430px) {.row {grid-template-columns:5.4rem 1fr}}
+</style>
+<main>
+  <header>
+    <h1>Station overflow</h1>
+    <p>Listen for footsteps on the left, loose stone on the right, and the station bell in the center. Both mixes have five voice slots.</p>
+  </header>
+  <div class="panel">
+    <div class="controls" aria-label="Overflow treatment" role="group">
+      <button id="aggregate" type="button" aria-pressed="true">Aggregate overflow</button>
+      <button id="drop" type="button" aria-pressed="false">Drop overflow</button>
+    </div>
+    <audio controls preload="metadata" aria-label="Station soundtrack"></audio>
+    <p class="stats" id="stats" aria-live="polite"></p>
+    <h2>Incoming sounds</h2>
+    <div class="row steps">Left · steps <div class="track" data-cue="step" aria-hidden="true"></div></div>
+    <div class="row debris">Right · stone <div class="track" data-cue="rubble" aria-hidden="true"></div></div>
+    <div class="row bell">Center · bell <div class="track" data-cue="bell" aria-hidden="true"></div></div>
+    <div class="jumps" aria-label="Jump to a sound" role="group">
+      <button type="button" data-time=".384">Footsteps</button>
+      <button type="button" data-time="1.696">Debris burst</button>
+      <button type="button" data-time="3.008">Station bell</button>
+    </div>
+  </div>
+</main>
+<script>
+const demo=/*INK_CROWD_DEMO*/;
+const audio=document.querySelector('audio'), stats=document.querySelector('#stats');
+const modes=[...document.querySelectorAll('[aria-pressed]')], needles=[];
+let mode, pendingTime=0;
+for(const track of document.querySelectorAll('.track')){
+  for(const {time,cue} of demo.events)if(cue===track.dataset.cue){
+    const tick=document.createElement('i');
+    tick.style.left=100*time/demo.duration+'%';
+    track.append(tick);
+  }
+  const needle=document.createElement('span');
+  needle.className='needle';
+  track.append(needle);
+  needles.push(needle);
+}
+function seek(time){pendingTime=time;audio.currentTime=time;}
+function animate(){
+  for(const needle of needles)needle.style.left=100*audio.currentTime/demo.duration+'%';
+  if(!audio.paused)requestAnimationFrame(animate);
+}
+function switchMix(to){
+  if(mode===to)return;
+  const time=audio.readyState?audio.currentTime:pendingTime;
+  const play=!audio.paused;
+  mode=to;
+  const row=demo.stats[mode];
+  for(const button of modes)button.setAttribute('aria-pressed',button.id===mode);
+  stats.textContent=mode==='aggregate'
+    ? `${row.aggregated} sounds folded into ${row.streams} streams · ${row.dropped} dropped · ${row.bell} bell strikes`
+    : `${row.dropped} sounds dropped · ${row.bell} bell strikes`;
+  audio.src=demo.clips[mode];
+  seek(time);
+  if(play)audio.play().catch(()=>{});
+}
+for(const button of modes)button.addEventListener('click',()=>switchMix(button.id));
+for(const button of document.querySelectorAll('[data-time]'))button.addEventListener('click',()=>seek(Number(button.dataset.time)));
+audio.addEventListener('play',animate);
+audio.addEventListener('seeked',()=>{if(audio.paused)animate();});
+audio.addEventListener('loadedmetadata',()=>{if(audio.paused)animate();});
+switchMix('aggregate');
+</script>
+</html>

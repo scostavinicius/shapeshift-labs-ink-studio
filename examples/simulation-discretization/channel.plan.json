@@ -1,0 +1,28 @@
+{
+  "format": "ink-studio/discretization-plan",
+  "version": 1,
+  "id": "angled-channel",
+  "revision": 1,
+  "units": "m",
+  "source": {
+    "kind": "grid",
+    "size": [30, 4, 24],
+    "spacing": [0.30, 0.22, 0.28],
+    "origin": [0, 0, -3],
+    "blocks": {
+      "left": { "index": [0, 0, 3], "size": [10, 4, 10] },
+      "middle": { "index": [10, 0, 6], "size": [10, 4, 10] },
+      "right": { "index": [20, 0, 9], "size": [10, 4, 12] }
+    },
+    "cutPlanes": [
+      { "id": "north", "normal": [-0.28, 0, 1], "offset": -0.48, "tag": "bank" },
+      { "id": "south", "normal": [0.28, 0, -1], "offset": 1.92, "tag": "bank" },
+      { "id": "ceiling", "normal": [0, 1, 0], "offset": 0.62, "tag": "roof" }
+    ]
+  },
+  "regions": [
+    { "tag": "inlet", "side": "x0" },
+    { "tag": "outlet", "side": "x1" },
+    { "tag": "floor", "side": "y0" }
+  ]
+}

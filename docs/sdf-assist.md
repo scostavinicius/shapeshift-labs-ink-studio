@@ -4,6 +4,8 @@ SDF assist uses the original sculpt to determine opaque coverage, depth and norm
 
 The mode is opt-in in the headless Node and CLI renderer. Start with finite static architecture. Use the existing splat path for animated parts and translucent materials. Retained fields are live scene data. Rebuild the authored scene when replaying a shot or changing the geometry.
 
+The [offline SDF reference](sdf-reference.md) traces light through the retained geometry for a side-by-side review.
+
 ## Enable on a sculpt
 
 Set `S.keepRenderSdf = true` before baking the static architecture. Use `look.sdfAssist` in `B.finish()` for its default render mode, or pass `sdfAssist` as a Node render option. JSON dioramas keep the source automatically when `finish.look.sdfAssist` is enabled.
@@ -49,3 +51,8 @@ node cli/ink-studio.js render examples/sdf-gatehouse.js \
 ```
 
 The authored comparison covers the gatehouse sandstone. Its arched cut remains open, and lantern washes retain their splat color. The standard depth, coverage, position, normal, object ID and material ID passes report the traced surface. Tracing costs additional render time and still needs painted samples on each visible side of the sculpt.
+
+[Editable brick meshes](brick-meshes.md) also support headless tracing.
+The same object, material, and bounds rules select the current signed
+brick field for close-ups. The affected mesh samples yield to the
+trace while other parts of the scene use their cached geometry.

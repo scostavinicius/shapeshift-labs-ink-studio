@@ -4,11 +4,11 @@
   const valid=p=>Array.isArray(p)&&p.length===3&&Array.from(p).every(Number.isFinite);
   const smooth=(x,a,b)=>{const t=K.clamp((x-a)/(b-a),0,1);return t*t*(3-2*t);};
   const fract=x=>x-Math.floor(x);
-  function pose(data,i,t,grow){
+  function pose(data,i,t,grow,emissiveTime){
     const o=i*16, flags=Math.round(data[o+11]), k=flags&15, ph=data[o+12], sp=data[o+13], rg=data[o+14], ex=data[o+15];
     let x=data[o],y=data[o+1],z=data[o+2],a=data[o+3],scale=1,angle=0;
     if(k===1||k===7&&ex!==LightSchedule.emissionMarker)
-      a*=k===1?.62+.38*Math.sin(t*sp+ph):.82+.18*Math.sin(t*sp+ph);
+      a*=k===1?.62+.38*Math.sin(emissiveTime*sp+ph):.82+.18*Math.sin(emissiveTime*sp+ph);
     if((k===2||k===3||k===15)&&rg){
       const q=fract(t*sp/rg+ph);
       if(k===2){y-=q*rg;a*=1-q*q;scale*=1+q*ex;}
@@ -88,11 +88,12 @@
     return branch(0,indices.length);
   }
 
-  function picker(world,{time=world.lookSnapshot?.time??0,sampleWithdrawal=world.sampleWithdrawal??0,
+  function picker(world,{time=world.lookSnapshot?.time??0,emissiveTime=time,rowMask,sampleWithdrawal=world.sampleWithdrawal??0,
     splatCoverage=world.look?.splatCoverage,cutaway=world.look?.cutaway,camera,splatFootprints=world.look?.splatFootprints}={}){
     const coverageMode=R.coverageMode(splatCoverage), defaultCutaway=Cutaway.prepare(cutaway);
     const {count,renderMetadata,opticalSplats}=world, marks=world.dataMarks?.snapshot();
-    if(!(world.data instanceof Float32Array)||!Number.isSafeInteger(count)||count<0||world.data.length<count*16||!Number.isFinite(time))
+    if(!(world.data instanceof Float32Array)||!Number.isSafeInteger(count)||count<0||world.data.length<count*16||!Number.isFinite(time)||!Number.isFinite(emissiveTime)||
+        rowMask!==undefined&&(!(rowMask instanceof Uint8Array)||rowMask.length!==count))
       throw new TypeError('Picking needs a baked splat world and finite time');
     const opticalFrames=opticalSplats&&SplatFrames.create(world,time,K.M);
     const data=world.anim?.bones?K.bones.posed({...world,data:world.rest??world.data,posedBuf:undefined}):world.data;
@@ -100,8 +101,8 @@
     const back=new Set(world.back??[]),withdrawal=SampleCoverage.amount(sampleWithdrawal);
     for(let i=0;i<count;i++){
       const o=i*16,flags=Math.round(data[o+11]);
-      if(data[o+3]<=0||data[o+1]<-30||back.has(i)||(flags&128)||!SampleCoverage.visible(flags,withdrawal))continue;
-      const {x,y,z,a,angle,scale}=pose(data,i,time,world.grow);
+      if(rowMask&&!rowMask[i]||data[o+3]<=0||data[o+1]<-30||back.has(i)||(flags&128)||!SampleCoverage.visible(flags,withdrawal))continue;
+      const {x,y,z,a,angle,scale}=pose(data,i,time,world.grow,emissiveTime);
       if(!(a>=R.minimum)||![x,y,z].every(Number.isFinite))continue;
       const cov=covariance(data,o,angle,scale);
       if(!cov.every(Number.isFinite)||cov[0]<0||cov[3]<0||cov[5]<0)continue;
@@ -111,7 +112,7 @@
     const indices=Uint32Array.from(selected),tree=orderedTree(rows,indices,footprintPlan?.reach??3);
     let provenance;
     function ray({origin,direction,maxDistance=100,threshold=R.minimum,limit=64,soft=false,water=true,accept,
-      cutaway=defaultCutaway,camera:sectionCamera=camera,footprintView}={}){
+      cutaway=defaultCutaway,camera:sectionCamera=camera,footprintView,extraHits,meshes=true,brickMeshes=true,additionalMeshes=[]}={}){
       if(!valid(origin)||!valid(direction)||V.len(direction)<=1e-8||!Number.isFinite(maxDistance)||maxDistance<=0||
           !Number.isFinite(threshold)||threshold<0||threshold>1||!Number.isInteger(limit)||limit<1||limit>256||
           accept!==undefined&&typeof accept!=='function')
@@ -176,6 +177,17 @@
         }
       }
       visit(tree);
+      const meshOptions={V,rayBox:P.spatial.rayBox};
+      const fields=P.brickMeshes?.frame(world,brickMeshes) ?? [];
+      const fieldMeshes=fields.flatMap(field=>field.chunks.filter(chunk=>chunk.mesh).map(chunk=>chunk.mesh));
+      for (const mesh of [...K.sceneMeshes.list(world,meshes,additionalMeshes),...fieldMeshes]) {
+        const hit=K.sceneMeshes.intersect(mesh,{origin,direction:d,maxDistance},meshOptions,row=>{
+          const depth=back ? V.dot(V.sub(sectionCamera.eye,row.point),back)-(sectionCamera.setback??0) : row.distance;
+          return (!section || Cutaway.margin(section,...row.point,depth)>=0) && (!accept || accept(row));
+        });
+        if (hit) hits.push(hit);
+      }
+      if(extraHits)for(const hit of extraHits({origin,direction:d,maxDistance}))if(!accept||accept(hit))hits.push(hit);
       hits.sort((a,b)=>a.distance-b.distance||b.index-a.index);
       const layers=[], segments=[], media=[];
       if(water)for(const segment of world.water?.raySegments?.(origin,d,maxDistance,{mediumIds:true})??[]){
@@ -216,7 +228,11 @@
       return {...result,contributions:result.contributions.slice(0,limit),dominant,solid,
         truncated:result.contributions.length>limit,media,visited};
     }
-    return Object.freeze({ray});
+    function boundsOf(indices) {
+      const visible = indices.filter(i => rows[i * 10 + 3] >= R.minimum);
+      return visible.length ? box(rows, visible, 0, visible.length, footprintPlan?.reach ?? 3) : null;
+    }
+    return Object.freeze({ray, boundsOf});
   }
   P.contributions=Object.freeze({create:picker});
 })(KIT);

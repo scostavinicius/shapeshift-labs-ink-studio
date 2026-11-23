@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prepared vent network · Ink Studio</title>
+<style>
+  :root { color-scheme: dark; font: 16px/1.5 system-ui, sans-serif; background: #101a21; color: #eff5ef }
+  body { margin: 0 }
+  main { max-width: 880px; margin: auto; padding: 42px 24px }
+  h1 { font-size: clamp(2rem, 5vw, 3.5rem); margin: 0; line-height: 1.1 }
+  p { color: #b0c5ce }
+  section { background: #182d36; border: 1px solid #355360; border-radius: 8px; margin-top: 24px; padding: 20px }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px }
+  button { font: inherit; border: 1px solid #527b7b; color: #eafaee; background: #213e45; border-radius: 4px; padding: 8px 16px; cursor: pointer }
+  button:first-child { background: #a1ebc6; color: #11251e }
+  button:focus-visible { outline: 3px solid #ffc489 }
+  canvas { width: 100%; height: auto; display: block; margin: 16px 0 }
+  dl { display: grid; grid-template-columns: repeat(auto-fit,minmax(155px,1fr)); gap: 12px; margin: 0 }
+  dt { color: #b0c5ce; font-size: .9rem }
+  dd { margin: 0; font: 1.3rem ui-monospace, monospace; color: #a1ebc6 }
+  output { display: block; margin-top: 12px }
+</style>
+<main>
+  <h1>Prepared vent network</h1>
+  <p>48 kHz pressure samples through six cells. The topology and waveform buffers are prepared once.</p>
+  <section>
+    <div class="controls">
+      <button data-count="96">Process 96 samples</button>
+      <button data-count="128">Request 128</button>
+      <button data-count="192">Request 192</button>
+      <button id="play" aria-pressed="false">Play waveform</button>
+    </div>
+    <output id="status" aria-live="polite"></output>
+    <canvas id="waveform" width="800" height="150" aria-label="Outlet pressure for the last completed block"></canvas>
+    <dl>
+      <div><dt>Effective block size</dt><dd id="limit"></dd></div>
+      <div><dt>Typed bytes reserved</dt><dd id="memory"></dd></div>
+      <div><dt>Samples processed</dt><dd id="processed"></dd></div>
+      <div><dt>Work overruns</dt><dd id="work"></dd></div>
+      <div><dt>Size overruns</dt><dd id="size"></dd></div>
+      <div><dt>Deadline overruns</dt><dd id="deadline"></dd></div>
+    </dl>
+  </section>
+</main>
+<script>/*__INK_KIT__*/</script>
+<script>/*__VENT_NETWORK__*/</script>
+<script>
+  registerPreparedVentNetwork(KIT);
+  const {processor} = KIT.world.kernels.prepare('prepared-vent-network',1,{}, {dt:1/48000});
+  const waveform = processor.buffers.trace;
+  const canvas = document.getElementById('waveform'), drawing = canvas.getContext('2d');
+  const fields = Object.fromEntries(['status','limit','memory','processed','work','size','deadline','play']
+    .map(key => [key,document.getElementById(key)]));
+  let successful = 0, playing = false, previous = 0;
+  function draw(count) {
+    drawing.fillStyle='#10212a';
+    drawing.fillRect(0,0,canvas.width,canvas.height);
+    drawing.fillStyle='#3b5562';
+    drawing.fillRect(0,75,canvas.width,1);
+    if (count < 2) return;
+    drawing.strokeStyle='#a1ebc6';
+    drawing.lineWidth=2;
+    drawing.beginPath();
+    for (let i=0;i<count;i++) {
+      const x=i*(canvas.width-1)/(count-1);
+      const y=75-Math.max(-1,Math.min(1,waveform[i]))*63;
+      if (i===0) drawing.moveTo(x,y);
+      else drawing.lineTo(x,y);
+    }
+    drawing.stroke();
+  }
+  function request(count) {
+    processor.input.inlet=Math.sin(successful/180)*.05+.025;
+    const status=processor.process(count);
+    if(status==='ok' || status==='deadline') { successful+=count; draw(count); }
+    const {capacity,memory,observed}=processor.report();
+    fields.status.textContent=({
+      ok:'Processed '+count+' samples.',
+      deadline:'Processed '+count+' samples and missed the measured deadline.',
+      'work-capacity':'Work budget rejected '+count+' samples. Previous waveform retained.',
+      'sample-capacity':'Sample capacity rejected '+count+' samples. Previous waveform retained.'
+    })[status];
+    fields.limit.textContent=capacity.effectiveMaxSamples+' samples';
+    fields.memory.textContent=memory.allocatedBytes+' B';
+    fields.processed.textContent=observed.processedSamples;
+    fields.work.textContent=observed.overruns.work;
+    fields.size.textContent=observed.overruns.samples;
+    fields.deadline.textContent=observed.overruns.deadline;
+    return status;
+  }
+  for (const button of document.querySelectorAll('button[data-count]'))
+    button.addEventListener('click',()=>request(Number(button.dataset.count)));
+  function animate(time) {
+    if (!playing) return;
+    if (time-previous>28) { request(96); previous=time; }
+    requestAnimationFrame(animate);
+  }
+  fields.play.addEventListener('click',()=>{
+    playing=!playing;
+    fields.play.setAttribute('aria-pressed',playing);
+    fields.play.textContent=playing?'Pause waveform':'Play waveform';
+    if(playing) requestAnimationFrame(animate);
+  });
+  const statuses=[96,128,192,40].map(request);
+  const observed=processor.report().observed;
+  if ((statuses[0]==='ok' || statuses[0]==='deadline') && statuses[1]==='work-capacity' &&
+    statuses[2]==='sample-capacity' && (statuses[3]==='ok' || statuses[3]==='deadline') &&
+    observed.processedSamples===136 && processor.buffers.trace===waveform) document.documentElement.dataset.verified='true';
+</script>
+</html>

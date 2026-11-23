@@ -1,33 +1,10 @@
 // PNG output supports RGB8, RGBA8, indexed colour and grayscale.
 const zlib = require('zlib'),
   fs = require('fs');
-const CRC = new Uint32Array(256);
-for (let n = 0; n < 256; n++) {
-  let c = n;
-  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-  CRC[n] = c >>> 0;
-}
-const crc = buf => {
-  let c = 0xffffffff;
-  for (let i = 0; i < buf.length; i++) c = CRC[(c ^ buf[i]) & 255] ^ (c >>> 8);
-  return (c ^ 0xffffffff) >>> 0;
-};
-const chunk = (type, data) => {
-  const len = Buffer.alloc(4),
-    td = Buffer.concat([Buffer.from(type, 'ascii'), data]),
-    cr = Buffer.alloc(4);
-  len.writeUInt32BE(data.length);
-  cr.writeUInt32BE(crc(td));
-  return Buffer.concat([len, td, cr]);
-};
-function scanlines(w, h, pixels, channels) {
-  const stride = w * channels;
-  if (pixels.length !== stride * h) throw new Error('PNG pixel count does not match its shape');
-  const raw = Buffer.alloc((stride + 1) * h);
-  for (let y = 0; y < h; y++)
-    Buffer.from(pixels.buffer, pixels.byteOffset + y * stride, stride).copy(raw, y * (stride + 1) + 1);
-  return zlib.deflateSync(raw, { level: 6 });
-}
+const PNGBytes = require('../src/png-bytes.js');
+const chunk = (type, data) => Buffer.from(PNGBytes.chunk(type, data));
+const scanlines = (w, h, pixels, channels) =>
+  zlib.deflateSync(PNGBytes.scanlines(w, h, pixels, channels), { level: 6 });
 function withAlpha(rgb, alpha) {
   if (rgb.length !== alpha.length * 3) throw new Error('PNG alpha count does not match its shape');
   const rgba = new Uint8Array(alpha.length * 4);
@@ -85,20 +62,11 @@ function writeIndexed(file, w, h, slots, palette) {
       throw new Error('Indexed PNG pixel references a missing palette slot');
     return slot;
   });
-  const hd = Buffer.alloc(13);
-  hd.writeUInt32BE(w,0);
-  hd.writeUInt32BE(h,4);
-  hd[8] = 8;
-  hd[9] = 3;
-  const out = [Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',hd),
-    chunk('PLTE',holes ? Buffer.concat([table,Buffer.alloc(3)]) : table)];
-  if (holes) {
-    const alpha = Buffer.alloc(empty+1,255);
-    alpha[empty] = 0;
-    out.push(chunk('tRNS',alpha));
-  }
-  out.push(chunk('IDAT',scanlines(w,h,pixels,1)),chunk('IEND',Buffer.alloc(0)));
-  fs.writeFileSync(file,Buffer.concat(out));
+  const alpha = holes ? Buffer.alloc(empty + 1, 255) : null;
+  if (holes) alpha[empty] = 0;
+  const colors = holes ? Buffer.concat([table, Buffer.alloc(3)]) : table;
+  const out = PNGBytes.indexed(w, h, colors, alpha, scanlines(w, h, pixels, 1));
+  fs.writeFileSync(file, Buffer.concat(out));
 }
 function decode(file, capturePalette, layoutOnly = false) {
   const b = Buffer.isBuffer(file) ? file : fs.readFileSync(file);

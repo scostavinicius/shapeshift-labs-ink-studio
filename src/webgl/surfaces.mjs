@@ -1,16 +1,76 @@
 import { environmentMediaSource } from './environment-shaders.mjs';
 import { emitterGLSL } from './light-emitters.mjs';
 import { waterGLSL } from './water-optics.mjs';
+import { glassSurfaceOutputs } from './hybrid-depth.mjs';
 import { createResources } from './resources.mjs';
+import { surfaceEngravingFragment } from './engraving-shaders.mjs';
+import { simulationMasks,simulationMaterialSource } from './simulation-material-layers.mjs';
 
 const uvSlip = Symbol.for('ink-studio.spriteSurface.uvSlip');
+const eyeFromView = view => [0, 1, 2].map(
+  k => -(view[k * 4] * view[12] + view[k * 4 + 1] * view[13] + view[k * 4 + 2] * view[14])
+);
+
+// The three layers are pigment/coverage, tangent normal/roughness, and emission.
+const semanticSource=`
+uniform highp sampler2DArray u_semanticAtlas;
+uniform bool u_semanticOn,u_semanticLevels,u_semanticNormals,u_semanticOrtho;
+uniform int u_semanticMax;
+uniform vec4 u_semanticRect;
+uniform vec3 u_semanticLight,u_semanticEye,u_semanticBack;
+uniform float u_semanticScale,u_semanticStrength,u_semanticSpecular,u_semanticAmbient;
+vec3 semanticLinear(vec3 c){
+  return mix(pow((c+.055)/1.055,vec3(2.4)),c/12.92,lessThanEqual(c,vec3(.04045)));
+}
+vec3 semanticDisplay(vec3 c){
+  c=clamp(c,0.,1.);
+  return mix(1.055*pow(c,vec3(1./2.4))-.055,12.92*c,lessThanEqual(c,vec3(.0031308)));
+}
+ivec2 semanticTexel(vec2 uv,int level){
+  ivec2 size=textureSize(u_semanticAtlas,level).xy;
+  return clamp(ivec2(floor(.5+uv*vec2(size-1))),ivec2(0),size-1);
+}
+vec4 semanticRead(ivec2 xy,int channel,int level){
+  return texelFetch(u_semanticAtlas,ivec3(xy,channel),level);
+}
+void semanticMaterial(vec2 uv,float span,out vec4 pigment,out vec4 detail,out vec3 emission){
+  int ranks[16]=int[16](0,8,2,10,12,4,14,6,3,11,1,9,15,7,13,5);
+  float lod=u_semanticLevels?clamp(log2(max(1.,span)),0.,float(u_semanticMax)):0.;
+  int lo=int(floor(lod)),hi=int(ceil(lod));
+  ivec2 a=semanticTexel(uv,lo),b=semanticTexel(uv,hi);
+  vec4 first=semanticRead(a,0,lo),second=semanticRead(b,0,hi);
+  bool chooseB=fract(lod)>=.5;
+  ivec2 cell=chooseB?b:a;
+  pigment=chooseB?second:first;
+  pigment.a=step((float(ranks[(cell.y%4)*4+cell.x%4])+.5)/16.,pigment.a);
+  vec2 covered=vec2((1.-fract(lod))*first.a,fract(lod)*second.a);
+  covered/=max(1e-8,covered.x+covered.y);
+  detail=semanticRead(a,1,lo)*covered.x+semanticRead(b,1,hi)*covered.y;
+  emission=(semanticLinear(semanticRead(a,2,lo).rgb)*covered.x+
+    semanticLinear(semanticRead(b,2,hi).rgb)*covered.y)*u_semanticStrength;
+}
+vec3 semanticFinish(vec3 pigment,vec3 normal,float roughness,float sheen,vec3 emission,vec3 world){
+  vec3 view=u_semanticOrtho?u_semanticBack:normalize(u_semanticEye-world);
+  vec3 h=u_semanticLight+view;
+  h*=inversesqrt(max(dot(h,h),1e-18));
+  float gloss=1.-roughness;
+  float shine=dot(normal,view)>0.&&dot(normal,u_semanticLight)>0.?
+    sheen*gloss*pow(max(0.,dot(normal,h)),4.+96.*gloss*gloss):0.;
+  float diffuse=mix(max(0.,dot(normal,u_semanticLight)),1.,u_semanticAmbient);
+  return semanticDisplay(semanticLinear(pigment)*diffuse+emission+shine);
+}
+`;
 
 // Opaque pixel cutouts share an atlas and depth buffer with the splat pass.
-export function createSurfacePipeline(gl, { updatesSince, geometryUpdatesSince, cutaway } = {}) {
+export function createSurfacePipeline(gl, { updatesSince, geometryUpdatesSince, cutaway, samplingPlan, samplingGLSL, projectionPlan, spriteLOD, sharedShaders, print } = {}) {
   const resources = createResources(gl);
   try {
-    const shaders = new Map();
-    function shaderFor(wet, section, lighting, environment) {
+    const shaders = sharedShaders?.cache ?? new Map();
+    const program = sharedShaders?.program ?? resources.program;
+    function shaderFor(wet, section, lighting, normalMapped, environment, paletteSampling, styledProjection, maskedPart, glassLayers,
+      anchors,engraving,semantic,simulation) {
+      const chart = lighting && !normalMapped;
+      const marks=anchors || engraving, rest=marks||simulation, needsFrame=normalMapped||semantic;
       const key = [
         wet?.airPockets,
         wet?.layered,
@@ -18,63 +78,184 @@ export function createSurfacePipeline(gl, { updatesSince, geometryUpdatesSince, 
         !!wet,
         !!section,
         !!lighting,
+        normalMapped,
         !!environment?.media,
-        !!environment?.lit
+        !!environment?.lit,
+        paletteSampling,
+        styledProjection,
+        maskedPart,
+        glassLayers,anchors,engraving,semantic,simulation
       ].join('/');
       if (shaders.has(key)) return shaders.get(key);
-      const shader = resources.program(
+      const shader = program(
         `#version 300 es
 precision highp float;
 layout(location=0) in vec3 a_point;
 layout(location=1) in vec2 a_texel;
 uniform mat4 u_view,u_proj;
+uniform highp int u_historyFirst;
+flat out highp int v_historyId;
 out vec2 v_texel;
 out vec3 v_world;
-${lighting ? 'layout(location=2)in vec2 a_light;out vec2 v_light;' : ''}
+${chart ? 'layout(location=2)in vec2 a_light;out vec2 v_light;' : ''}
+${rest?'layout(location=3)in vec3 a_rest;out vec3 v_rest;':''}
+${marks?'layout(location=4)in vec2 a_marks;flat out vec2 v_marks;':''}
+${simulation?'layout(location=5)in vec2 a_simUV;out vec2 v_simUV;':''}
 out float v_depth;
 out vec3 v_camera;
+${styledProjection ? 'uniform vec2 u_surfaceViewport;uniform float u_vertexSnap;out vec2 v_affine;' : ''}
 void main(){
   vec4 p=u_view*vec4(a_point,1.0);
-  ${lighting ? 'v_light=a_light;' : ''}
+  v_historyId=u_historyFirst>0 ? u_historyFirst+gl_VertexID/3 : 0;
+  ${chart ? 'v_light=a_light;' : ''}
+  ${rest?'v_rest=a_rest;':''}
+  ${marks?'v_marks=a_marks;':''}
+  ${simulation?'v_simUV=a_simUV;':''}
   v_texel=a_texel;v_world=a_point;v_depth=-p.z;v_camera=p.xyz;
   gl_Position=u_proj*p;
+  ${styledProjection ? `
+  v_affine=a_texel*gl_Position.w;
+  if(u_vertexSnap>0.0&&gl_Position.w>0.0){
+    vec2 screen=(gl_Position.xy/gl_Position.w*.5+.5)*u_surfaceViewport;
+    screen.y=u_surfaceViewport.y-screen.y;
+    screen=floor(screen/u_vertexSnap+.5)*u_vertexSnap;
+    screen.y=u_surfaceViewport.y-screen.y;
+    gl_Position.xy=(screen/u_surfaceViewport*2.0-1.0)*gl_Position.w;
+  }` : ''}
 }`,
         `#version 300 es
 precision highp float;
+precision highp int;
+flat in highp int v_historyId;
 uniform sampler2D u_atlas;
 uniform vec4 u_range,u_splatPlane;
 ${wet ? waterGLSL(wet.airPockets, wet.layered, wet.atlas) : 'uniform vec4 u_arrivalPlane;'}
 uniform vec2 u_surfaceViewport;
 uniform vec3 u_fog;
-uniform bool u_index, u_graphDepth;
-uniform bool u_uvSlip;
+uniform bool u_index, u_graphDepth, u_portalCover;
+uniform bool u_uvSlip, u_filterMatte, u_frontOnly;
+uniform float u_filterSoftness;
+${maskedPart ? 'uniform int u_geometryCode;uniform vec2 u_partGrid;'+spriteLOD : ''}
 uniform vec4 u_uvTransform, u_uvBounds;
+${paletteSampling ? `uniform float u_samplingScale;
+${samplingGLSL}` : ''}
 ${section ? cutaway : ''}
 ${environment?.media ? environmentMediaSource(environment.lit) : ''}
 ${lighting ? emitterGLSL : ''}
-${lighting ? 'uniform highp sampler2DArray u_surfaceLit;uniform int u_surfaceLightCount;in vec2 v_light;' : ''}
+${chart ? 'uniform highp sampler2DArray u_surfaceLit;uniform int u_surfaceLightCount;in vec2 v_light;' : ''}
+${normalMapped ? 'uniform highp sampler2D u_surfaceNormalMap;uniform bool u_hasSurfaceNormalMap;' : ''}
+${needsFrame ? 'uniform bool u_surfaceNormals;uniform vec3 u_surfaceEye;' : ''}
+${semantic ? semanticSource : ''}
+${rest?'in vec3 v_rest;':''}
+${marks?'flat in vec2 v_marks;':''}
+${simulation?simulationMaterialSource:''}
+${engraving ? `uniform float u_engravingArtScale;${surfaceEngravingFragment(print)}` : ''}
 in vec2 v_texel;
 in vec3 v_world;
 in float v_depth;
 in vec3 v_camera;
+${styledProjection ? 'uniform bool u_affine;uniform vec4 u_projectionBounds;in vec2 v_affine;' : ''}
 layout(location=0) out vec4 color;
 layout(location=1) out vec4 depth;
-layout(location=2) out vec4 water;
+${glassLayers && !wet ? 'vec4 water;' : 'layout(location=2) out vec4 water;'}
+${glassLayers ? glassSurfaceOutputs(wet) : ''}
+${needsFrame ? `
+vec3 surfaceNormal(vec3 normal,vec3 dx,vec3 dy,vec2 du,vec2 dv,vec4 map,bool continuous){
+  float det=du.x*dv.y-du.y*dv.x;
+  if(map.a<.5||abs(det)<=1e-5*length(du)*length(dv))return normal;
+  vec3 local=max(vec3(-127),(continuous?map.rgb*255.0:round(map.rgb*255.0))-128.0);
+  if(dot(local,local)==0.0)return normal;
+  vec3 tangent=normalize(dx*dv.y-dy*du.y)*sign(det);
+  vec3 bitangent=cross(normal,tangent);
+  // Positive map Y faces up the texture, opposite increasing row coordinates.
+  bitangent*=dot(bitangent,(dx*dv.x-dy*du.x)*sign(det))<0.0?-1.0:1.0;
+  return normalize(mat3(tangent,bitangent,normal)*local);
+}
+` : ''}
 void main(){
-  vec2 texel=u_uvSlip?clamp(v_texel*u_uvTransform.xy+u_uvTransform.zw,u_uvBounds.xy,u_uvBounds.zw):v_texel;
+  if(u_frontOnly&&!gl_FrontFacing)discard;
+  ${maskedPart ? 'if(!spriteGeometry(u_geometryCode,gl_FragCoord.xy*u_partGrid))discard;' : ''}
+  vec2 uv=${styledProjection ? 'u_affine?v_affine*gl_FragCoord.w:v_texel' : 'v_texel'};
+  vec2 rawTexel=u_uvSlip?uv*u_uvTransform.xy+u_uvTransform.zw:uv;
+  vec2 texel=u_uvSlip?clamp(rawTexel,u_uvBounds.xy,u_uvBounds.zw):rawTexel;
+  ${styledProjection ? 'if(u_affine&&!u_uvSlip)texel=clamp(texel,u_projectionBounds.xy,u_projectionBounds.zw);' : ''}
+  ${paletteSampling ? `
+  if(u_paletteSampling)texel=clamp(texel,u_sampleRegion.xy,u_sampleRegion.xy+u_sampleRegion.zw-1.0);
+  ` : ''}
   vec4 ink=texelFetch(u_atlas,ivec2(texel),0);
+  ${paletteSampling ? `
+  float q=gl_FragCoord.w;
+  vec2 numerator=v_texel*q;
+  vec2 scale=u_samplingScale*(u_uvSlip?u_uvTransform.xy:vec2(1.0));
+  vec2 dx=(dFdx(numerator)-v_texel*dFdx(q))*scale/q;
+  vec2 dy=(dFdy(numerator)-v_texel*dFdy(q))*scale/q;
+  ${styledProjection ? 'if(u_affine){dx=dFdx(uv)*scale;dy=dFdy(uv)*scale;}' : ''}
+  if(u_paletteSampling)ink=samplePalette(rawTexel,dx,dy,ink);
+  ` : ''}
+  ${semantic ? `
+  float semanticSpan=max(length(dFdx(rawTexel)),length(dFdy(rawTexel)))*u_semanticScale;
+  vec4 detail;
+  vec3 emission;
+  if(u_semanticOn){
+    vec2 coord=(rawTexel-u_semanticRect.xy-.5)/max(vec2(1),u_semanticRect.zw-1.);
+    semanticMaterial(coord,semanticSpan,ink,detail,emission);
+  }
+  ` : ''}
+  ${needsFrame ? `
+  // Use the surface UV frame even when affine sampling or snapping changes the lookup.
+  vec3 dpdx=dFdx(v_world),dpdy=dFdy(v_world);
+  vec3 geometricNormal=normalize(cross(dpdx,dpdy));
+  vec3 normalSight=${semantic ? 'u_semanticOn&&u_semanticOrtho?u_semanticBack:u_surfaceEye-v_world' : 'u_surfaceEye-v_world'};
+  if(dot(geometricNormal,normalSight)<0.0)geometricNormal=-geometricNormal;
+  vec2 scaleUV=u_uvSlip?u_uvTransform.xy:vec2(1);
+  vec2 uvDx=dFdx(v_texel)*scaleUV,uvDy=dFdy(v_texel)*scaleUV;
+  ` : ''}
+  ${simulation?'vec2 simUVx=dFdx(v_simUV),simUVy=dFdy(v_simUV);vec3 simRestX=dFdx(v_rest),simRestY=dFdy(v_rest);':''}
+  ${engraving ? 'vec3 restX=dFdx(v_rest),restY=dFdy(v_rest),worldX=dFdx(v_world),worldY=dFdy(v_world);vec2 texX=dFdx(v_texel),texY=dFdy(v_texel);' : ''}
   if(ink.a<.5||dot(u_arrivalPlane,vec4(v_world,1.0))<0.0||dot(u_splatPlane,vec4(v_camera,1.0))<0.0)discard;
   ${section ? 'float margin=sectionMargin(v_world,v_depth); if(margin<0.0)discard;' : ''}
+  ${anchors ? 'color=vec4(v_world,v_marks.x);depth=vec4(v_rest,1);return;' : ''}
+  if(u_filterMatte){color=vec4(vec3(u_filterSoftness),1);depth=vec4(0);water=vec4(0);return;}
   float d=clamp((v_depth-u_range.x)/(u_range.y-u_range.x),0.0,1.0);
   float fog=u_range.z<1.0?smoothstep(u_range.z,1.0,d)*u_range.w:0.0;
   vec3 mark=vec3(0.0), rgb=ink.rgb;
-  ${lighting ? 'if(!u_index){vec3 irradiance=vec3(0);for(int i=0;i<32;i++){if(i>=u_surfaceLightCount)break;irradiance+=texelFetch(u_surfaceLit,ivec3(ivec2(v_light),i),0).rgb;}rgb=eSRGB(min(vec3(1),eLinear(rgb)*(vec3(1)+irradiance)));}' : ''}
+  ${chart ? 'vec3 irradiance=vec3(0);for(int i=0;i<32;i++){if(i>=u_surfaceLightCount)break;irradiance+=texelFetch(u_surfaceLit,ivec3(ivec2(v_light),i),0).rgb;}rgb=eSRGB(min(vec3(1),eLinear(rgb)*(vec3(1)+irradiance)));' : ''}
+  ${needsFrame ? `
+  vec4 map=${normalMapped ? 'u_surfaceNormals&&u_hasSurfaceNormalMap?texelFetch(u_surfaceNormalMap,ivec2(texel),0):vec4(0)' : 'vec4(0)'};
+  ${semantic?'if(u_semanticOn)map=u_semanticNormals&&u_surfaceNormals?vec4(detail.rgb,1):vec4(0);':''}
+  vec3 normal=surfaceNormal(geometricNormal,dpdx,dpdy,uvDx,uvDy,map,${semantic?'u_semanticOn':'false'});
+  ` : ''}
+  ${semantic?'float sheen=u_semanticSpecular;':''}
+  ${simulation?`
+  if(u_semanticOn)simApply(v_simUV,v_rest,geometricNormal,simUVx,simUVy,simRestX,simRestY,dpdx,dpdy,rgb,detail.a,sheen,normal);
+  `:''}
+  ${normalMapped ? `
+  vec3 irradiance=eLighting(v_world,normal,false,vec3(0),geometricNormal);
+  rgb=eSRGB(min(vec3(1),eLinear(rgb)*(vec3(1)+irradiance)));
+  ` : ''}
+  ${semantic?'if(u_semanticOn&&!u_index)rgb=semanticFinish(rgb,normal,detail.a,sheen,emission,v_world);':''}
+  ${engraving ? `
+  if(v_marks.y>0.0){
+    vec3 restN=cross(restX,restY),liveN=cross(worldX,worldY);
+    if(length(restN)>1e-12&&length(liveN)>1e-12){
+      restN=normalize(restN);
+      float det=texX.x*texY.y-texX.y*texY.x;
+      vec3 tangent=abs(det)>1e-9 ? (restX*texY.y-restY*texX.y)*sign(det) :
+        cross(abs(restN.x)<.8?vec3(1,0,0):vec3(0,1,0),restN);
+      rgb=surfaceEngraving(int(v_marks.y),rgb,v_rest,restN,normalize(tangent),normalize(liveN),
+        max(length(restX),length(restY)),u_engravingArtScale,0.,vec3(0));
+    }
+  }` : ''}
   ${wet ? 'if(!u_index)rgb=waterPaint(rgb,gl_FragCoord.xy,u_surfaceViewport,v_depth,mark);' : ''}
   ${environment?.media ? 'if(!u_index)rgb=envMedia(rgb,gl_FragCoord.xy,u_surfaceViewport,v_depth);' : ''}
   rgb=mix(rgb,u_fog,fog);
   ${section ? 'rgb=mix(rgb,u_sectionEdge.rgb,sectionInk(margin));' : ''}
-  color=u_index?vec4(0.0):vec4(rgb,1.0);
+  color=u_index?vec4(float(u_portalCover)):vec4(rgb,1.0);
   depth=vec4(d,0.0,0.0,1.0);water=vec4(mark,1.0);
+  ${glassLayers ? 'splitOpaqueSurface(color,gl_FragCoord.z);' : ''}
+  if(u_index&&v_historyId>0){
+    depth=vec4(float(v_historyId&255),float((v_historyId>>8)&255),float(v_historyId>>16),255.)/255.;
+  }
   if(u_index&&u_graphDepth){float z=round(d*16777215.0);water=vec4(mod(z,256.0),mod(floor(z/256.0),256.0),floor(z/65536.0),255.0)/255.0;}
 }`
       );
@@ -93,6 +274,8 @@ void main(){
     gl.bindVertexArray(null);
     let active,
       activeVertices,
+      activeNormals,
+      normalTexture,
       revision = -1,
       geometryRevision = -1,
       width = 0,
@@ -111,6 +294,7 @@ void main(){
         revision === next &&
         geometryRevision === nextGeometry &&
         activeVertices === atlas.vertices &&
+        activeNormals === atlas.normalPixels &&
         width === atlas.width &&
         height === atlas.height
       )
@@ -125,6 +309,8 @@ void main(){
         atlas.height < 1 ||
         !(atlas.pixels instanceof Uint8Array) ||
         atlas.pixels.length !== atlas.width * atlas.height * 4 ||
+        (atlas.normalPixels !== undefined &&
+          (!(atlas.normalPixels instanceof Uint8Array) || atlas.normalPixels.length !== atlas.pixels.length)) ||
         !Number.isSafeInteger(next) ||
         next < 0 ||
         !Number.isSafeInteger(nextGeometry) ||
@@ -150,45 +336,47 @@ void main(){
         gl.bufferSubData(gl.ARRAY_BUFFER, first * 20, values);
         stats.geometryBytes = values.byteLength;
       }
-      gl.activeTexture(gl.TEXTURE0 + 6);
-      gl.bindTexture(gl.TEXTURE_2D, texture);
-      if (replace) {
-        gl.texImage2D(
-          gl.TEXTURE_2D,
-          0,
-          gl.RGBA8,
-          atlas.width,
-          atlas.height,
-          0,
-          gl.RGBA,
-          gl.UNSIGNED_BYTE,
-          atlas.pixels
-        );
-        stats.textureBytes = atlas.pixels.byteLength;
-      } else if (revision !== next) {
+      let x = 0, y = 0, w = atlas.width, h = atlas.height;
+      if (!replace && revision !== next) {
         const changes = updatesSince?.(atlas, revision);
-        let x = 0,
-          y = 0,
-          w = atlas.width,
-          h = atlas.height;
         if (changes?.length) {
           x = Math.min(...changes.map(r => r.x));
           y = Math.min(...changes.map(r => r.y));
           w = Math.max(...changes.map(r => r.x + r.width)) - x;
           h = Math.max(...changes.map(r => r.y + r.height)) - y;
         }
+      }
+      function uploadPixels(data, full) {
+        if (full) {
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, atlas.width, atlas.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+          stats.textureBytes += data.byteLength;
+          return;
+        }
         const bytes = w * h * 4;
         if (staging.length < bytes) staging = new Uint8Array(bytes);
         for (let row = 0; row < h; row++)
           staging.set(
-            atlas.pixels.subarray(((y + row) * atlas.width + x) * 4, ((y + row) * atlas.width + x + w) * 4),
+            data.subarray(((y + row) * atlas.width + x) * 4, ((y + row) * atlas.width + x + w) * 4),
             row * w * 4
           );
         gl.texSubImage2D(gl.TEXTURE_2D, 0, x, y, w, h, gl.RGBA, gl.UNSIGNED_BYTE, staging.subarray(0, bytes));
-        stats.textureBytes = bytes;
+        stats.textureBytes += bytes;
+      }
+      gl.activeTexture(gl.TEXTURE0 + 6);
+      if (replace || revision !== next) {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        uploadPixels(atlas.pixels, replace);
+      }
+      const newNormals = activeNormals !== atlas.normalPixels;
+      if (atlas.normalPixels && (replace || newNormals || revision !== next)) {
+        gl.activeTexture(gl.TEXTURE0 + 24);
+        normalTexture ??= resources.texture();
+        gl.bindTexture(gl.TEXTURE_2D, normalTexture);
+        uploadPixels(atlas.normalPixels, replace || newNormals);
       }
       active = atlas;
       activeVertices = atlas.vertices;
+      activeNormals = atlas.normalPixels;
       revision = next;
       geometryRevision = nextGeometry;
       width = atlas.width;
@@ -221,6 +409,37 @@ void main(){
       gl.vertexAttribDivisor(i, 1);
     }
     gl.bindVertexArray(null);
+    let markBuffer, activeMarkAtlas, markSignature, markRevision;
+    function bindMarks(atlas,anchors,engraving,simulation) {
+      const signature=(anchors?.key??'')+'|'+(engraving?.key??'')+'|'+Number(simulation), rev=atlas.geometryRevision??0;
+      const charts=atlas.surfaceCharts??[];
+      const needsRevision=!atlas.sceneMeshId || charts.some(chart=>!chart.rest);
+      if(markBuffer && activeMarkAtlas===atlas && markSignature===signature && (!needsRevision || rev===markRevision))return;
+      const count=atlas.vertices.length/5,stride=simulation?7:5,data=new Float32Array(count*stride);
+      let cursor=0;
+      for(let i=0;i<count;i++){
+        while(charts[cursor]?.end<=i)cursor++;
+        const chart=charts[cursor]?.first<=i ? charts[cursor] : undefined;
+        const j=(i-(chart?.first??0))*3;
+        const at=i*stride;
+        data.set(chart?.rest?.subarray(j,j+3)??atlas.vertices.subarray(i*5,i*5+3),at);
+        data[at+3]=anchors?.select(chart?.objectId,chart?.materialId)??0;
+        data[at+4]=engraving?.mesh(chart)??0;
+        if(simulation&&chart){
+          const {x,y,width,height}=chart.region, k=(i-chart.first)*2;
+          data[at+5]=chart.uv?.[k]??(atlas.vertices[i*5+3]-x-.5)/Math.max(1,width-1);
+          data[at+6]=chart.uv?.[k+1]??(atlas.vertices[i*5+4]-y-.5)/Math.max(1,height-1);
+        }
+      }
+      markBuffer??=resources.allocate('Buffer');
+      gl.bindVertexArray(vao);
+      gl.bindBuffer(gl.ARRAY_BUFFER,markBuffer);
+      gl.bufferData(gl.ARRAY_BUFFER,data,needsRevision ? gl.DYNAMIC_DRAW : gl.STATIC_DRAW);
+      gl.vertexAttribPointer(3,3,gl.FLOAT,false,stride*4,0);
+      gl.vertexAttribPointer(4,2,gl.FLOAT,false,stride*4,12);
+      if(simulation)gl.vertexAttribPointer(5,2,gl.FLOAT,false,stride*4,20);
+      activeMarkAtlas=atlas;markSignature=signature;markRevision=rev;
+    }
     function shadeAtlas(atlas, lighting, view) {
       const resolution = lighting.frame.emitterSurfaceResolution ?? 16;
       if (!Number.isSafeInteger(resolution) || resolution < 4 || resolution > 64)
@@ -250,9 +469,7 @@ void main(){
         lightGeometry = atlas.vertices;
         lightRevision = atlas.geometryRevision ?? 0;
       }
-      const eye = [0, 1, 2].map(
-        k => -(view[k * 4] * view[12] + view[k * 4 + 1] * view[13] + view[k * 4 + 2] * view[14])
-      );
+      const eye = eyeFromView(view);
       let side = 0;
       for (let i = 0; i < lightPositions.length; i += 9) {
         const a = lightPositions.subarray(i, i + 3),
@@ -261,7 +478,7 @@ void main(){
           n = [u[1] * v[2] - u[2] * v[1], u[2] * v[0] - u[0] * v[2], u[0] * v[1] - u[1] * v[0]];
         side = (Math.imul(side, 31) + (n.reduce((s, v, k) => s + v * (eye[k] - a[k]), 0) < 0 ? 1 : 0)) | 0;
       }
-      const key = [lightGeometry, lightRevision, lighting.shadow, resolution];
+      const key = [lightGeometry, lightRevision, lighting.shadow, lighting.cutoutRevision, resolution];
       const same = (a, b) => a?.length === b.length && b.every((v, i) => v === a[i]);
       if (same(lightKey, key) && same(lightRows, lighting.rows) && side === lastSide) {
         gl.activeTexture(gl.TEXTURE0 + 24);
@@ -338,6 +555,51 @@ in vec3 v_world;flat in vec3 v_normal;out vec4 color;void main(){color=vec4(eLig
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, lightCount);
       }
     }
+    const integralTextures = new Map();
+    const prefixUnits = [1, 2];
+    function bindFilter(filter) {
+      let entry = integralTextures.get(filter);
+      if (!entry) {
+        const { width, height } = filter.rect;
+        function upload(unit, data) {
+          gl.activeTexture(gl.TEXTURE0 + unit);
+          const table = resources.texture();
+          gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32UI, width + 1, height + 1, 0, gl.RGBA_INTEGER, gl.UNSIGNED_INT, data);
+          stats.textureBytes += data.byteLength;
+          return table;
+        }
+        const totals = upload(prefixUnits[0], filter.totals);
+        const accents = filter.accents ? upload(prefixUnits[1], filter.accents) : totals;
+        entry = [totals, accents];
+        integralTextures.set(filter, entry);
+      }
+      for (let i = 0; i < prefixUnits.length; i++) {
+        gl.activeTexture(gl.TEXTURE0 + prefixUnits[i]);
+        gl.bindTexture(gl.TEXTURE_2D, entry[i]);
+      }
+    }
+
+    const semanticUnit=5, semanticTextures=new Map(), simulationUnit=11;
+    const masks=simulationMasks(gl,resources,simulationUnit);
+    let semanticOwner;
+    function bindSemantic(chain){
+      gl.activeTexture(gl.TEXTURE0+semanticUnit);
+      let texture=semanticTextures.get(chain);
+      if(texture){
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY,texture);
+        return;
+      }
+      texture=resources.allocate('Texture');
+      semanticTextures.set(chain,texture);
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY,texture);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY,gl.TEXTURE_MIN_FILTER,gl.NEAREST_MIPMAP_NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY,gl.TEXTURE_MAG_FILTER,gl.NEAREST);
+      gl.texParameteri(gl.TEXTURE_2D_ARRAY,gl.TEXTURE_MAX_LEVEL,chain.levels.length-1);
+      for(const [lod,{width,height,rgba}] of chain.levels.entries()){
+        gl.texImage3D(gl.TEXTURE_2D_ARRAY,lod,gl.RGBA8,width,height,3,0,gl.RGBA,gl.UNSIGNED_BYTE,rgba);
+        stats.textureBytes+=rgba.byteLength;
+      }
+    }
     function draw(
       atlas,
       {
@@ -349,17 +611,51 @@ in vec3 v_world;flat in vec3 v_normal;out vec4 color;void main(){color=vec4(eLig
         fog,
         index = false,
         graphDepth = false,
+        glassLayers = false,
+        portalCover = false,
         arrivalPlane = [0, 0, 0, 0],
         clip = [0, 0, 0, 0],
         water,
         wet,
         width = 1,
         height = 1,
-        section
+        paletteSampling,
+        surfaceNormals = true,
+        semanticMipmaps = true, simulationLayers, eye, back=[0,0,1], ortho,
+        samplingScale = 1,
+        geometryCode = 0,
+        partGrid = [1,1],
+        section, anchors, engraving, coverageFilter, historyFirst = 0
       }
     ) {
       upload(atlas);
-      if (lighting?.active && !index) {
+      const semantic=atlas.semanticMipmaps;
+      const firstSimulation=!index&&!coverageFilter&&semantic?.find(row=>simulationLayers?.get(row.simulation)?.active);
+      const simulation=Boolean(firstSimulation);
+      masks.start(atlas);
+      if(semanticOwner!==atlas){
+        for(const texture of semanticTextures.values())resources.free(texture);
+        semanticTextures.clear();
+        semanticOwner=atlas;
+      }
+      if (paletteSampling !== false && atlas.paletteSampling !== undefined && (!samplingPlan || !samplingGLSL))
+        throw new TypeError('Palette-filtered surfaces need SpriteSurface.samplingPlan and samplingGLSL');
+      if (atlas.projectionRanges !== undefined && !projectionPlan)
+        throw new TypeError('Styled surface projection needs SpriteSurface.projectionPlan');
+      const projections = projectionPlan?.(atlas) ?? [];
+      const rangesWithFilters = paletteSampling === false ? null : samplingPlan?.(atlas);
+      const filters = new Set((rangesWithFilters ?? []).map(range => range.filter).filter(Boolean));
+      for (const [filter, entry] of integralTextures) if (!filters.has(filter)) {
+        for (const table of new Set(entry)) resources.free(table);
+        integralTextures.delete(filter);
+      }
+      const useSampling = filters.size > 0;
+      const lit = Boolean(lighting?.active && !index && !coverageFilter);
+      const normalMapped = lit && Boolean(atlas.normalPixels||simulation);
+      if (normalMapped) {
+        gl.activeTexture(gl.TEXTURE0 + 24);
+        gl.bindTexture(gl.TEXTURE_2D, atlas.normalPixels?normalTexture:texture);
+      } else if (lit) {
         const framebuffer = gl.getParameter(gl.DRAW_FRAMEBUFFER_BINDING),
           viewport = gl.getParameter(gl.VIEWPORT),
           blend = gl.isEnabled(gl.BLEND),
@@ -374,7 +670,11 @@ in vec3 v_world;flat in vec3 v_normal;out vec4 color;void main(){color=vec4(eLig
       }
       gl.activeTexture(gl.TEXTURE0 + 6);
       gl.bindTexture(gl.TEXTURE_2D, texture);
-      const shader = shaderFor(wet, section, !index && lighting?.active, environment);
+      const etched=!coverageFilter && !index && engraving && atlas.surfaceCharts?.some(chart=>engraving.mesh(chart)) ? engraving : null;
+      if(etched || anchors || simulation)bindMarks(atlas,anchors,etched,simulation);
+      if(etched)etched.bind();
+      const shader = shaderFor(wet, section, lit, normalMapped, environment, useSampling, projections.length > 0, Boolean(geometryCode), glassLayers,
+        !!anchors,!!etched,!!semantic,simulation);
       gl.useProgram(shader.p);
       shader.set({
         u_view: view,
@@ -382,21 +682,130 @@ in vec3 v_world;flat in vec3 v_normal;out vec4 color;void main(){color=vec4(eLig
         u_range: range,
         u_fog: fog,
         u_atlas: 6,
+        u_frontOnly: Boolean(atlas.frontOnly),
+        ...(useSampling && { u_sampleTotals: prefixUnits[0], u_sampleAccents: prefixUnits[1], u_samplingScale: samplingScale }),
         u_surfaceLightCount: lighting?.count ?? 0,
         u_surfaceLit: 24,
+        ...(normalMapped && {u_surfaceNormalMap:24,u_hasSurfaceNormalMap:!!atlas.normalPixels}),
+        ...((normalMapped||semantic)&&{u_surfaceNormals:surfaceNormals,u_surfaceEye:eye??eyeFromView(view)}),
+        ...(semantic&&{u_semanticAtlas:semanticUnit,u_semanticLevels:semanticMipmaps!==false,u_semanticScale:samplingScale,
+          u_semanticEye:eye??eyeFromView(view),u_semanticBack:back,u_semanticOrtho:!!ortho}),
+        ...(simulation&&{u_simMasks:simulationUnit}),
         u_index: +index,
+        u_historyFirst:historyFirst,
+        u_filterMatte: !!coverageFilter,
+        u_glassBoundary: 13,
         u_graphDepth: graphDepth,
+        u_portalCover: portalCover,
         u_arrivalPlane: arrivalPlane,
         u_splatPlane: clip,
         u_surfaceViewport: [width, height],
+        u_geometryCode: geometryCode, u_partGrid: partGrid,
+        ...(etched && {...etched.uniforms,u_engravingArtScale:samplingScale}),
         ...water,
         ...section,
         ...environment?.uniforms,
         ...lighting?.uniforms
       });
+      if(semantic)bindSemantic(semantic[0].chain);
+      let previousMask;
+      if(simulation){
+        gl.activeTexture(gl.TEXTURE0+simulationUnit);
+        previousMask=gl.getParameter(gl.TEXTURE_BINDING_2D);
+        const plan=firstSimulation.simulation;
+        masks.bind(plan,simulationLayers.get(plan),surfaceNormals);
+      }
+      const restoreMask=()=>{
+        if(simulation){
+          gl.activeTexture(gl.TEXTURE0+simulationUnit);
+          gl.bindTexture(gl.TEXTURE_2D,previousMask);
+        }
+      };
       gl.bindVertexArray(vao);
-      if (!index && lighting?.active) gl.enableVertexAttribArray(2);
+      for(const [i,on] of [[3,etched||anchors||simulation],[4,etched||anchors],[5,simulation]])
+        if(on)gl.enableVertexAttribArray(i);else gl.disableVertexAttribArray(i);
+      if (lit && !normalMapped) gl.enableVertexAttribArray(2);
       else gl.disableVertexAttribArray(2);
+      let projectionIndex = 0;
+      function drawProjected(first, end) {
+        if (!projections.length) {
+          gl.drawArrays(gl.TRIANGLES, first, end - first);
+          return;
+        }
+        while (first < end) {
+          while (projections[projectionIndex]?.end <= first) projectionIndex++;
+          const next = projections[projectionIndex], style = next?.first <= first ? next : null;
+          const stop = Math.min(end, (style ? style.end : next?.first) ?? end);
+          shader.set({ u_affine: style?.affine ?? false, u_vertexSnap: (style?.vertexSnap ?? 0) * samplingScale,
+            ...(style?.affine && { u_projectionBounds: style.bounds }) });
+          gl.drawArrays(gl.TRIANGLES, first, stop - first);
+          first = stop;
+        }
+      }
+      let chartIndex = 0, semanticIndex=0;
+      function drawRange(first, end) {
+        if(!coverageFilter && !semantic){
+          drawProjected(first,end);
+          return;
+        }
+        const charts=coverageFilter ? atlas.surfaceCharts??[] : [];
+        while(first<end){
+          while(charts[chartIndex]?.end<=first)chartIndex++;
+          while(semantic?.[semanticIndex]?.end<=first)semanticIndex++;
+          const next=charts[chartIndex], chart=next?.first<=first?next:null;
+          const candidate=semantic?.[semanticIndex], mip=candidate?.first<=first?candidate:null;
+          const stop=Math.min(end,(chart?chart.end:next?.first)??end,(mip?mip.end:candidate?.first)??end);
+          if(coverageFilter)shader.set({u_filterSoftness:coverageFilter.at(chart?.materialId)});
+          if(mip){
+            const {chain,region:r}=mip;
+            bindSemantic(chain);
+            shader.set({u_semanticOn:true,u_semanticRect:[r.x,r.y,r.width,r.height],u_semanticMax:chain.levels.length-1,
+              u_semanticStrength:chain.emissionStrength,u_semanticLight:chain.rule.light,
+              u_semanticSpecular:chain.rule.specular,u_semanticAmbient:chain.rule.ambient,u_semanticNormals:chain.normal});
+          } else if(semantic)shader.set({u_semanticOn:false});
+          if(simulation){
+            const plan=mip?.simulation, state=simulationLayers.get(plan);
+            shader.set(state?.active?masks.bind(plan,state,surfaceNormals):{u_simCount:0});
+          }
+          drawProjected(first,stop);
+          first=stop;
+        }
+      }
+      if (useSampling) {
+        const previous = prefixUnits.map(unit => {
+          gl.activeTexture(gl.TEXTURE0 + unit);
+          return gl.getParameter(gl.TEXTURE_BINDING_2D);
+        });
+        try {
+          let bound = filters.values().next().value;
+          bindFilter(bound);
+          for (const { first, end, shift, filter } of rangesWithFilters) {
+            if (filter && filter !== bound) {
+              bindFilter(filter);
+              bound = filter;
+            }
+            shader.set({
+              u_uvSlip: Boolean(shift), ...(shift && { u_uvTransform: shift.transform, u_uvBounds: shift.bounds }),
+              u_paletteSampling: Boolean(filter),
+              ...(filter && { u_sampleRegion: [filter.rect.x, filter.rect.y, filter.rect.width, filter.rect.height],
+                u_sampleRule: [filter.rule.alphaCoverage, filter.rule.protectCoverage, filter.rule.tieTolerance],
+                u_sampleCount: filter.colors.length,
+                ...(filter.swatches.length && { u_sampleSwatches: filter.swatches }),
+                u_protectCount: filter.rule.protect.length,
+                ...(filter.highlights.length && { u_sampleProtected: filter.highlights }) })
+            });
+            drawRange(first, end);
+          }
+        } finally {
+          for (let i = 0; i < prefixUnits.length; i++) {
+            gl.activeTexture(gl.TEXTURE0 + prefixUnits[i]);
+            gl.bindTexture(gl.TEXTURE_2D, previous[i]);
+          }
+          restoreMask();
+          gl.activeTexture(gl.TEXTURE0);
+        }
+        return;
+      }
       const plan = atlas[uvSlip];
       const ranges = plan?.vertices === atlas.vertices && plan.width === atlas.width && plan.height === atlas.height
         ? plan.ranges : [];
@@ -404,17 +813,18 @@ in vec3 v_world;flat in vec3 v_normal;out vec4 color;void main(){color=vec4(eLig
       for (const { first: start, end, transform, bounds } of ranges) {
         if (start > first) {
           shader.set({ u_uvSlip: false });
-          gl.drawArrays(gl.TRIANGLES, first, start - first);
+          drawRange(first, start);
         }
         shader.set({ u_uvSlip: true, u_uvTransform: transform, u_uvBounds: bounds });
-        gl.drawArrays(gl.TRIANGLES, start, end - start);
+        drawRange(start, end);
         first = end;
       }
       const count = active.vertices.length / 5;
       if (first < count) {
         shader.set({ u_uvSlip: false });
-        gl.drawArrays(gl.TRIANGLES, first, count - first);
+        drawRange(first, count);
       }
+      restoreMask();
       gl.activeTexture(gl.TEXTURE0);
     }
     return {

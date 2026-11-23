@@ -115,6 +115,32 @@
     return edits.length?W.apply(value,edits,{validate:null}).world:value;
   }
 
+  function rebaseCrossings(saved,next,initialized,forward,sameType,report) {
+    const {historyKey} = W.signalCrossings, sources = new Map(), {subdivision} = initialized.rates();
+    for (const {from,crossing} of initialized.composition().connections) if (crossing) {
+      const length = Math.min(crossing.historySlots,Math.floor(saved.tick*subdivision/crossing.sourceStride));
+      sources.set(from,Math.max(sources.get(from)??0,length));
+    }
+    const prior = new Map(), cadence = (world,name) => {
+      const {every=1,substeps=1} = world.systems[name].schedule??{};
+      return every/substeps;
+    };
+    for (const [port,row] of Object.entries(saved.sampling?.[historyKey]??{})) {
+      const target = forward(port);
+      if (sources.has(target) && sameType(port,target) &&
+        cadence(saved.world,endpoint(port)[0])===cadence(next.world,endpoint(target)[0])) prior.set(target,row);
+    }
+    return Object.fromEntries(Array.from(sources,([port,count])=>{
+      const row = prior.get(port), values = row ? row.values.slice(row.values.length-Math.min(count,row.values.length)) : [];
+      const causes = row?.causes?.slice(row.causes.length-values.length)??[];
+      const missing = count-values.length, initial = row?.initial??next.outputs[port];
+      if (!row || missing) report.state.push({to:port,status:'crossing-history-rebased'});
+      return [port,{initial,values:Array(missing).fill(values[0]??initial).concat(values),
+        ...(saved.causality && {initialCause:row?.initialCause??'omitted',
+          causes:Array(missing).fill('omitted').concat(causes)})}];
+    }));
+  }
+
   function checkpoint(saved,world,migration,h){
     const R=W.runtime,{options,report}=h;
     check(saved.world.id===world.id&&saved.world.dt===world.dt&&saved.world.seed===world.seed,
@@ -201,7 +227,7 @@
     next.outputs=migrate(saved.outputs,defaults.outputs,forward,sameType(before.ports.outputs,after.ports.outputs));
     next.signals=migrate(saved.signals,defaults.signals,forward,sameType(all(before.ports),all(after.ports)));
     const edgeMap=source=>new Map(source.connections.map(edge=>[portOf(source,edge.to),
-      {from:portOf(source,edge.from),delay:edge.delay??0,sample:edge.sample??null}]));
+      {from:portOf(source,edge.from),delay:edge.delay??0,sample:edge.sample??null,signal:edge.signal??null,filter:edge.filter??null}]));
     const oldEdges=edgeMap(saved.world), newEdges=edgeMap(world);
     function compatibleRoute(key,mapped){
       const left=oldEdges.get(key), right=newEdges.get(mapped);
@@ -228,7 +254,8 @@
 
     if(defaults.sampling){
       const {subdivision,systems}=initialized.rates();
-      const selected=migrate(saved.sampling,defaults.sampling,forward,(key,mapped)=>
+      const {historyKey} = W.signalCrossings;
+      const selected=migrate(saved.sampling,defaults.sampling,key=>key===historyKey?null:forward(key),(key,mapped)=>
         compatibleRoute(key,mapped)&&sameType(before.ports.inputs,after.ports.inputs)(key,mapped));
       for(const [port,row] of Object.entries(selected))if(record(row)&&own(row,'quanta')){
         const [name]=endpoint(port), clock=next.simulationChunks?.clocks[name];
@@ -239,6 +266,8 @@
           report.state.push({to:port,status:'sampling-rebased'});
         }
       }
+      if (own(defaults.sampling,historyKey)) selected[historyKey] = rebaseCrossings(saved,next,initialized,forward,
+        sameType(before.ports.outputs,after.ports.outputs),report);
       next.sampling=selected;
     }else delete next.sampling;
     for(const [key,row] of Object.entries(next.delays))if(row===defaults.delays[key])

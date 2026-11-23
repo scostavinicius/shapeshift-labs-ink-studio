@@ -1,0 +1,50 @@
+{
+  "format": "ink-studio/simulation-model",
+  "version": 1,
+  "id": "metered-reservoir",
+  "revision": 1,
+  "seed": 23,
+  "numerics": { "dt": 0.05 },
+  "domain": {
+    "nodes": {
+      "supply": { "capacity": 1, "initial": 0.62, "area": 1, "precharge": 2.5 },
+      "receiver": { "capacity": 1, "initial": 0.08, "area": 1 }
+    }
+  },
+  "parameters": { "valveGain": 0.6 },
+  "parameterSchema": {
+    "valveGain": { "type": "number", "min": 0, "max": 1, "description": "Maximum opening at full command." }
+  },
+  "initial": {},
+  "boundaries": {},
+  "modules": { "valve": { "file": "valve.json", "revision": 1 } },
+  "instances": { "controller": { "module": "valve", "drive": ["opening"], "parameters": { "gain": { "$model": "/parameters/valveGain" } } } },
+  "operators": {
+    "pipe": {
+      "kind": "pipe-network",
+      "revision": 1,
+      "config": {
+        "nodes": { "$model": "/domain/nodes" },
+        "pipes": { "fill": { "from": "supply", "to": "receiver", "conductance": 0.14, "opening": 0 } }
+      },
+      "portQuantities": {
+        "inputs": { "valve.fill": { "unit": "1", "kind": "valve-opening" } },
+        "outputs": {
+          "flow.fill": { "unit": "world^3/s", "kind": "volume-flow", "positive": "into-receiver" },
+          "volume.supply": { "unit": "world^3", "kind": "volume" },
+          "volume.receiver": { "unit": "world^3", "kind": "volume" }
+        }
+      }
+    }
+  },
+  "connections": [{ "from": "controller/valve", "to": "pipe/valve.fill" }],
+  "inputs": { "opening": "controller/opening" },
+  "outputs": {
+    "valve": "controller/valve",
+    "flow": "pipe/flow.fill",
+    "supply": "pipe/volume.supply",
+    "receiver": "pipe/volume.receiver"
+  },
+  "commands": [{ "tick": 1, "input": "opening", "value": 1 }],
+  "probes": { "balance": { "field": "pipe/mass" } }
+}

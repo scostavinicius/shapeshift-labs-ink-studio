@@ -1,0 +1,21 @@
+{
+  "format": "ink-studio/world",
+  "version": 1,
+  "id": "signal-crossing-bench",
+  "dt": 0.016666666666666666,
+  "systems": {
+    "wave": { "kind": "crossing-source", "config": { "tone": true }, "schedule": { "substeps": 4 } },
+    "ramp": { "kind": "crossing-source" },
+    "meter": { "kind": "crossing-meter", "schedule": { "every": 3 },
+      "config": { "channels": ["plain", "filtered"] } },
+    "scope": { "kind": "crossing-meter", "schedule": { "substeps": 4 },
+      "config": { "channels": ["held", "linear", "delayed"] } }
+  },
+  "connections": [
+    { "from": "wave/value", "to": "meter/plain", "signal": "instantaneous", "sample": "hold" },
+    { "from": "wave/value", "to": "meter/filtered", "signal": "instantaneous", "sample": "decimate" },
+    { "from": "ramp/value", "to": "scope/held", "signal": "instantaneous", "sample": "hold" },
+    { "from": "ramp/value", "to": "scope/linear", "signal": "instantaneous", "sample": "interpolate" },
+    { "from": "wave/value", "to": "scope/delayed", "signal": "instantaneous", "sample": "fractional-delay", "delay": 0.375 }
+  ]
+}

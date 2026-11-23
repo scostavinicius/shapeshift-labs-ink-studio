@@ -1,0 +1,29 @@
+{
+  "format": "ink-studio/simulation-model",
+  "version": 1,
+  "id": "valve-controller",
+  "revision": 1,
+  "seed": 11,
+  "numerics": { "dt": 0.05 },
+  "domain": {},
+  "parameters": { "gain": 1 },
+  "parameterSchema": {
+    "gain": { "type": "number", "min": 0, "max": 1, "description": "Fraction of the requested valve opening." }
+  },
+  "initial": {},
+  "boundaries": {},
+  "operators": {
+    "gain": {
+      "kind": "control",
+      "revision": 1,
+      "config": { "op": "scale", "scale": { "$model": "/parameters/gain" } },
+      "portQuantities": {
+        "inputs": { "value": { "unit": "1", "kind": "valve-opening" } },
+        "outputs": { "value": { "unit": "1", "kind": "valve-opening" } }
+      }
+    }
+  },
+  "inputs": { "opening": "gain/value" },
+  "outputs": { "valve": "gain/value" },
+  "probes": {}
+}

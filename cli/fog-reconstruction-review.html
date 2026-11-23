@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Fog reconstruction · Ink Studio</title>
+<style>
+:root {color-scheme:dark;--bg:#112028;--surface:#1b3036;--line:#39545a;--ink:#f3ead9;--muted:#b4c5c5;--mint:#a6e1d0;--warm:#eaba88}
+* {box-sizing:border-box}
+body {margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,sans-serif}
+main {max-width:1240px;margin:auto;padding:clamp(18px,4vw,54px)}
+header {display:flex;flex-wrap:wrap;align-items:end;justify-content:space-between;gap:14px;margin-bottom:24px}
+header p {color:var(--mint);font:600 .78rem/1.4 ui-monospace,monospace;letter-spacing:.11em;text-transform:uppercase;margin:0}
+h1 {font:500 clamp(2.2rem,5.8vw,4.25rem)/.98 Georgia,serif;letter-spacing:-.037em;margin:10px 0 0}
+a {color:var(--mint);text-underline-offset:4px}
+.controls {display:flex;flex-wrap:wrap;align-items:center;gap:9px 14px;margin:0 0 17px}
+button {font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:7px 12px;cursor:pointer}
+button[aria-pressed="true"] {background:var(--mint);color:#132226;border-color:var(--mint)}
+button:disabled {cursor:default;opacity:.5}
+input {accent-color:var(--mint)}
+input[type="range"] {width:clamp(100px,22vw,245px);margin:0}
+output {font:600 .89rem/1.4 ui-monospace,monospace;min-width:6ch}
+.check {display:flex;align-items:center;gap:6px;color:var(--muted)}
+:focus-visible {outline:2px solid var(--warm);outline-offset:3px}
+#panels {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+figure {background:var(--surface);border:1px solid var(--line);border-radius:6px;margin:0;overflow:hidden}
+figure:nth-child(2) {border-color:#7eb7aa}
+figcaption {padding:9px 12px;font-size:.89rem;color:var(--muted)}
+figure:nth-child(2) figcaption {color:var(--mint)}
+canvas {display:block;width:100%;height:auto;background:#233342;image-rendering:pixelated}
+.detail {display:flex;flex-wrap:wrap;justify-content:space-between;gap:4px 8px;padding:9px 12px;color:var(--muted);font:600 .77rem/1.35 ui-monospace,monospace}
+#summary {color:var(--muted);margin:16px 0 0}
+[hidden] {display:none!important}
+@media(max-width:710px) {#panels {grid-template-columns:1fr} figcaption,.detail {padding:7px 10px} }
+</style>
+</head>
+<body><main>
+<header><div><p>Ink Studio / Fog reconstruction</p><h1 id="title"></h1></div>
+<a id="report" download="review.json">Download ray counts and edge measurements</a></header>
+<div class="controls">
+  <button id="play" type="button" aria-label="Play comparison">Play</button>
+  <input type="range" id="seek" min="0" value="0" step="1" aria-label="Comparison frame">
+  <output id="time" for="seek"></output>
+  <button id="zoom" type="button" aria-pressed="false">Close-up</button>
+  <label class="check"><input id="mark" type="checkbox">Mark corrected edge pixels</label>
+</div>
+<section id="panels" aria-label="Synchronized fog comparison"></section>
+<p id="summary"></p>
+</main>
+<script>
+const data=/*FOG_REVIEW_DATA*/;
+const {report,pictures}=data;
+const byId=id=>document.getElementById(id);
+const play=byId('play'), seek=byId('seek'), zoom=byId('zoom'), mark=byId('mark');
+const labels={depth:'Depth only',object:'Object-guided',native:'Full resolution'};
+const views={};
+for (const [id,label] of Object.entries(labels)) {
+  const figure=document.createElement('figure'), caption=document.createElement('figcaption'), canvas=document.createElement('canvas');
+  const metrics=document.createElement('div'), rays=document.createElement('span'), error=document.createElement('span');
+  caption.textContent=label+(id==='native' ? ' reference' : ' · '+report.scale+'× coarser');
+  canvas.setAttribute('role','img'); canvas.setAttribute('aria-label',caption.textContent);
+  canvas.width=report.width; canvas.height=report.height;
+  metrics.className='detail'; metrics.append(rays,error);
+  figure.append(caption,canvas,metrics); byId('panels').append(figure);
+  views[id]={canvas,rays,error};
+}
+const best=report.samples.reduce((a,b)=>b.correctedPixels>a.correctedPixels?b:a);
+let frame=best.frame, closer=Boolean(best.crop), timer=null, revision=0;
+const images=pictures.map(()=>new Map());
+seek.max=String(pictures.length-1);
+mark.checked=false;
+zoom.hidden=!report.subject;
+byId('title').textContent=report.title;
+document.title=report.title+' · Ink Studio fog comparison';
+byId('report').href=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)+'\n'],{type:'application/json'}));
+function load(i,id) {
+  if (!images[i].has(id)) {
+    const image=new Image(); image.src=pictures[i][id];
+    images[i].set(id,image.decode().then(()=>image));
+  }
+  return images[i].get(id);
+}
+async function update() {
+  const i=frame, token=++revision, sample=report.samples[i], useMark=mark.checked;
+  const {x,y,w,h}=closer&&sample.crop ? sample.crop : {x:0,y:0,w:report.width,h:report.height};
+  seek.value=String(i);
+  byId('time').value=sample.time.toFixed(2)+' s';
+  zoom.setAttribute('aria-pressed',String(closer));
+  zoom.disabled=!sample.crop;
+  const entries=Object.entries(views);
+  const [layers,overlay]=await Promise.all([Promise.all(entries.map(([id])=>load(i,id))),useMark?load(i,'mark'):null]);
+  if (token!==revision) return;
+  for (const [k,[id,view]] of entries.entries()) {
+    view.canvas.width=w; view.canvas.height=h;
+    const ctx=view.canvas.getContext('2d'); ctx.imageSmoothingEnabled=false;
+    ctx.drawImage(layers[k],x,y,w,h,0,0,w,h);
+    if(id==='depth'&&overlay) ctx.drawImage(overlay,x,y,w,h,0,0,w,h);
+    const rays=sample.renderStats[id].rays, reference=sample.renderStats.native.rays;
+    view.rays.textContent=rays.toLocaleString()+' rays';
+    view.error.textContent=id==='native' ? report.width+' × '+report.height+' art pixels' :
+      ((id==='depth'?sample.depthError:sample.objectError)*100).toFixed(1)+'% mean edge fog error';
+    if(id==='object') byId('summary').textContent=sample.correctedPixels.toLocaleString()+
+      ' outline pixels corrected · '+Math.round(100*(1-rays/reference))+'% fewer fog rays than full resolution';
+  }
+}
+function stop() {
+  if(timer!==null) clearInterval(timer);
+  timer=null; play.textContent='Play'; play.setAttribute('aria-label','Play comparison');
+}
+seek.addEventListener('input',()=>{stop();frame=Number(seek.value);update();});
+zoom.addEventListener('click',()=>{closer=!closer;update();});
+mark.addEventListener('change',update);
+play.addEventListener('click',()=>{
+  if(timer!==null) {stop();return;}
+  play.textContent='Pause'; play.setAttribute('aria-label','Pause comparison');
+  timer=setInterval(()=>{frame=(frame+1)%pictures.length;update();},1000/report.fps);
+});
+update();
+</script>
+</body></html>

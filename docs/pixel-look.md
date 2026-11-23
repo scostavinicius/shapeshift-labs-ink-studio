@@ -5,6 +5,7 @@ Use [continuous splat coverage](continuous-splat-coverage.md) to reduce gaps in 
 Use [stable detail levels](stable-detail.md) to fade small texture, geometry, and highlight details at export resolution.
 
 Use [selective edge filtering](edge-filter.md) to antialias named objects or materials at the native art grid.
+Use [motional pixel coverage](motional-coverage.md) to stabilize thin rigging during subpixel camera and object moves.
 
 The stipple look maps the lit frame to a small palette on a fixed screen grid.
 Try it with the [polished seal](../examples/stipple.json).
@@ -242,6 +243,8 @@ from zero to one to blend its result into the color entering that step.
 | `saturation` | `factor` scales the distance from luminance. Zero gives grayscale and one is neutral. |
 | `hue` | `degrees` rotates the hue with the channel minimum and maximum held fixed. |
 | `channelMix` | `matrix` contains RGB weights for each of the three output channels. Optional `offset` adds an RGB triple. |
+| `oklabChroma` | `correction` has two `[offset, a, b]` rows for relative OKLab chroma. `maxShift` caps the correction. The full-strength step uses working sRGB and preserves OKLab lightness. |
+| `swatchReplace` | `replacements` maps up to 48 exact sRGB hex swatches to new hex swatches in a single pass. Use `--output-grade` to apply the map to finished art. |
 | `curves` | `curves` takes the same luminance ramp or RGB channel curves as `look.colorCurves`. |
 | `lut` | `lut` takes a native 3D LUT, including a JSON import from `.cube`. |
 | `paletteRemap` | `remap` addresses the original palette slots by swatch, index, or role. Rules blend against the color at this point in the stack. Protected slots retain their original colors through the entire grade. |
@@ -265,6 +268,63 @@ node cli/ink-studio.js render lab/data-shrine.json --t 4 --pitch .31 --yaw .55 -
 
 The same `--color-stack` option works with `sim render`. A JSON file
 overrides the authored scene stack. `off` bypasses scene and surface stacks.
+
+## Match a grade from shared objects
+
+Select objects or materials that can be seen in both the source and the
+approved reference. Ink samples their visible midtones and fits one global
+chroma correction relative to OKLab lightness. Different camera angles and
+light rigs can supply the two frames. Source shadows, highlights, and
+exposure keep their lightness through the correction, subject to 8-bit
+output rounding. `report.json` shows the remaining difference per object.
+
+```sh
+ink-studio shot grade-match examples/shared-object-grade/courier.json --out courier-grade
+```
+
+Open `courier-grade/index.html` to inspect the selected pixels, compare
+swatches, or view the three frames in lightness only. Reuse the exported
+`grade.json` on the same source look with `render` or `clip`.
+
+```sh
+ink-studio render examples/courier-shot-lighting.js --w 160 --h 112 --px 1 --yaw -0.13 --zoom 1.024 \
+  --color-stack examples/shared-object-grade/cool-dailies.json \
+  --shot-lighting examples/painted-shot-lighting/starting-rig.json \
+  --output-grade courier-grade/grade.json --out courier-matched.png
+```
+
+`--output-grade` applies an ordinary RGB-only color stack to the completed
+raster. With `--output-palette` it runs before the final palette resolve.
+It is recorded as a dependency in a shot recipe. Use `--output-grade` to
+reproduce the fit after the source scene's original grading and rendering.
+
+```json
+{
+  "format": "ink-studio/shared-object-grade",
+  "version": 1,
+  "width": 160,
+  "height": 112,
+  "source": { "scene": "arrival.js", "time": 1.2 },
+  "reference": { "scene": "approved.js", "time": 0 },
+  "anchors": [
+    { "id": "coat", "select": { "object": "courier", "material": "cloak" } },
+    { "id": "lamp", "select": { "object": "lantern", "material": "brass" },
+      "approved": "#9c7458", "weight": 1.5 }
+  ]
+}
+```
+
+Scene, `shotLighting`, and `colorStack` paths are relative to the plan. A
+shot can also specify its `seed`, native camera overrides, `raw`, and
+`transparent`. Capture uses the native scene raster and material ownership
+before screen composites and render graphs. Anchors accept one shared
+`select` or per-shot `source` and `reference` selections. Each can add
+`region: [x, y, width, height]` in native art pixels. Use a region when only
+part of a surface is comparable between the shots. An `approved` hex can
+supply the target chroma instead of sampling the reference color.
+
+Node callers can use `ink.fitSharedObjectGrade(source, reference, { anchors })`
+with native RGB frames and the aligned `objectId` and `materialId` passes.
 
 ## Color spaces and numeric ranges
 
@@ -365,11 +425,12 @@ optional `default` policy to cover foreground surfaces without a target.
 - `none`, `checker`, `bayer`, and seeded `blue-noise` set the threshold
   pattern. Strength 0 picks the nearest swatch. Increasing strength lets
   more art pixels pick the second swatch near a transition. CLI renders
-  can use the existing screen, world, or object dither coordinates.
+  can use screen, world, object, or view-direction dither coordinates.
 - Explicit target palettes take precedence over a surface layer's
   `outputPalette` in CLI renders. Layer palettes take precedence over
   `default`. Outlines and finish overlays use their existing paths.
-  Standard WebGL targets use solid splat ownership and screen art pixels.
+  Native WebGL targets use solid draw-row ownership and support spatial
+  dither anchors.
 
 In JavaScript, `PixelLook.preparePalette(policy, { palette, roles, blueNoise })`
 returns packed swatches and `index(rgb, x, y)` for sampling normalized
@@ -888,6 +949,7 @@ supplies the settings for that subject. Omitted settings use the scene defaults.
 | `fine` | Enables or disables baked 4 × 4 surface color tiles for the subject. Enabling it needs a bake. Disabling it also suppresses existing tiles for matching splats in both renderers. |
 | `cleanup` | Enables or disables pixel cleanup on pixels owned by the subject, independently of scene-wide cleanup. |
 | `protectSilhouette` | Preserves the subject's visible outer edge and adjacent fringe during cleanup, while allowing cleanup inside the shape. |
+| `protectGaps` | Keeps a one-art-pixel opening when opposing visible edges match this rule and the center is farther from the camera than both. |
 
 JSON solids use `id` for `entity`, `part` or `id` for `object`, and
 `tags` for tag matching. JavaScript solids use `objectId` and
@@ -897,8 +959,24 @@ solids when the template is baked. Placed copies can have independent fine-tile
 and cleanup settings through `objectId` and `target`. Raw rendering skips
 scoped cleanup and fine-tile overrides.
 
-The browser renderer expands shared GPU instance groups when scoped cleanup
-or fine-tile rules need to resolve their individual splats. Spacing-only rules
+To keep the opening between two tentacles, tag both inner edges
+`tentacle-gap` and add this rule to `detailBudgets`.
+
+```json
+{ "select": { "tag": "tentacle-gap" }, "protectGaps": true }
+```
+
+The edges can belong to different objects. Both sides must match the same
+rule. Protection follows the visible edges on the native art grid as the
+camera or pose changes and preserves the color already visible through the
+gap, including scenery. A foreground surface can still cover the opening.
+The rule skips cleanup at the gap itself and also skips the live renderer's
+automatic pinhole repair there. Gap protection uses opaque edge ownership.
+Run `npm run build` and open the [Needle Squid demo](../examples/gap-protection/index.html)
+from a local server to compare both modes and move an occluder in front of the gap.
+
+The browser renderer expands shared GPU instance groups when scoped cleanup,
+gap protection, or fine-tile rules need to resolve their individual splats. Spacing-only rules
 apply at bake time and can use the shared instance path.
 
 ## Material-specific pixel styles
@@ -973,6 +1051,8 @@ node cli/ink-studio.js render examples/review-sheltered-market.js \
 
 Use `--color-clusters off` or `{ colorClusters: false }` for a matched
 comparison. Raw renders bypass the pass.
+
+[Coherent pixel clusters](cluster-coherence.md) add per-swatch timing and stable connected-region IDs across rendered frames.
 
 ## Shared look selectors
 

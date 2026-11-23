@@ -1,0 +1,56 @@
+{
+  "ink-wash": {
+    "label": "Ink wash",
+    "cadence": 0,
+    "texel": 0.021,
+    "textureScale": 0.29,
+    "bleed": 0.052,
+    "palette": {
+      "outside": "#d9cbb0", "frame": "#b89c79", "trim": "#6a5b53", "sky": "#efe0bd", "sun": "#b86143",
+      "distant": "#a9afa0", "ridge": "#748a83", "sea": "#9cab9f", "wave": "#59808a", "foam": "#e1ceae",
+      "cliff": "#566568", "bank": "#6e827c", "tower": "#bda58c", "shadow": "#81746d", "roof": "#3d474c",
+      "lantern": "#ca854e", "metal": "#594d47", "label": "#f5e3bd", "hull": "#615453", "sail": "#e4c7a3",
+      "ray": "#c38a66"
+    }
+  },
+  "cut-paper": {
+    "label": "Cut paper",
+    "cadence": 8,
+    "textureScale": 0.045,
+    "paper": { "grain": 0.19, "fibers": 0.055, "shadowStrength": 0.43, "softness": 0.059 },
+    "palette": {
+      "outside": "#a3ad9c", "frame": "#f1d3a5", "trim": "#9d624f", "sky": "#f0c49a", "sun": "#de8268",
+      "distant": "#a5aaaa", "ridge": "#8e9f96", "sea": "#80aaa5", "wave": "#3f7780", "foam": "#d1d6ab",
+      "cliff": "#575766", "bank": "#758a68", "tower": "#f7dcab", "shadow": "#bd8d73", "roof": "#a9554d",
+      "lantern": "#ffb06a", "metal": "#5b6057", "label": "#fff1c7", "hull": "#964d48", "sail": "#ffdaad",
+      "ray": "#ffe5b2"
+    }
+  },
+  "enamel": {
+    "label": "Enamel signage",
+    "cadence": 12,
+    "textureScale": 0.075,
+    "roughness": [0.12, 0.29],
+    "palette": {
+      "outside": "#1c3035", "frame": "#243e45", "trim": "#d8a756", "sky": "#e8cf96", "sun": "#cf5035",
+      "distant": "#b8b993", "ridge": "#678b76", "sea": "#4c9292", "wave": "#205f6b", "foam": "#f1e2aa",
+      "cliff": "#424d54", "bank": "#527662", "tower": "#f5e2b8", "shadow": "#c58e62", "roof": "#ab463a",
+      "lantern": "#ffd99d", "metal": "#4c4040", "label": "#f3d796", "hull": "#ac4738", "sail": "#f6dbab",
+      "ray": "#fff2b0"
+    }
+  },
+  "stained-glass": {
+    "label": "Stained glass",
+    "cadence": 6,
+    "textureScale": 0.55,
+    "gap": 0.034,
+    "transmission": 0.61,
+    "palette": {
+      "outside": "#211c31", "frame": "#35314a", "trim": "#a4735d", "sky": "#8d6ba8", "sun": "#f4a640",
+      "distant": "#514c80", "ridge": "#555b90", "sea": "#3b7797", "wave": "#3b6395", "foam": "#a4a2bb",
+      "cliff": "#423251", "bank": "#62617f", "tower": "#f5c77d", "shadow": "#b46a72", "roof": "#ad4a65",
+      "lantern": "#ffc572", "metal": "#402f4c", "label": "#e1aa77", "hull": "#b25076", "sail": "#e3aa89",
+      "ray": "#eaab72"
+    }
+  }
+}

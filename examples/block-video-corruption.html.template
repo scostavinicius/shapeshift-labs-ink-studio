@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Breakwater Relay · Block video corruption</title>
+<style>
+  :root{color-scheme:dark;background:#0c151c;color:#e5ebce;font:15px/1.5 system-ui,sans-serif}
+  main{width:min(896px,calc(100% - 30px));margin:28px auto}
+  canvas{width:100%;height:auto;display:block;image-rendering:pixelated;border:1px solid #365057;background:#101b25}
+  .controls{display:flex;align-items:center;gap:10px 18px;flex-wrap:wrap;margin:14px 0}
+  label{display:flex;align-items:center;gap:7px}
+  input{accent-color:#91ceb7}
+  input[type=range]{width:clamp(110px,32vw,340px)}
+  button{font:inherit;background:#223843;color:inherit;border:1px solid #5e777d;border-radius:4px;padding:5px 15px;cursor:pointer}
+  button:hover{background:#35535b}
+  :focus-visible{outline:2px solid #91ceb7;outline-offset:2px}
+  #status{color:#abc8bc;font-variant-numeric:tabular-nums;margin:5px 0}
+</style>
+</head>
+<body>
+<main>
+  <canvas id="view" width="448" height="200"
+    aria-label="Breakwater Relay. The left feed stays live while the right feed loses packets and recovers in blocks."></canvas>
+  <div class="controls">
+    <button type="button" id="play">Play</button>
+    <label>Frame <input type="range" id="frame" min="0" max="65" step="1" value="17"></label>
+    <label><input type="checkbox" id="grid"> Mark stale block corners</label>
+  </div>
+  <p id="status">Loading Breakwater Relay…</p>
+</main>
+<script type="module">
+try {
+  /* DEMO */
+} catch (error) {
+  document.querySelector('#status').textContent=error.message;
+}
+</script>
+</body>
+</html>

@@ -25,6 +25,9 @@ renderer.render(world, { width: 1056, height: 600, time, camera, inspection });
 // CPU: require('@shapeshift-labs/ink-studio').render(world, { w: 1056, h: 600, t: time, inspection });
 ```
 
+For a moving cursor that lights samples and links to posed features, use a
+[pose-following surface probe](surface-probe.md).
+
 ## Anchors and activation
 
 `at` accepts a finite XYZ world point, a function receiving the frame context, or one of these bindings:

@@ -4,13 +4,17 @@ const { createHash } = require('node:crypto');
 const { isDeepStrictEqual } = require('node:util');
 const PNG = require('./png.js');
 const WAV = require('./wav.js');
+const Sound = require('./sound-source.js');
 const { createGraphHost } = require('./graph-host.js');
 const { clip } = require('./graph-clip.js');
 const { resolveCheckpoint } = require('./checkpoint-file.js');
+const { embedModels, isModel } = require('./simulation-model-files.js');
 const { loadGraphGroups, groupFor, groupUsage, groupDependencies } = require('./graph-groups.js');
 const { snapshotFormat } = require('./graph-diff.js');
 const { fingerprint } = require('./graph-artifact-cache.js');
 const { estimateGraphMemory } = require('./graph-memory.js');
+const Assets = require('./asset-references.js');
+const { resolveTakeFile } = require('./take-document.js');
 
 const format = 'ink-studio/graph-project';
 const reportFormat = 'ink-studio/graph-report';
@@ -39,14 +43,16 @@ function separateNames(names, label) {
     throw new TypeError(label + ' need distinct names on case-insensitive filesystems');
 }
 
-function imageBytes(value) {
+function imageBytes(value, grayscale = false) {
   if (value?.colorSpace==='srgb-linear') throw new TypeError('Graph PNG output needs display RGB. Use color.rasterToDisplay first.');
   const { width, height, data } = value ?? {};
   const size = width * height;
   const bytes = data instanceof Uint8Array || data instanceof Uint8ClampedArray;
   if (!Number.isSafeInteger(width) || !Number.isSafeInteger(height) || width < 1 || height < 1 ||
-      size > 2**24 || ![size*3,size*4].includes(data?.length) ||
-      !(Array.isArray(data) || ArrayBuffer.isView(data)))
+      size > 2**24) throw new TypeError('Graph PNG output needs valid image dimensions');
+  if (grayscale && bytes && data.length === size && (value.channels ?? 1) === 1)
+    return PNG.encodeGray(width,height,data);
+  if (![size*3,size*4].includes(data?.length) || !(Array.isArray(data) || ArrayBuffer.isView(data)))
     throw new TypeError('Graph PNG output needs an RGB8 or RGBA8 image');
   if (!bytes) for (let i=0; i<data.length; i++) {
     const n=data[i];
@@ -197,7 +203,7 @@ function nativeOperations(kit, assets) {
 
 function operationRegistry(kit, operations = {}, assets = new Map()) {
   const stock = nativeOperations(kit, assets);
-  const extensions = Object.fromEntries(named(operations, 'host operations'));
+  const extensions = {...kit.KIT.world?.kernels?.graphOperations(),...Object.fromEntries(named(operations, 'host operations'))};
   return { stock, extensions, overrides: { ...stock, ...extensions }, toolkit: kit.KIT.procedural.graph.operations };
 }
 
@@ -261,25 +267,31 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
   const {broadcast}=graph.arrays;
   const groupOperators=[...graph.arrays.groupOperators,...kit.KIT.procedural.animationGraph.groupOperators];
   const project=data.freeze(data.clone(source));
-  const {format:kind,version:revision,groups:definitions={},assets:assetDefinitions={},exports:exportsSpec={},
+  const {format:kind,version:revision,groups:definitions={},assets:assetDefinitions={},assetRegistry,exports:exportsSpec={},
     assertions:assertionSpecs=[],time=0,seed=0,...root}=fields(project,
-    ['format','version','inputs','nodes','outputs','groups','assets','exports','assertions','time','seed'],'graph project');
+    ['format','version','inputs','nodes','outputs','groups','assets','assetRegistry','exports','assertions','time','seed'],'graph project');
   if (kind!==format || revision!==version) throw new TypeError('Expected ink-studio/graph-project version 1');
   const spec=graphSpec(root,'project graph',groupOperators);
   const paths=new Set(sourceFile ? [path.resolve(sourceFile)] : []);
+  const api=kit.KIT.authoring.assetReferences;
+  const resolveAsset=Assets.scope(api,path.join(baseDir,'graph.json'),assetRegistry,{onFile:file=>paths.add(file)});
   const groupTree=loadGraphGroups(definitions,baseDir,{onFile:file=>paths.add(file)});
   const groupSpecs=new Map(groupTree.entries.map(group=>[group,graphSpec(group.spec,'group '+group.alias,groupOperators)]));
   const assets=new Map(named(assetDefinitions,'assets').map(([name,definition])=>{
     const {format,file,type,codec,options}=fields(definition,
       definition?.format==='codec' ? ['format','file','type','codec','options'] : ['format','file'],'graph asset '+name);
-    if (!['png','indexed-png','json','wav','inputs','codec'].includes(format) || typeof file!=='string' || !file)
-      throw new TypeError('Graph assets need a PNG, JSON, WAV, input recording or hosted codec file');
-    const full=path.resolve(baseDir,file);
+    if (!['png','indexed-png','json','wav','sound-recipe','inputs','codec'].includes(format) ||
+        !(typeof file==='string'&&file||api.isRef(file)))
+      throw new TypeError('Graph assets need a PNG, JSON, WAV, sound recipe, input recording or hosted codec file');
+    const selected=api.isRef(file)?resolveAsset(file,Assets.graphKinds(format)):undefined;
+    const full=selected?.filename??path.resolve(baseDir,file);
     paths.add(full);
     if ((format==='wav' || format==='codec') && fs.statSync(full).size>WAV.maxBytes)
       throw new RangeError('Graph media asset exceeds its byte budget');
-    const bytes=fs.readFileSync(full);
-    let value, kind;
+    if (format==='sound-recipe' && fs.statSync(full).size>Sound.limit)
+      throw new RangeError('Sound recipe exceeds 64 KiB');
+    const bytes=selected?.bytes??fs.readFileSync(full);
+    let value, kind, modelHash;
     if (format==='png') {
       const {w,h,data,max}=planAssets ? PNG.layout(bytes) : PNG.raster(bytes);
       value=planAssets ? {width:w,height:h} : {width:w,height:h,
@@ -290,20 +302,24 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
         const {w,h}=PNG.layout(bytes,true);
         value={value:{width:w,height:h}};
       } else value=PNG.indexedRaster(bytes);
-    } else if (format==='wav') {
-      value=WAV.decode(bytes);
+    } else if (format==='wav' || format==='sound-recipe') {
+      value=format==='wav' ? WAV.decode(bytes) : Sound.decodeSoundRecipe(bytes,kit.KIT.procedural).value;
       kind='audio';
     } else if (format==='codec') {
       value=host.decode(codec,bytes,{type,file:full,options});
       kind=type;
     } else {
       const parsed=JSON.parse(bytes.toString('utf8'));
-      value=format==='inputs' ? mediaGraph.recording(parsed) :
-        data.freeze(data.clone(resolveCheckpoint(full,parsed,{onBlock:block=>paths.add(block)})));
+      if (format === 'inputs') value = mediaGraph.recording(parsed);
+      else if (isModel(parsed)) {
+        const embedded = embedModels(parsed, full, file => paths.add(file));
+        if (embedded !== parsed) modelHash = sha256(jsonBytes(embedded));
+        value = data.freeze(data.clone(embedded));
+      } else value = data.freeze(data.clone(resolveCheckpoint(full,parsed,{onBlock:block=>paths.add(block)})));
     }
-    return [name,{format,file,sha256:sha256(bytes),value,...(kind && {type:kind}),...(codec && {codec})}];
+    return [name,{format,file,sha256:sha256(bytes),value,...(modelHash && {modelHash}),...(kind && {type:kind}),...(codec && {codec})}];
   }));
-  const {stock,overrides:ops}=operationRegistry(kit,operations,assets);
+  const {stock,extensions,overrides:ops}=operationRegistry(kit,operations,assets);
   const scopes=new Map(), preparedGroups=new Map(), visiting=new Set();
   function operationsIn(scope) {
     if (!scopes.has(scope)) scopes.set(scope,Object.create(null));
@@ -338,7 +354,7 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
     visiting.add(group);
     const spec=groupSpecs.get(group), {plan,compiled}=compile(spec,scope);
     visiting.delete(group);
-    const outputs=Object.fromEntries(Object.entries(plan.outputs).map(([key,link])=>[key,link.type]));
+    const outputs=Object.fromEntries(Object.entries(plan.outputs).map(([key,{type,quantity}])=>[key,{type,...(quantity && {quantity})}]));
     operationsIn(owner)[name]={...graph.group(spec,{operations:ops,groups:operationsIn(scope),outputs}),
       expandedNodes:plan.expandedNodes};
     preparedGroups.set(alias,{plan,scope,compiled});
@@ -391,19 +407,22 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
   clock(time,seed);
   const projectPlan={...header,kind:'plan',...rootPlan,time,seed,assets:assetInfo,exports,assertions:assertionSpecs,
     groups:Object.fromEntries([...preparedGroups].map(([name,{plan}])=>[name,plan])),
-    groupDependencies:dependencyRows,hostOperations:Object.keys(operations).sort()};
+    groupDependencies:dependencyRows,hostOperations:Object.keys(extensions).sort()};
 
   function artifactIdentity() {
     const usesCodec=[...assets.values()].some(asset=>asset.format==='codec') || exports.some(entry=>entry.format==='codec');
     const used=groupUsage(groupTree.scope,spec.nodes);
     const names=new Set();
-    for (const body of [spec,...[...used].map(group=>groupSpecs.get(group))])
-      for (const {op} of Object.values(body.nodes)) if (Object.hasOwn(operations,op)) names.add(op);
-    const versions=[...names].sort().map(name=>[name,operations[name].cacheVersion]);
+    const usedOperations=[spec,...[...used].map(group=>groupSpecs.get(group))]
+      .flatMap(body=>Object.values(body.nodes).map(({op})=>op));
+    for (const op of usedOperations) if (Object.hasOwn(extensions,op)) names.add(op);
+    if (usedOperations.includes('sim.model'))
+      for (const op of Object.keys(kit.KIT.world?.kernels?.graphOperations() ?? {})) names.add(op);
+    const versions=[...names].sort().map(name=>[name,extensions[name].cacheVersion]);
     const unversioned=versions.filter(([,id])=>!(typeof id==='string' && id.trim()) &&
       !(Number.isSafeInteger(id) && id>0)).map(([name])=>name);
     const registered=versions.map(([name,id])=>[name,unversioned.includes(name) ? null : id,...['run','instantiate','specialize'].map(method=>{
-      const implementation=operations[name][method];
+      const implementation=extensions[name][method];
       return typeof implementation==='function' ? Function.prototype.toString.call(implementation) : null;
     })]);
     // Include declaration order and exact numbers alongside the existing project hash.
@@ -455,7 +474,7 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
 
   function execution() {
     let executable, previous=new Map();
-    function clear() {
+    function reset() {
       try { executable?.clear(); }
       finally {
         executable=undefined;
@@ -463,31 +482,53 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
       }
     }
 
-    function evaluate({inputs,time,seed,take},sequence) {
+    let busy=false;
+    function clear() {
+      if (busy) throw new Error('Cannot clear a graph project during asynchronous evaluation');
+      reset();
+    }
+    function start(inputs) {
+      if (busy) throw new Error('An asynchronous graph project evaluation is already running');
       if (planAssets) throw new Error('Graph loaded for memory preflight. Open it normally to evaluate.');
       const values=Object.fromEntries(Object.entries(inputs).map(([name,value])=>{
         const prior=previous.get(name);
         return [name,sameValue(prior,value) ? prior : value];
       }));
-      try {
-        executable??=graph.create(spec,{operations:ops,groups});
-        const frame=executable.evaluate(values,{time,seed,take,sequence,workers:workerPool});
-        previous=new Map(Object.entries(values));
-        return {frame,report:{...header,time,seed,...(take!==undefined && {take}),cache:cacheReport(frame),
-          inputs:Object.fromEntries(Object.entries(values).map(([name,value])=>[name,describe(value)]))}};
-      } catch (error) {
-        try { clear(); } catch { /* Preserve the evaluation error after discarding this instance. */ }
-        throw error;
-      }
+      executable??=graph.create(spec,{operations:ops,groups});
+      return values;
     }
 
-    return {evaluate,clear};
+    function done(frame,values,{time,seed,take}) {
+      previous=new Map(Object.entries(values));
+      return {frame,report:{...header,time,seed,...(take!==undefined && {take}),cache:cacheReport(frame),
+        inputs:Object.fromEntries(Object.entries(values).map(([name,value])=>[name,describe(value)]))}};
+    }
+    function failed(error) {
+      try { reset(); } catch { /* Preserve the evaluation error after discarding this instance. */ }
+      throw error;
+    }
+    function evaluate({inputs,...options},sequence) {
+      const values=start(inputs);
+      try {
+        return done(executable.evaluate(values,{...options,sequence,workers:workerPool}),values,options);
+      } catch (error) { return failed(error); }
+    }
+    async function evaluateAsync({inputs,...options},profile) {
+      const values=start(inputs);
+      busy=true;
+      try {
+        return done(await executable.evaluateAsync(values,{...options,profile}),values,options);
+      } catch (error) { return failed(error); }
+      finally { busy=false; }
+    }
+
+    return {evaluate,evaluateAsync,clear};
   }
-  const {evaluate,clear}=execution();
+  const {evaluate,evaluateAsync,clear}=execution();
 
   function encode(name,value,format,settings={}) {
     const result=format==='codec' ? host.encode(settings.codec,value,settings) : undefined;
-    const bytes=result?.bytes ?? (format==='png' ? imageBytes(value) :
+    const bytes=result?.bytes ?? (format==='png' ? imageBytes(value,settings.grayscale) :
       format==='wav' ? WAV.encode(value,settings) : jsonBytes(value));
     return {file:'artifacts/'+name+'.'+(result?.extension ?? format),format,sha256:sha256(bytes),bytes};
   }
@@ -506,7 +547,7 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
   function run(prepared) {
     workerPool?.resetStats();
     const {frame,report}=evaluate(prepared);
-    const checks=assertions.map(check=>check(frame)), passed=checks.every(check=>check.passed);
+    const {assertions:checks,passed}=prepareFrameChecks(frame);
     const artifacts=exports.flatMap(({name,output,format,...settings})=>{
       const value=frame.outputs[output], encoded=format==='atlas' ? encodeAtlas(name,value) : [encode(name,value,format,settings)];
       return encoded.map(artifact=>({name,output,...artifact}));
@@ -532,13 +573,72 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
         artifacts:bytes ? [{file,format,sha256,bytes:bytes.length}] : []}};
   }
 
-  function preview(value) {
+  function audioTaps(targets,options={}) {
+    const rows=named(targets,'audio taps');
+    if (!rows.length || rows.length>2 || rows.some(([name])=>!['dry','wet'].includes(name)))
+      throw new TypeError('Select dry and/or wet graph taps');
+    for (const [,tap] of rows) {
+      const {output,node,port,field}=fields(tap,['output','node','port','field'],'graph audio tap');
+      if ((output===undefined)===(node===undefined) ||
+          output!==undefined && (!Object.hasOwn(rootPlan.outputs,output) || port!==undefined) ||
+          node!==undefined && (typeof node!=='string' || !node.split('/').every(id) || port!==undefined && !id(port)) ||
+          field!==undefined && (!Array.isArray(field) || !field.length || field.length>8 || !Array.from(field).every(id)))
+        throw new TypeError('Tap a graph output or node port with an optional record field path');
+    }
+    const prepared=request(options), {frame,report}=evaluate(prepared);
+    if (!prepareFrameChecks(frame).passed) throw new Error('Audio print graph assertions failed');
+    const {audioTrace}=require('./graph-audio-trace.js');
+    const {time,seed}=report, graph=snapshot({time,seed,inputs:options.inputs ?? {}});
+    const sources={}, traces={};
+    for (const [name,target] of rows) {
+      let value=target.output!==undefined ? frame.outputs[target.output] : frame.preview(target.node,target.port);
+      for (const key of target.field ?? []) {
+        if (!record(value) || !Object.hasOwn(value,key)) throw new RangeError('Unknown audio tap field '+key);
+        value=value[key];
+      }
+      sources[name]=mediaGraph.audio(value);
+      traces[name]=audioTrace(graph,target);
+    }
+    return {sources,traces,projectHash,time,seed};
+  }
+
+  async function previewFrame(targets, options, { profile = false, encodeArtifacts = true } = {}) {
+    const watches=named(targets,'patch previews');
+    if (watches.length>64) throw new RangeError('A patch frame supports up to 64 previews');
+    separateNames(watches.map(([name])=>name),'Patch previews');
+    for (const [,target] of watches) {
+      const {output,node,port}=fields(target,['output','node','port'],'patch preview');
+      if ((output===undefined)===(node===undefined) || output!==undefined && (!id(output) || !Object.hasOwn(rootPlan.outputs,output)) ||
+          node!==undefined && (typeof node!=='string' || !node.split('/').every(id) || port!==undefined && !id(port)))
+        throw new TypeError('Patch preview needs a known output or node and port');
+    }
+    const {frame,report}=await evaluateAsync(request(options),profile);
+    const results=watches.map(([name,{output,node,port}])=>{
+      const value=output!==undefined ? frame.outputs[output] : frame.preview(node,port);
+      const artifact=encodeArtifacts && preview(value,{grayscale:true});
+      const links=kit.KIT.world.inspectionLinks.references(value);
+      return { name, value, links, artifact:artifact && {...artifact,file:'previews/'+name+'.'+artifact.format} };
+    });
+    const assertions=prepareFrameChecks(frame);
+    return {outputs:frame.outputs,values:Object.fromEntries(results.map(({name,value})=>[name,value])),
+      artifacts:results.flatMap(({artifact})=>artifact?[artifact]:[]),
+      report:{...report,kind:'patch-frame',...assertions,...(frame.timings && {timingsMs:frame.timings}),
+        previews:Object.fromEntries(results.map(({name,value,artifact,links})=>[name,{value:describe(value),
+          ...(links.length&&{links}),
+          ...(artifact && {file:artifact.file,sha256:artifact.sha256})}]))}};
+  }
+  function prepareFrameChecks(frame) {
+    const checks=assertions.map(check=>check(frame));
+    return {passed:checks.every(check=>check.passed),assertions:checks};
+  }
+
+  function preview(value, settings) {
     if (Number.isSafeInteger(value?.sampleRate) && value.samples) {
       try { return encode('preview',value,'wav'); }
       catch { /* Fall through to the generic data preview. */ }
     }
     if (Number.isSafeInteger(value?.width) && value.data) {
-      try { return encode('preview',value,'png'); }
+      try { return encode('preview',value,'png',settings); }
       catch { /* Numeric raster channels can be inspected as JSON. */ }
     }
     try { return encode('preview',value,'json'); }
@@ -588,22 +688,28 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
     artifactIdentity,
     snapshot,
     run:options=>run(request(options)),
-    clip(options) {
+    clip(options, { frameInputs } = {}) {
       const { inputs, seed, ...settings } = fields(options,
         ['output','from','to','warmup','format','clock','renderOptions','capture','inputs','seed'], 'graph clip options');
-      const requestOptions = request({inputs,seed});
+      if (frameInputs!==undefined&&typeof frameInputs!=='function') throw new TypeError('Graph frame inputs need a host callback');
+      const start=frameInputs===undefined?request({inputs,seed}):clock(time,seed??projectPlan.seed);
       const runner = execution();
       workerPool?.resetStats();
       try {
-        const result=clip(settings,{kit,plan:projectPlan,checks:assertions,seed:requestOptions.seed,
+        const result=clip(settings,{kit,plan:projectPlan,checks:assertions,seed:start.seed,
           sample(take,sequence) {
-            return runner.evaluate({...requestOptions,time:take.start,take},sequence).frame;
+            if(frameInputs===undefined)return runner.evaluate({...start,time:take.start,take},sequence).frame;
+            const supplied=frameInputs(take);
+            if(!record(supplied))throw new TypeError('Graph frame inputs must return a record');
+            return runner.evaluate(request({inputs:{...inputs,...supplied},take,seed:start.seed}),sequence).frame;
           }});
         if (workerPool) result.report.workers=workerPool.stats();
         return result;
       } finally { runner.clear(); }
     },
     inspect,
+    audioTaps,
+    previewFrame,
     prepareBatch,
     batch(cases,defaults={}) {
       const batch=prepareBatch(cases,defaults);
@@ -621,7 +727,7 @@ function readGraphProject(file, options={}) {
     const bundles=require('./project-bundle.js'), project=bundles.readProjectBundle(sourceFile);
     const take=project.takeDocument?.(), graph=take?.graph;
     if (!graph) throw new TypeError('Project bundle needs a take with a graph');
-    const mounted=bundles.mountProject(project,entry=>readGraphProject(path.resolve(path.dirname(entry),graph),options));
+    const mounted=bundles.mountProject(project,entry=>readGraphProject(resolveTakeFile(entry,take,'graph',options.kit),options));
     return Object.freeze({...mounted,takeClock:take.clock,sourceFiles:()=>[sourceFile]});
   }
   return createGraphProject(document,{...options,baseDir:path.dirname(sourceFile),sourceFile});

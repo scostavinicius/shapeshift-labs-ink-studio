@@ -1,0 +1,8 @@
+{
+  "format": "ink-studio/take",
+  "version": 1,
+  "id": "sluice-take",
+  "clock": { "fps": 20, "simulationRate": 10 },
+  "world": "sluice.world.json",
+  "graph": "sluice.graph.json"
+}

@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Match-cut finder · Ink Studio</title>
+<style>
+:root { color-scheme:dark; color:#f1eef2; background:#11121a; font:15px/1.45 system-ui,sans-serif; --line:#343443; --muted:#c1b9cc; --cream:#ffd896; --teal:#9bf1d5; }
+* { box-sizing:border-box; }
+body { margin:0; }
+main { width:min(1190px, 100% - 48px); margin:38px auto; }
+h1 { font-weight:680; font-size:clamp(40px,6vw,78px); letter-spacing:-.067em; line-height:1; margin:4px 0 10px; }
+h2,p { margin:0; }
+h2 { font-size:.94rem; }
+.eyebrow { text-transform:uppercase; font-weight:750; font-size:.76rem; letter-spacing:.14em; color:var(--cream); }
+.meta,label { color:var(--muted); }
+header { display:flex; justify-content:space-between; align-items:end; flex-wrap:wrap; gap:12px; margin-bottom:22px; }
+.layout { display:grid; grid-template-columns:minmax(0,2.15fr) minmax(0,1fr); gap:14px; align-items:start; }
+.panel { background:#1b1b27; border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+.panel-heading { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:10px 13px; }
+.readout { font:.78rem ui-monospace,monospace; color:var(--muted); text-align:right; }
+.screen { position:relative; background:#0d0e16; }
+.screen img,.seam img { width:100%; height:auto; display:block; image-rendering:pixelated; }
+.screen img { height:100%; }
+.seam-flag { position:absolute; top:9px; left:10px; background:var(--cream); color:#242014; font-weight:800; font-size:.72rem; padding:4px 8px; border-radius:4px; }
+.transport { display:grid; grid-template-columns:auto minmax(40px,1fr) auto; align-items:center; gap:10px; padding:10px 12px; }
+button { font:inherit; color:inherit; background:#2a2938; border:1px solid #424051; border-radius:7px; padding:7px 12px; cursor:pointer; }
+button:hover { border-color:var(--cream); }
+button:focus-visible,input:focus-visible { outline:2px solid var(--teal); outline-offset:2px; }
+#play { min-width:75px; background:var(--cream); color:#2c2217; border-color:var(--cream); font-weight:680; }
+.track { position:relative; min-width:0; display:grid; align-items:center; }
+.track input { width:100%; margin:0; accent-color:var(--cream); }
+.track i { position:absolute; top:-4px; height:7px; width:2px; background:var(--teal); pointer-events:none; }
+.results { padding:12px; }
+.results h2 { margin:0 0 9px; }
+.candidates { display:grid; gap:6px; }
+.candidate { width:100%; text-align:left; display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:10px; padding:9px 10px; background:#222231; }
+.candidate[aria-pressed=true] { border-color:#a88f67; background:#332a32; }
+.rank,.score { font:.82rem ui-monospace,monospace; }
+.rank { color:var(--muted); }
+.score { color:var(--cream); font-weight:750; }
+.candidate .numbers { font-size:.84rem; }
+.seam-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:4px 10px; margin:16px 0 7px; }
+.seam-heading label { font-size:.85rem; }
+.seam { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:6px; }
+figure { margin:0; min-width:0; }
+.seam-image { position:relative; background:#10111b; border-radius:5px; overflow:hidden; }
+figcaption { margin-top:4px; font:.75rem ui-monospace,monospace; color:var(--muted); }
+.guide { position:absolute; border:1px solid var(--guide); box-shadow:0 0 0 1px #0a0a154d; pointer-events:none; }
+table { width:100%; border-collapse:collapse; font-size:.82rem; margin-top:10px; }
+th,td { text-align:right; padding:6px 0 5px 6px; }
+th:first-child,td:first-child { text-align:left; padding-left:0; }
+th { color:var(--muted); font-weight:500; vertical-align:bottom; }
+tbody tr { border-top:1px solid var(--line); }
+.note { margin:8px 0 0; }
+[hidden] { display:none !important; }
+@media (max-width:770px) {
+  main { width:calc(100% - 28px); margin:24px auto; }
+  .layout { grid-template-columns:minmax(0,1fr); }
+  .panel-heading { padding:9px 10px; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <p class="eyebrow">Ink Studio · Match-cut finder</p>
+      <h1 id="title"></h1>
+      <p class="meta" id="count"></p>
+    </div>
+    <button id="download" type="button">Download cut report</button>
+  </header>
+  <p class="note" id="empty" hidden>No cut could be measured. Check that the selected shapes are visible and clear of the source edges across both motion windows.</p>
+  <div class="layout" id="review">
+    <section class="panel" aria-labelledby="preview-label">
+      <div class="panel-heading">
+        <h2 id="preview-label">Cut preview</h2>
+        <span class="readout" id="readout"></span>
+      </div>
+      <div class="screen" id="screen">
+        <img id="player" alt="At-speed shot transition">
+        <span class="seam-flag" id="seam-flag" hidden>Cut</span>
+      </div>
+      <div class="transport">
+        <button id="play" type="button">Play</button>
+        <div class="track"><i id="marker" title="First incoming frame"></i><input id="seek" type="range" min="0" step="1" aria-label="Preview frame"></div>
+        <button id="jump" type="button">Jump to cut</button>
+      </div>
+    </section>
+    <section class="panel results" aria-labelledby="rank-label">
+      <h2 id="rank-label">Ranked cuts</h2>
+      <div class="candidates" id="candidates" role="group" aria-label="Cut candidates"></div>
+      <div class="seam-heading">
+        <h2>At the cut</h2>
+        <label><input id="guides" type="checkbox" checked> Shape guides</label>
+      </div>
+      <div class="seam">
+        <figure><div class="seam-image" id="out"><img alt="Last outgoing frame"></div><figcaption id="out-label"></figcaption></figure>
+        <figure><div class="seam-image" id="in"><img alt="First incoming frame"></div><figcaption id="in-label"></figcaption></figure>
+      </div>
+      <table aria-label="Differences across the edit">
+        <thead><tr><th scope="col">Shape</th><th scope="col">Shift</th><th scope="col">Size Δ</th><th scope="col">Heading Δ</th></tr></thead>
+        <tbody id="metrics"></tbody>
+      </table>
+    </section>
+  </div>
+</main>
+<script type="application/json" id="match-cut-data">/*MATCH_CUT_DATA*/</script>
+<script>
+const get = id => document.getElementById(id);
+const {report, pictures} = JSON.parse(get('match-cut-data').textContent);
+const {width, height, fps, candidates} = report;
+const sides = ['outgoing', 'incoming'], panels = [get('out'), get('in')];
+const colors = ['#ffdc93','#9bf1d5','#babfff','#ffc3db','#cce88c','#c3faff','#f5a18a','#edebff'];
+const play = get('play'), seek = get('seek'), player = get('player'), guides = get('guides');
+const images = pictures.map(take => Object.fromEntries(Object.entries(take).map(([frame, url]) => {
+  const image = new Image();
+  image.src = url;
+  return [frame, image];
+})));
+
+document.title = report.title + ' · Ink Studio';
+get('title').textContent = report.title;
+get('count').textContent = report.comparedPairs.toLocaleString() + ' frame pairs searched · ' + fps + ' fps';
+get('screen').style.aspectRatio = width + ' / ' + height;
+get('empty').hidden = candidates.length > 0;
+get('review').hidden = candidates.length === 0;
+
+let index = 0, timeline = [], current = 0, seam = 0, timer = 0;
+const buttons = candidates.map((cut, i) => {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'candidate';
+  const rank = document.createElement('span'), numbers = document.createElement('span'), score = document.createElement('span');
+  rank.className = 'rank';
+  numbers.className = 'numbers';
+  score.className = 'score';
+  rank.textContent = String(cut.rank).padStart(2, '0');
+  numbers.textContent = 'Frames ' + cut.outgoing.frame + ' → ' + cut.incoming.frame;
+  score.textContent = cut.score.toFixed(1) + '/100';
+  button.append(rank, numbers, score);
+  button.addEventListener('click', () => select(i));
+  get('candidates').append(button);
+  return button;
+});
+
+function draw() {
+  const { side, frame } = timeline[current];
+  const descriptor = report[sides[side]];
+  player.src = images[side][frame].src;
+  player.alt = descriptor.label;
+  get('readout').textContent = descriptor.label + ' · Frame ' + frame;
+  seek.value = current;
+  get('seam-flag').hidden = current !== seam;
+}
+
+function updateGuides() {
+  panels.forEach((panel, i) => {
+    panel.querySelectorAll('.guide').forEach(node => node.remove());
+    if (!guides.checked) return;
+    candidates[index].shapes.forEach((shape, j) => {
+      const [x, y, right, bottom] = shape[sides[i]].box;
+      const frame = document.createElement('span');
+      frame.className = 'guide';
+      frame.setAttribute('aria-hidden', 'true');
+      frame.style.setProperty('--guide', colors[j]);
+      frame.style.left = 100 * x / width + '%';
+      frame.style.top = 100 * y / height + '%';
+      frame.style.width = 100 * (right - x) / width + '%';
+      frame.style.height = 100 * (bottom - y) / height + '%';
+      panel.append(frame);
+    });
+  });
+}
+
+function select(selected) {
+  pause();
+  index = selected;
+  current = 0;
+  const cut = candidates[index];
+  buttons.forEach((button, i) => button.setAttribute('aria-pressed', i === index));
+  timeline = sides.flatMap((name, side) => {
+    const [from, to] = cut.preview[name];
+    const frame = cut[name].frame;
+    panels[side].querySelector('img').src = images[side][frame].src;
+    get(['out-label', 'in-label'][side]).textContent = (side ? 'In' : 'Out') + ' · frame ' + frame;
+    return Array.from({length: to - from}, (_, i) => ({side, frame: from + i}));
+  });
+  seam = cut.preview.outgoing[1] - cut.preview.outgoing[0];
+  seek.max = timeline.length - 1;
+  get('marker').style.left = 100 * seam / (timeline.length - 1) + '%';
+  get('metrics').replaceChildren(...cut.shapes.map((shape, i) => {
+    const row = document.createElement('tr');
+    const heading = shape.headingDegrees !== null ? shape.headingDegrees + '°' :
+      shape.moving[0] === shape.moving[1] ? 'Both still' : shape.moving[0] ? 'Stops' : 'Starts';
+    [report.matches[i].label, shape.positionPixels + ' px', shape.sizeDeltaPercent + '%', heading].forEach(text => {
+      const cell = document.createElement('td');
+      cell.textContent = text;
+      row.append(cell);
+    });
+    return row;
+  }));
+  updateGuides();
+  draw();
+}
+
+function pause() {
+  clearInterval(timer);
+  timer = 0;
+  play.textContent = 'Play';
+}
+play.addEventListener('click', () => {
+  if (timer) return pause();
+  play.textContent = 'Pause';
+  const start = performance.now(), frame = current;
+  timer = setInterval(() => {
+    const next = (frame + Math.floor((performance.now() - start) * fps / 1000)) % timeline.length;
+    if (next !== current) { current = next; draw(); }
+  }, 1000 / (fps * 2));
+});
+get('jump').addEventListener('click', () => { pause(); current = seam; draw(); });
+seek.addEventListener('input', () => { pause(); current = Number(seek.value); draw(); });
+guides.addEventListener('change', updateGuides);
+get('download').addEventListener('click', () => {
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2) + '\n'], {type:'application/json'}));
+  link.download = 'cuts.json';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+});
+if (candidates.length) select(0);
+</script>
+</body>
+</html>

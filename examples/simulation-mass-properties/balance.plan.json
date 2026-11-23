@@ -1,0 +1,25 @@
+{
+  "format": "ink-studio/mass-properties-plan",
+  "version": 1,
+  "id": "balance-bench",
+  "revision": 1,
+  "metersPerUnit": 1,
+  "about": [0, 0, 0],
+  "parts": {
+    "arm": {
+      "source": { "kind": "mesh", "file": "arm.obj" },
+      "material": "balance/oak",
+      "probes": [{ "id": "arm-thickness", "from": [0, -0.05, 0], "to": [0, 0.06, 0] }]
+    },
+    "collar": {
+      "source": { "kind": "cylinder", "radius": 0.063, "innerRadius": 0.033, "height": 0.08, "center": [-0.41, 0.054, 0] },
+      "material": "balance/oak",
+      "probes": [{ "id": "bore-wall", "from": [-0.52, 0.054, 0], "to": [-0.30, 0.054, 0] }]
+    },
+    "instrument": {
+      "source": { "kind": "sdf", "file": "instrument.json", "resolution": 0.004,
+        "bounds": { "min": [0.375, 0.002, -0.066], "max": [0.545, 0.068, 0.066] } },
+      "material": "balance/ceramic"
+    }
+  }
+}

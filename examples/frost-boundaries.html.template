@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rime Lock · Ink Studio</title>
+<style>
+:root{color-scheme:dark;--bg:#182627;--surface:#203235;--line:#415958;--cream:#f1e2bf;--muted:#aec6bf;--ice:#a9e0db;--copper:#e3ad77}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--cream);font:14px system-ui,sans-serif}
+main{max-width:1030px;margin:auto;padding:22px 24px}header{display:flex;align-items:end;justify-content:space-between;gap:13px;margin-bottom:16px}
+h1,h2,p{margin:0}h1{font:normal 39px/1 Georgia,serif;letter-spacing:-.02em;margin-bottom:6px}header p{color:var(--muted)}
+button,input{accent-color:var(--ice)}button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible,input:focus-visible{outline:2px solid var(--cream);outline-offset:3px}
+.action,.mode{background:#2d4846;border:1px solid #597370;border-radius:5px;padding:7px 10px}
+.action:hover,.mode:hover{background:#385854}.mode[aria-pressed=true]{background:#426b60;border-color:#89b6a3}
+.layout{display:grid;align-items:start;grid-template-columns:minmax(0,650px) minmax(240px,1fr);gap:14px}
+figure{margin:0;min-width:0}.view{position:relative;border:1px solid #6b8581;border-radius:5px;overflow:hidden;line-height:0}
+#scene{width:100%;height:auto;aspect-ratio:324/168;display:block;image-rendering:pixelated}
+#box{position:absolute;border:1px solid #fbecd3;box-shadow:0 0 0 1px #273635;pointer-events:none}
+.scrub,.controls{display:flex;align-items:center;gap:8px;width:100%;padding-top:8px}.scrub input{flex:1;margin:0;min-width:35px}
+output{font:12px ui-monospace,monospace;color:var(--ice);white-space:nowrap}label{font-size:12px;color:var(--muted);white-space:nowrap}
+.controls{justify-content:space-between;flex-wrap:wrap}.actions{display:flex;gap:6px}.controls button{font-size:12px}
+aside{background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:13px;min-width:0}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:9px}
+#detail{box-sizing:content-box;width:min(100% - 2px,276px);height:auto;display:block;image-rendering:pixelated;border:1px solid #5b7774;background:#324b49}
+#report{font-size:12px;color:var(--ice);margin-top:8px;min-height:32px;line-height:1.45}
+.library{border-top:1px solid var(--line);margin-top:8px;padding-top:12px}.library header{margin-bottom:6px;align-items:center}
+.library header h2{margin:0}.sizes{display:flex;gap:3px}.size{border:1px solid #4d6863;background:#293d3e;border-radius:3px;padding:4px 6px;font:11px ui-monospace,monospace}
+.size[aria-pressed=true]{border-color:#98c4a8;background:#3a5f51}
+#glyphs{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:3px;text-align:center}
+.cel{display:flex;flex-direction:column;align-items:center;min-width:0;gap:4px;font-size:9px;color:var(--muted)}
+.cel canvas{width:32px;height:32px;image-rendering:pixelated;display:block;background:#253b3d}
+@media(max-width:760px){main{padding:16px}.layout{grid-template-columns:1fr}header h1{font-size:33px}aside{max-width:540px}}
+</style>
+</head>
+<body>
+<main>
+<header><div><h1>Rime Lock</h1><p>Hand-drawn frost cels follow the visible seam on a copper sign.</p></div><button id="play" class="action" type="button">Play frost</button></header>
+<div class="layout">
+  <figure>
+    <div class="view"><img id="scene" width="324" height="168" alt="Frost advancing across a copper lock sign"><div id="box"></div></div>
+    <figcaption>
+      <div class="scrub"><input id="time" type="range" min="0" step="1" aria-label="Frost animation frame"><output id="tick" for="time"></output></div>
+      <div class="controls"><div class="actions">
+        <button class="mode" id="plain" type="button" aria-pressed="false">Plain seam</button>
+        <button class="mode" id="authored" type="button" aria-pressed="true">Boundary cels</button>
+        <button class="mode" id="bolt" type="button">At the bolt</button>
+      </div><label><input id="sites" type="checkbox"> Show cel sites</label></div>
+    </figcaption>
+  </figure>
+  <aside>
+    <h2>Native-pixel close-up</h2>
+    <canvas id="detail" width="46" height="30" aria-label="Magnified pixels at the frost boundary"></canvas>
+    <p id="report" aria-live="polite"></p>
+    <section class="library">
+      <header><h2>Authored cels</h2><div class="sizes" id="sizes"></div></header>
+      <div id="glyphs"></div>
+    </section>
+  </aside>
+</div>
+</main>
+<script>
+/* STUDY */
+const el=id=>document.getElementById(id), image=el('scene'), slider=el('time'), detail=el('detail'), ctx=detail.getContext('2d');
+const limit=shots.length-1, nearBolt=[182,81];
+const colors={straight:'#60cbbf',inside:'#f2dd93',outside:'#fdf4cd',taper:'#a9c8ff',gap:'#ffbb97'};
+function distance(site){return Math.hypot(site.at[0]-nearBolt[0],site.at[1]-nearBolt[1]);}
+function target(shot){
+  return shot.report.sites.filter(site=>site.kind==='gap').sort((a,b)=>distance(a)-distance(b))[0];
+}
+const best=shots.reduce((best,shot,i)=>distance(target(shot)??{at:[-200,-200]})<best.distance
+  ? {i,distance:distance(target(shot))}:best,{i:26,distance:Infinity}).i;
+let tick=best, authored=true, selectedSize='hook', timer, revision=0;
+slider.max=limit;
+const sizes=clips.map(({id,art})=>{
+  const button=document.createElement('button');
+  button.type='button';button.className='size';button.textContent=art[0].width+'×'+art[0].height;
+  button.onclick=()=>{selectedSize=id;gallery()};
+  el('sizes').append(button);
+  return {id,art,button};
+});
+function gallery(){
+  for(const size of sizes)size.button.setAttribute('aria-pressed',String(size.id===selectedSize));
+  el('glyphs').replaceChildren();
+  for(const {kind,width,height,pixels} of sizes.find(size=>size.id===selectedSize).art){
+    const tile=document.createElement('div'), canvas=document.createElement('canvas'), title=document.createElement('span');
+    tile.className='cel';canvas.width=canvas.height=8;
+    canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(pixels),width,height),
+      Math.floor((8-width)/2),Math.floor((8-height)/2));
+    title.textContent=kind;
+    tile.append(canvas,title);el('glyphs').append(tile);
+  }
+}
+async function show(i){
+  tick=i;
+  const shot=shots[i], drawing=shot.report, request=++revision;
+  const point=target(shot)?.at??drawing.sites[0]?.at??nearBolt;
+  const x=Math.max(0,Math.min(324-detail.width,point[0]-23)),y=Math.max(0,Math.min(168-detail.height,point[1]-15));
+  const box=el('box');
+  Object.assign(box.style,{left:x/324*100+'%',top:y/168*100+'%',width:detail.width/324*100+'%',height:detail.height/168*100+'%'});
+  el('plain').setAttribute('aria-pressed',String(!authored));
+  el('authored').setAttribute('aria-pressed',String(authored));
+  slider.value=i;
+  el('tick').value='FRAME '+String(i).padStart(2,'0');
+  el('report').textContent=authored?drawing.changedPixels+' pixels painted · '+drawing.byKind.gap+' gap ends · '+(drawing.byKind.inside+drawing.byKind.outside)+' corners':'The same render with the boundary cels hidden.';
+  image.src=authored?shot.art:shot.plain;
+  await image.decode().catch(()=>{});
+  if(request!==revision)return;
+  ctx.clearRect(0,0,detail.width,detail.height);
+  ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(image,x,y,detail.width,detail.height,0,0,detail.width,detail.height);
+  if(el('sites').checked&&authored)for(const site of drawing.sites){
+    const u=site.at[0]-x,v=site.at[1]-y;
+    ctx.fillStyle=colors[site.kind];ctx.fillRect(u,v,1,1);
+  }
+}
+function stop(){clearInterval(timer);timer=undefined;el('play').textContent='Play frost'}
+slider.oninput=()=>{stop();show(Number(slider.value))};
+el('plain').onclick=()=>{authored=false;show(tick)};
+el('authored').onclick=()=>{authored=true;show(tick)};
+el('bolt').onclick=()=>{stop();show(best)};
+el('sites').oninput=()=>show(tick);
+el('play').onclick=()=>{
+  if(timer){stop();return;}
+  show(tick===limit?0:tick);el('play').textContent='Pause';
+  timer=setInterval(()=>{if(tick===limit)stop();else show(tick+1)},1000/12);
+};
+gallery();
+show(best);
+</script>
+</body>
+</html>

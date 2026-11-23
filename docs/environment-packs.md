@@ -107,6 +107,8 @@ Use `settings.look.surfaceLightRamps` to replace the light ramp on an existing d
 
 The [Copperwind pack](../examples/copperwind-looks.json) contains painterly pixel art, hard-edged storybook, and soft atmospheric presets for the same [animated windmill scene](../examples/copperwind-crossing.json). Swap the binding with `--environment-preset` when rendering a JSON diorama. Use `off` to bypass the authored binding. Leave the option unset to use a revision-pinned binding and its scene overrides. A renderer host can bypass just the ramp overrides with `render(world, { surfaceLightRamps: false })`.
 
+[Tideline Signal](tideline-looks.md) compares ink wash, cut paper, enamel signage, and stained glass on a shared animated shot. It includes a mixed-material treatment and a headless review script.
+
 ```sh
 for style in painterly storybook atmospheric; do
   node cli/ink-studio.js render examples/copperwind-crossing.json \

@@ -2,10 +2,14 @@
 // k0-math: vectors, 3x3 matrices, easing, keyed values, springs.
 const KIT = {};
 KIT.material = MaterialControls;
+KIT.sceneMeshes = SceneMeshes;
+KIT.artStability = ArtStability;
 KIT.detailBudgets = DetailBudgets;
 KIT.passQuality = PassQuality;
 KIT.renderContract = RenderContract;
 KIT.colorClusters = ColorClusters;
+KIT.shotCorrections = ShotCorrections;
+KIT.boundaryCels = BoundaryCels;
 KIT.shadowArt = ShadowArt;
 KIT.shotLighting = ShotLighting;
 KIT.splatFrames = SplatFrames;

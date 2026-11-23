@@ -1,6 +1,7 @@
 /* Bounded front-to-back fragment buffers on the native art grid. */
 const kinds = Object.freeze({ splat: 1, glass: 2, sprite: 3, ink: 4 });
-const stride = 11, idStride = 4;
+const stride = 11, idStride = 4, maxLayers = 16, maxSlots = 2_000_000;
+const layout = Object.freeze({stride,idStride,maxLayers,maxSlots,kinds});
 const channels = { value: 4, surface: 4, depth: 1, mask: 1, valid: 1, ids: 4, scatter: 3, transmission: 3 };
 const storage = { value: Uint8Array, surface: Uint8Array, depth: Float64Array, mask: Float32Array,
   valid: Uint8Array, ids: Uint32Array, scatter: Float32Array, transmission: Float32Array };
@@ -14,7 +15,7 @@ function settings(value) {
   if (!record(value) || Object.keys(value).some(key => !['layers', 'reflections', 'slots', 'coalesce'].includes(key)))
     throw new TypeError('Deep compositing needs a layer count and optional reflection plane names');
   const { layers = 4, reflections = [], slots = {}, coalesce = true } = value;
-  if (!Number.isSafeInteger(layers) || layers < 1 || layers > 16 || !Array.isArray(reflections) ||
+  if (!Number.isSafeInteger(layers) || layers < 1 || layers > maxLayers || !Array.isArray(reflections) ||
       reflections.length > 4 || !Array.from(reflections).every(name) || new Set(reflections).size !== reflections.length)
     throw new RangeError('Deep compositing supports 1–16 layers and up to four distinct reflection planes');
   if (typeof coalesce !== 'boolean') throw new TypeError('Deep coalesce needs a boolean');
@@ -26,10 +27,10 @@ function settings(value) {
     layerOptions(query);
     return [slot, channel, query];
   });
-  return { layers, reflections: new Set(reflections), bindings, coalesce, remaining: 2_000_000 };
+  return { layers, reflections: new Set(reflections), bindings, coalesce, remaining: maxSlots };
 }
 
-function capture(w, h, scope, metadata, view, sprites) {
+function capture(w, h, scope, metadata, view, sprites, camera) {
   if (!scope) return null;
   const { layers } = scope, size = w * h, slots = size * layers;
   if (slots > scope.remaining) throw new RangeError('Deep compositing exceeded the shared two-million-slot budget');
@@ -60,8 +61,8 @@ function capture(w, h, scope, metadata, view, sprites) {
   function fragment(bottom, depth, coverage, r, g, b, index, kind, medium, sprite) {
     const pixel = top(bottom), base = pixel * layers;
     const at = base * stride, tag = base * idStride;
-    const object = identify(sprite?.objectId, worldIds?.[index], objects, objectLabels, objectNumbers);
-    const material = identify(sprite?.materialId, materialIds?.[index], materials, materialLabels, materialNumbers);
+    const object = identify(sprite?.objectId ?? sprite?.mesh?.object, worldIds?.[index], objects, objectLabels, objectNumbers);
+    const material = identify(sprite?.materialId ?? sprite?.mesh?.material, materialIds?.[index], materials, materialLabels, materialNumbers);
     if (scope.coalesce && count[pixel] && object && ids[tag + 2] === object && ids[tag + 3] === material &&
         ids[tag] === kinds[kind] && Math.abs(colors[at] - depth) < 1e-4) {
       // Coincident dabs from one surface consume a single layer.
@@ -123,7 +124,7 @@ function capture(w, h, scope, metadata, view, sprites) {
 
   function finish() {
     if (donor) for (let p = 0; p < size; p++) if (donorWeight[p] < localWeight[p]) donor[p] = -1;
-    return { w, h, layers, count, colors, ids, objects, materials, donor, depthGate, donorGate, reflections };
+    return { w, h, layers, count, colors, ids, objects, materials, donor, depthGate, donorGate, reflections, camera };
   }
 
   return { fragment, transmit, route, reflect, finish };
@@ -237,4 +238,4 @@ function layer(frame, options = {}, channel) {
       objects: source.objects, materials: source.materials, kinds } };
 }
 
-module.exports = { settings, capture, layer };
+module.exports = { settings, capture, layer, layout };

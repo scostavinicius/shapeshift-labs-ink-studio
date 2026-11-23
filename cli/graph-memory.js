@@ -115,6 +115,15 @@ function estimateGraphMemory({ graph, groups, assets, overrides, kit, hostOperat
           pixelEffects.planPathBlur(source, args.path, options);
         return { ...image(raster(source.width, source.height), plan.scratchBytes), detail: plan };
       }
+      case 'raster.spriteLayer': {
+        const value = raster(width, height);
+        if (!value) return;
+        const count = Array.isArray(args.sprites) ? args.sprites.length : 512;
+        const budgeted = options?.budget !== undefined && options.budget !== false;
+        const reportBytes = budgeted ? (4 + count * 8) * height + count * 64 : 32;
+        return { outputs: { value }, resultBytes: value.bytes + reportBytes,
+          scratchBytes: budgeted ? count * height : 0 };
+      }
       case 'raster.pack': {
         if (!Array.isArray(args.sprites) || !options || args.sprites.some(sprite =>
           !(sprite?.source ?? sprite)?.[rasterKind] || (sprite?.source ?? sprite).bounds ||

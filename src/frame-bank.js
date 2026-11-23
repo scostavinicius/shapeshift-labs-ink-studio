@@ -60,6 +60,11 @@ const FrameBank = (() => {
     return { first: false, capture: Boolean(grid || regions.length || pulse), clock: { origin, time, tick }, grid, regions, pulse };
   }
 
+  function tileDue(grid, x, y, columns) {
+    const index = Math.floor(y / grid.size[1]) * columns + Math.floor(x / grid.size[0]);
+    return mod(grid.head - grid.phase - index * grid.step, grid.every) < grid.span;
+  }
+
   function write(step, source, previous, w, h, width, height, mask, diagnostic) {
     const { grid, first, pulse } = step;
     if (first && width === w && height === h) {
@@ -74,10 +79,7 @@ const FrameBank = (() => {
       const x = (i + .5) * w / width, y = (j + .5) * h / height;
       const q = Math.floor(y) * w + Math.floor(x);
       let weight = first ? 255 : instant?.[q] ?? 0;
-      if (grid && weight < 255) {
-        const index = Math.floor(y / grid.size[1]) * cols + Math.floor(x / grid.size[0]);
-        if (mod(grid.head - grid.phase - index * grid.step, grid.every) < grid.span) weight = 255;
-      }
+      if (grid && weight < 255 && tileDue(grid, x, y, cols)) weight = 255;
       for (const { rect, coverage } of regions) {
         if (weight === 255) break;
         if (!rect || x >= rect[0] && x < rect[0] + rect[2] && y >= rect[1] && y < rect[1] + rect[3])
@@ -91,6 +93,6 @@ const FrameBank = (() => {
     }
     return result;
   }
-  return Object.freeze({ prepare, schedule, write });
+  return Object.freeze({ prepare, schedule, tileDue, write });
 })();
 if (typeof module !== 'undefined') module.exports = FrameBank;

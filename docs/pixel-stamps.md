@@ -12,6 +12,14 @@ the same JSON the renderer reads. The star, glint, and bubble studies let you
 open each separately drawn size.
 The built-in studies include the two layers of the Red Spring spell, so
 the ink and the eye can be edited separately.
+The [animated tile library](pixel-tiles.md) uses the same editable cels
+for copper pulses and creeping frost.
+[Directional contact marks](contact-marks.md) add cels for direct hits and
+glancing skids with two authored sizes and diagonal poses.
+[Light-driven highlight cels](highlight-cels.md) add individually drawn
+pins, hooks, and arcs for brass, enamel, and glass.
+[Jointed sprite chains](jointed-sprite-chains.md) register authored link cels
+to two spring-driven sockets and switch drawings as the links deform.
 
 ## Drawing and timing
 
@@ -116,7 +124,10 @@ finishes, selective ink, and sprite atlas integration.
 
 ## Effect presets and reusable clips
 
-`KIT.pixelStamps.catalog()` lists the five effect families and their variants,
+The [shoreline foam](shore-foam.md) clips include separately drawn cardinal
+and diagonal cels for straight banks, inside corners, and rock tips.
+
+`KIT.pixelStamps.catalog()` lists the effect families and their variants,
 plus the editable clips they use. Open **Library clips** in the workshop to
 draw or retime any clip. `KIT.pixelStamps.clip(id, { swatches })` returns a
 fresh, JSON-serializable descriptor, with its named `swatchRoles`.
@@ -128,6 +139,7 @@ fresh, JSON-serializable descriptor, with its named `swatchRoles`.
 | `bubble` | `full`, `small` | An authored rise, then a pop and ripple at its endpoint |
 | `ember` | `rising`, `chip`, `fleck`, `bed` | Whole-pixel trails and individual cooling poses |
 | `burst` | `spray`, `fork`, `diamond`, `fan` | An expanding mark that breaks into detached pixels |
+| `glyph` | `cross`, `outline-cross`, `split-cross`, `ring`, `diamond`, `four-dot`, `brackets` | A fixed-center signal pulse with four individually drawn cels |
 
 ```json
 {
@@ -157,12 +169,32 @@ repeat with an optional gap. On a native-pixel card, `offsets` takes a list
 of `[seconds, x, y]` keys relative to its cue. Motion rounds to whole pixels.
 Cel size, timing, and swatch indices are independent from motion.
 
-The [preset reel](../examples/pixel-effect-presets.js) places the five
-families by name and uses their own swatches over a painted scene.
+The [preset reel](../examples/pixel-effect-presets.js) places stars, glints,
+bubbles, embers, and bursts over a painted scene.
 
 ```sh
 node cli/ink-studio.js clip examples/pixel-effect-presets.js --w 244 --h 156 --px 1 \
   --from 0 --to 4 --fps 18 --out pixel-effects.png
+```
+
+### Signal Fall
+
+[Signal Fall](../examples/signal-fall.js) runs seven glyphs in a descending
+stream and shows the four cels of each at twice their native size. Each
+clip keeps a common 7×7 grid and changes the contour as it brightens and
+decays. Open the **Signal** clips under **Library clips** in the workshop to
+edit individual pixels and holds.
+
+Use `clip('glyph-ring')` for a single editable clip or place
+`{ preset: 'glyph', variant: 'ring', at: [0, 1, 0] }` in a scene. The swatch
+roles are `residue`, `dim`, `lit`, and `peak`. The example samples the same
+clips in one raster layer. A clock advances the pulse in each column while
+the glyph cells stay in place.
+The motion study was inspired by [ama_plaka’s ‡┼⁕⌑ loop](https://x.com/ama_plaka/status/2124116076803871198).
+
+```sh
+node cli/ink-studio.js clip examples/signal-fall.js --w 388 --h 240 --px 1 \
+  --from 0 --to 4 --fps 24 --out signal-fall.png
 ```
 
 ## Red Spring Observatory

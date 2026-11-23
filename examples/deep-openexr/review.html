@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Signal Relay · Deep OpenEXR</title>
+<style>
+  :root{color-scheme:dark;--bg:#111c26;--ink:#f5ebdc;--muted:#abbec7;--edge:#435862;--panel:#1b2c37;--mint:#9ce7d8;--rose:#f0a4b4}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,sans-serif}
+  main{max-width:1100px;margin:auto;padding:clamp(15px,4vw,44px)}
+  header{margin-bottom:17px;display:flex;justify-content:space-between;align-items:end;gap:12px;flex-wrap:wrap}
+  h1{font:500 clamp(2.8rem,7vw,4.6rem)/.93 Georgia,serif;letter-spacing:-.053em;margin:0 0 9px}
+  p{margin:0;color:var(--muted)}
+  button,a{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--edge);border-radius:5px;padding:6px 10px;cursor:pointer}
+  a{text-decoration:none}
+  button[aria-pressed=true],button:hover,a:hover{border-color:var(--mint);color:var(--mint)}
+  :focus-visible{outline:2px solid var(--rose);outline-offset:2px}
+  #controls{display:flex;gap:8px 10px;align-items:center;flex-wrap:wrap;margin-bottom:13px}
+  #controls span{color:var(--muted)}
+  #panels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}
+  figure{min-width:0;margin:0;border:1px solid var(--edge);background:var(--panel);border-radius:7px;overflow:hidden}
+  figure+figure{border-color:#619388}
+  figcaption{padding:8px 12px}
+  figure+figure figcaption{color:var(--mint)}
+  .image{position:relative;background:#101a23}
+  img{display:block;width:100%;height:auto;image-rendering:pixelated}
+  #marker{position:absolute;pointer-events:none;width:12px;height:12px;border:1px solid #fff0ca;
+    border-radius:50%;transform:translate(-50%,-50%);box-shadow:0 0 0 1px #24323d}
+  .ray{margin-top:14px}
+  table{width:100%;border-collapse:collapse;background:#182934;border:1px solid var(--edge);
+    font:600 .8rem/1.4 ui-monospace,monospace;font-variant-numeric:tabular-nums}
+  caption{color:var(--muted);text-align:left;margin-bottom:6px;font:14px system-ui,sans-serif}
+  th,td{padding:6px 11px;text-align:left;border-bottom:1px solid #344a55}
+  th{color:var(--muted)}
+  tr.insert td{color:var(--rose)}
+  @media(max-width:620px){#panels{grid-template-columns:1fr}th,td{padding:5px 8px}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div><h1>Signal Relay</h1><p>Move the service key in front of, between, or behind two painted sheets using the exported deep samples.</p></div>
+  <a id="report" download="insertion-report.json">Download sample data</a>
+</header>
+<div id="controls" role="group" aria-label="Service key depth">
+  <span>Insert depth</span>
+  <button data-case="front" aria-pressed="false">In front</button>
+  <button data-case="between" aria-pressed="true">Between sheets</button>
+  <button data-case="behind" aria-pressed="false">Behind both</button>
+</div>
+<section id="panels" aria-label="Colors flattened from the deep OpenEXR">
+  <figure><figcaption>Original deep plate</figcaption><div class="image"><img id="source" alt="Two transparent signal plates above their instrument housing"></div></figure>
+  <figure><figcaption id="result-label">Service key inserted</figcaption><div class="image"><img id="result" alt="The service key composited into the signal relay"><span id="marker" aria-hidden="true"></span></div></figure>
+</section>
+<section class="ray" aria-label="Samples at the marked pixel">
+  <table>
+    <caption id="caption"></caption>
+    <thead><tr><th scope="col">Sample from camera</th><th scope="col">Z</th><th scope="col">Alpha</th></tr></thead>
+    <tbody id="samples"></tbody>
+  </table>
+</section>
+</main>
+<script>
+const {report,images}=/*INK_DEEP_DEMO*/;
+const get=id=>document.getElementById(id);
+const buttons=[...document.querySelectorAll('[data-case]')];
+for(const id of ['source','result']){
+  const image=get(id);
+  image.width=report.width;
+  image.height=report.height;
+}
+get('source').src=images.source;
+const [x,y]=report.pixel;
+Object.assign(get('marker').style,{left:((x+.5)/report.width*100)+'%',top:((y+.5)/report.height*100)+'%'});
+get('caption').textContent='Pixel ('+x+', '+y+') read by '+report.reader;
+get('report').href=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)+'\n'],{type:'application/json'}));
+function show(id){
+  for(const button of buttons) button.setAttribute('aria-pressed',String(button.dataset.case===id));
+  const placement=report.cases[id];
+  get('result').src=images[id];
+  get('result-label').textContent='Service key at Z '+placement.depth.toFixed(2);
+  get('samples').replaceChildren(...placement.samples.map(sample=>{
+    const row=document.createElement('tr');
+    if(sample.object==='service key') row.className='insert';
+    for(const value of [sample.object,sample.z.toFixed(2),Math.round(sample.alpha*100)+'%']){
+      const cell=document.createElement('td');
+      cell.textContent=value;
+      row.append(cell);
+    }
+    return row;
+  }));
+}
+for(const button of buttons) button.addEventListener('click',()=>show(button.dataset.case));
+show('between');
+</script>
+</body>
+</html>

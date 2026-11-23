@@ -16,6 +16,60 @@
       ]
     },
     {
+      "id": "studio.webgpu-graph",
+      "kind": "api",
+      "status": "ready",
+      "title": "Run WebGPU texture and geometry graphs with WGSL",
+      "what": "Compile a dependency graph of GPU texture and buffer passes, dispatch selected outputs, and use the resulting resources in WebGPU draw pipelines or read them back for inspection.",
+      "use": "createWebGPUGraph(device, { resources, nodes })",
+      "where": "webgpu.mjs, docs/webgpu-graphs.md, examples/webgpu-graphs/",
+      "tags": [
+        "gpu",
+        "webgpu",
+        "compute",
+        "wgsl",
+        "texture",
+        "geometry"
+      ]
+    },
+    {
+      "id": "studio.gaussian-import",
+      "kind": "api",
+      "status": "ready",
+      "title": "Import Gaussian PLY and SPZ splat clouds",
+      "what": "Read coordinates, covariance inputs, opacity and spherical harmonics from Graphdeco PLY or Niantic SPZ, then preview the cloud in Ink's existing browser or headless renderer.",
+      "use": "ink-studio render <cloud.ply|cloud.spz> --raw --out preview.png",
+      "where": "src/gaussian-splats.mjs, docs/webgpu-graphs.md",
+      "tags": [
+        "splat",
+        "gaussian",
+        "point cloud",
+        "ply",
+        "spz",
+        "import"
+      ]
+    },
+    {
+      "id": "studio.show-control",
+      "kind": "api",
+      "status": "ready",
+      "title": "Route live audio, sync show clocks, map projectors and control lighting",
+      "what": "Mix and meter Web Audio buses, follow MIDI Clock and optional Ableton Link, decode MTC, LTC and ArtTimeCode, warp overlapping projection surfaces, and route OSC and DMX through a local bridge.",
+      "use": "ink-studio show-bridge",
+      "where": "show-control.mjs, cli/show-bridge.js, docs/show-control.md, examples/live-show/",
+      "tags": ["audio", "show", "timecode", "midi", "link", "projection", "lighting", "dmx", "osc"]
+    },
+    {
+      "id": "studio.patch-tooling",
+      "kind": "cli",
+      "status": "ready",
+      "title": "Wire, bind and preview audiovisual patches from the CLI",
+      "what": "Edit typed graph connections with validated transactions, map controls, stream video through tracking and feedback, and inspect each port while a patch runs. Optional WGSL nodes run through native WebGPU.",
+      "use": "ink-studio patch help",
+      "where": "cli/patch-cli.js, docs/patch-tooling.md, examples/patch-tooling/",
+      "tags": ["patch", "graph", "video", "audio", "tracking", "shader", "preview"]
+    },
+    {
       "id": "studio.webgl",
       "kind": "api",
       "status": "ready",
@@ -32,14 +86,25 @@
       ]
     },
     {
+      "id": "render.blockVideoCorruption",
+      "kind": "api",
+      "status": "ready",
+      "title": "Feed-local block video corruption",
+      "what": "Transport stale pixels with shared block motion, freeze selected blocks, and refresh groups on staggered cadences within one feed.",
+      "use": "motionSmear pass with blockMemory and hold, or KIT.procedural.datamosh.create",
+      "where": "src/motion-smear.js, docs/render-graph.md",
+      "example": "examples/block-video-corruption.cjs",
+      "tags": ["video", "datamosh", "motion", "blocks", "render-graph"]
+    },
+    {
       "id": "studio.transitions",
       "kind": "api",
       "status": "ready",
       "title": "Compose retro screen transitions and custom shader sequences",
-      "what": "The WebGL 2 transition compositor provides 49 parameterized presets, timing and cue markers, custom GLSL stages, and same-context render targets.",
+      "what": "The WebGL 2 transition compositor provides 50 parameterized presets, timing and cue markers, custom GLSL stages, and same-context render targets. Column melt takes painted timing, resistance, and sticking and moves whole art-pixel rows.",
       "use": "composer.draw(createTransition('sleepy-double-blink').sample(seconds))",
       "where": "webgl.mjs, src/webgl/transition-composer.mjs",
-      "example": "docs/transitions.md, examples/transitions/index.html",
+      "example": "docs/transitions.md, examples/transitions/index.html, examples/column-melt.mjs",
       "tags": [
         "transition",
         "browser",
@@ -240,6 +305,28 @@
       ],
       "where": "src/kit/k2-motion.js",
       "example": "demos/labscenes.js sceneBench (the beetle)"
+    },
+    {
+      "id": "anim.motion-matching",
+      "kind": "rig",
+      "status": "ready",
+      "title": "Motion matching for procedural foot rigs",
+      "what": "Index entry poses by foot contact, swing phase, velocity, and intended heading. On a steering change, retain planted contacts and redirect the swing from its current position and velocity.",
+      "use": "K.gait({ feet, motionMatching: true })",
+      "where": "src/kit/k3-motion-matching.js, docs/motion-matching.md",
+      "example": "examples/motion-matching/index.html",
+      "tags": ["walk", "locomotion", "steering", "procedural rig", "motion matching"]
+    },
+    {
+      "id": "anim.view-poses",
+      "kind": "rig",
+      "status": "ready",
+      "title": "View-specific pose corrections",
+      "what": "Swing elbows or move a held prop in a camera sector. Blend corrections around the orbit with locked foot plants and shared prop grips in live views and directional sprites.",
+      "use": "puppet.viewPoses.set(asset), or render/atlas --view-poses asset.json",
+      "where": "src/kit/kj-view-poses.js, docs/view-poses.md",
+      "example": "examples/view-poses/index.html",
+      "tags": ["puppet", "pose", "orbit", "contact", "grip", "sprite"]
     },
     {
       "id": "sdf.ops",
@@ -778,6 +865,17 @@
       ]
     },
     {
+      "id": "sim.spriteChains",
+      "kind": "fx",
+      "status": "ready",
+      "title": "Jointed sprite chains",
+      "what": "Drive registered pixel-art links with XPBD springs and signed-distance contact. Use separate poses for bends, compression, and contact and select authored sizes and directions at native resolution.",
+      "use": "K.spriteChains.create({ points, pins, style: K.spriteChains.style(cels), sdf })",
+      "where": "src/kit/paz-sprite-chains.js",
+      "example": "examples/jointed-sprite-chains.js",
+      "tags": ["sprites", "pixel-art", "rope", "contact", "xpbd"]
+    },
+    {
       "id": "import.mesh",
       "kind": "solid",
       "status": "ready",
@@ -924,6 +1022,28 @@
         "palette",
         "render"
       ]
+    },
+    {
+      "id": "look.materialProjection",
+      "kind": "material",
+      "status": "ready",
+      "title": "PS1-style material projection",
+      "what": "Style individual textured surfaces with affine UVs, native art-pixel vertex snapping, and regular triangle subdivision.",
+      "use": "SpriteSurface.make().faceRegion(origin, right, up, region, { projection: { mapping: 'affine', vertexSnap: 2, subdivisions: 4 } })",
+      "where": "src/sprite-surface.js, cli/sprite-surfaces.js, src/webgl/surfaces.mjs",
+      "example": "examples/material-projection.js",
+      "tags": ["textures", "pixel-art", "affine", "geometry"]
+    },
+    {
+      "id": "look.viewDither",
+      "kind": "material",
+      "status": "ready",
+      "title": "View-direction dithering",
+      "what": "Project a palette dither grid onto a fixed plane selected by camera direction. Compare it with screen, world and rest-space anchoring over the same turn.",
+      "use": "look.stable.dither = 'view' or palette.dither.space = 'view'",
+      "where": "src/art-stability.js, cli/render.js",
+      "example": "examples/view-direction-dithering.js",
+      "tags": ["dither", "palette", "camera", "pixel-art"]
     },
     {
       "id": "look.translucent",
@@ -1547,6 +1667,149 @@
         "sdf",
         "splat"
       ]
+    },
+    {
+      "id": "render.spriteReconstruction",
+      "kind": "api",
+      "status": "ready",
+      "title": "Sprite-based object reconstruction",
+      "what": "Reuse a depth and normal atlas across named native objects and hand off coverage as the camera approaches. Supports animated cels, headless rendering, WebGL depth and ray picking.",
+      "use": "K.sprite.reconstruction.bind(world, placements)",
+      "where": "src/sprite-reconstruction.js",
+      "example": "examples/sprite-reconstruction.html",
+      "tags": ["sprites", "impostor", "lod", "reconstruction"]
+    },
+    {
+      "id": "kit.sprite.celPreview",
+      "kind": "api",
+      "status": "ready",
+      "title": "Native-size sprite cel preview",
+      "what": "Scrub registered sprite drawings with previous and next onion skins, integer zoom and a clean 1× pane. Skip held drawings or inspect every export frame.",
+      "use": "K.sprite.celPreview.create({ atlas, width, height, fps, count })",
+      "where": "src/kit/kpzz-sprite-preview.js",
+      "example": "examples/sprite-cel-preview.cjs",
+      "tags": ["sprites", "pixel-art", "animation", "onion-skin"]
+    },
+    {
+      "id": "kit.sprite.silhouettes",
+      "kind": "api",
+      "status": "ready",
+      "title": "Silhouette tracks",
+      "what": "Hold, replace or smear a painted contour while the sprite pose changes. Register the track to moving view-local pins and inspect it in isolation at native size with onion skins.",
+      "use": "metadata.cels.silhouettes and K.sprite.celPreview.create({ atlas, silhouette })",
+      "where": "src/sprite-transitions.js",
+      "example": "examples/silhouette-tracks.js",
+      "tags": ["sprites", "pixel-art", "animation", "silhouette", "onion-skin"]
+    },
+    {
+      "id": "render.spriteOverlayMasks",
+      "kind": "api",
+      "status": "ready",
+      "title": "Sprite overlay stencils and emission",
+      "what": "Clip painted transition cels and their emission on the same art grid. Opaque eyelids or bangs can cover an independently timed emissive iris.",
+      "use": "metadata.cels.transitions with maskPaint, emissionPaint, or aligned PNG channels",
+      "where": "src/sprite-transitions.js",
+      "example": "examples/sprite-overlay-masks.js",
+      "tags": ["sprites", "pixel-art", "animation", "masks", "emission"]
+    },
+    {
+      "id": "kit.routes.projected",
+      "kind": "api",
+      "status": "ready",
+      "title": "Projected routes",
+      "what": "Project painted ribbons and route-attached sprite cels onto a native art grid. Shared depth hides props behind crests. Supports scrolling strips and registered size-specific cels.",
+      "use": "K.procedural.routes.projected.create({ path, width, strips, props })",
+      "where": "src/kit/paz-projected-routes.js",
+      "example": "examples/projected-routes.js",
+      "tags": ["routes", "pixel-art", "sprites", "perspective", "raster"]
+    },
+    {
+      "id": "render.sharedOutputs",
+      "kind": "api",
+      "status": "ready",
+      "title": "Shared miniature render outputs",
+      "what": "Route aligned color, depth, surface IDs and UVs from an independent renderer into a camera atlas, a world monitor, or a graph. Pick surfaces and recover calibrated world positions.",
+      "use": "K.renderOutputs.create / pick / raster / mask and cameraAtlas views[].source",
+      "where": "src/render-outputs.js",
+      "example": "examples/shared-render-outputs.js",
+      "tags": ["camera", "raster", "depth", "picking", "compositing"]
+    },
+    {
+      "id": "render.spriteScanlineBudgets",
+      "kind": "api",
+      "status": "ready",
+      "title": "Sprite scanline budgets",
+      "what": "Limit a sprite layer per native art row, honor authored priority, and rotate tied sprites. Inspect dropped row runs by sprite and overflow counts by row.",
+      "use": "raster.spriteLayer({ width, height, sprites, budget }) or spriteAtlasBudgets on a headless world",
+      "where": "src/sprite-scanline-budget.js, cli/atlas-sprites.js",
+      "example": "examples/sprite-scanline-budget.cjs",
+      "tags": ["sprites", "scanlines", "raster", "pixel-art", "inspection"]
+    },
+    {
+      "id": "render.tileRaycaster",
+      "kind": "api",
+      "status": "ready",
+      "title": "Tilemap raycaster",
+      "what": "Render a top-down tile grid with indexed walls, sliding doors, floor and ceiling paint, and clipped directional sprites. Outputs color, depth, surface IDs and UVs.",
+      "use": "K.tileRaycaster.create({ map, palette, tiles, doors, sprites })",
+      "where": "src/kit/paz-tile-raycaster.js",
+      "example": "examples/tile-raycaster.js",
+      "tags": ["tilemap", "raycasting", "sprites", "pixel-art", "perspective"]
+    },
+    {
+      "id": "sim.inSceneForecast",
+      "kind": "api",
+      "status": "ready",
+      "title": "In-scene simulation forecasts",
+      "what": "Compare pending commands from the current checkpoint. Draw future positions, field arrows and the earliest visible difference in the same scene.",
+      "use": "KIT.world.forecast.run(runtime, { actions, tracks, flows, compareView })",
+      "where": "src/kit/pud-simulation-forecast.js, docs/simulation-forecasts.md",
+      "example": "examples/simulation-forecast.cjs",
+      "tags": ["simulation", "checkpoint", "branching", "overlays", "forecast"]
+    },
+    {
+      "id": "render.sectorRaycaster",
+      "kind": "api",
+      "status": "ready",
+      "title": "Sector-based rooms",
+      "what": "Render a polygon floor plan with independent room heights, indexed light bands, painted walls and directional sprites. Doorways clip the view into connected rooms.",
+      "use": "K.sectorRaycaster.create({ sectors, portals, palette }) or tileRaycaster with mode: 'sectors'",
+      "where": "src/kit/paz-sector-raycaster.js, docs/sector-raycaster.md",
+      "example": "examples/sector-raycaster.cjs",
+      "tags": ["raycasting", "rooms", "portals", "floor-plan", "pixel-art"]
+    },
+    {
+      "id": "render.projectedStage",
+      "kind": "api",
+      "status": "ready",
+      "title": "Projected stage layers",
+      "what": "Paint upright scenery and repeating ground layers with one shared horizon, registered props and floor-bound planar reflections.",
+      "use": "K.projectedStage.create({ layers, props })",
+      "where": "src/kit/paz-projected-stage.js",
+      "example": "examples/projected-stage.js",
+      "tags": ["stage", "perspective", "parallax", "pixel-art", "reflections"]
+    },
+    {
+      "id": "render.heightmapFlyover",
+      "kind": "api",
+      "status": "ready",
+      "title": "Height-map flyovers",
+      "what": "Fly across aligned height and paint maps. Near ridges occlude distant terrain and independent altitude and distance bands select exact pixel-art swatches. Returns shared render outputs.",
+      "use": "K.heightmapFlyover.create({ bounds, heights, paint, altitude, distance })",
+      "where": "src/kit/paz-heightmap-flyover.js",
+      "example": "examples/heightmap-flyover.js",
+      "tags": ["terrain", "heightmap", "pixel-art", "palette", "depth"]
+    },
+    {
+      "id": "render.textile",
+      "kind": "api",
+      "status": "ready",
+      "title": "Thread, stitch and woven surfaces",
+      "what": "Render directional embroidery, interlaced knit loops, and over-under woven strips with native depth on curved charts.",
+      "use": "K.textile.draw(B, K.textile.weave({columns: 12, rows: 9}))",
+      "where": "src/kit/p81-textile.js",
+      "example": "examples/thread-studies.html",
+      "tags": ["thread", "stitch", "knit", "weave", "optional"]
     },
     {
       "id": "render.voxelSurface",

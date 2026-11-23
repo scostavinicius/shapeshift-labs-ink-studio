@@ -1,0 +1,23 @@
+{
+  "format": "ink-studio/shared-object-grade",
+  "version": 1,
+  "name": "The night courier",
+  "width": 160,
+  "height": 112,
+  "source": {
+    "scene": "../courier-shot-lighting.js",
+    "shotLighting": "../painted-shot-lighting/starting-rig.json",
+    "colorStack": "cool-dailies.json",
+    "camera": { "target": [0.12, 1.18, 0.05], "yaw": -0.13, "zoom": 1.024 }
+  },
+  "reference": {
+    "scene": "../courier-shot-lighting.js",
+    "shotLighting": "../courier-shot-lighting.json",
+    "camera": { "target": [0.05, 1.30, 0.14], "yaw": 0.31, "dist": 3.55 }
+  },
+  "anchors": [
+    { "id": "coat", "label": "Coat", "select": { "object": "courier", "material": "cloak" } },
+    { "id": "stone", "label": "Stone", "select": { "object": "wall", "material": "slate" } },
+    { "id": "lamp", "label": "Lamp brass", "select": { "object": "lantern", "material": "brass" } }
+  ]
+}

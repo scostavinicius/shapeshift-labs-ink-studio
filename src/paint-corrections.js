@@ -39,6 +39,16 @@ const PaintCorrections = (() => {
     return { min: raw.min.slice(), max: raw.max.slice(), feather };
   }
 
+  function eventSource(raw) {
+    if (raw === undefined) return undefined;
+    if (!record(raw) || !idOK(raw.run) || !idOK(raw.rule) || !Number.isSafeInteger(raw.tick) || raw.tick < 0 ||
+      typeof raw.id !== 'string' || !/^\d+\.\d+$/.test(raw.id) || !raw.id.startsWith(raw.tick + '.') ||
+      !['system', 'kind'].every(key => typeof raw[key] === 'string' && raw[key].length > 0 && raw[key].length <= 128))
+      throw new TypeError('Paint event source needs a run, rule, committed event ID, tick, system and kind');
+    const { run, rule, id, tick, system, kind } = raw;
+    return { run, rule, id, tick, system, kind };
+  }
+
   function layer(raw) {
     if (!record(raw) || !idOK(raw.id)) throw new TypeError('A paint layer needs a lowercase ID');
     const { id, type, time, angle = 65, feather = Math.min(35, angle), opacity = 1, decals = [] } = raw;
@@ -57,10 +67,10 @@ const PaintCorrections = (() => {
       Math.hypot(row[3], row[4], row[5]) > 0 && Number.isSafeInteger(row[6]) && row[6] >= 0 &&
       (row.length === 7 || row[7] >= 0 && row[7] <= 1)))
       throw new TypeError('A correction sample needs XYZ, a nonzero normal, a palette index and optional opacity');
-    const box = region(raw.region);
+    const box = region(raw.region), sourceEvent = eventSource(raw.sourceEvent);
     const capture = surface ? {type} : {view:view(raw.view), ...(time !== undefined && {time}),angle,feather};
     return { id, ...capture, opacity,
-      ...(box && { region: box }), decals };
+      ...(box && { region: box }), ...(sourceEvent && { sourceEvent }), decals };
   }
 
   function layers(raw) {
@@ -158,6 +168,6 @@ const PaintCorrections = (() => {
       }
     };
   }
-  return Object.freeze({ idOK, view, sameView, layer, layers, groups, bind, marker });
+  return Object.freeze({ idOK, view, sameView, eventSource, layer, layers, groups, bind, marker });
 })();
 if (typeof module !== 'undefined') module.exports = PaintCorrections;

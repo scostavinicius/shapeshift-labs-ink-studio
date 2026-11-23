@@ -15,9 +15,9 @@
   const maxItems = 10000;
 
   function compile(definition, { channel, exact = false } = {}) {
-    const T = K.procedural.takeTime;
+    const T = K.procedural.takeTime, { record, check, id, selector } = K.world.data;
     const ops = exact ? T : {
-      read: value => value, seconds: value => value,
+      read: value => record(value) ? T.seconds(T.read(value)) : value, seconds: value => value,
       compare: (a, b) => a - b, add: (a, b) => a + b, sub: (a, b) => a - b,
       mul: (a, b) => a * b, div: (a, b) => a / b
     };
@@ -34,7 +34,6 @@
       check(valid(value), 'Invalid timeline time');
       return value;
     }
-    const { record, check, id, selector } = K.world.data;
     const root = clone(definition);
     const catalog = root?.sequences ?? {};
     const rootClock = root?.tempoMap === undefined ? undefined : timing.compile(root.tempoMap);
@@ -92,21 +91,29 @@
     }
     function sequence(input, name, depth) {
       check(depth <= 32 && record(input) && has(input, name === null ?
-        ['duration', 'tempoMap', 'tracks', 'markers', 'audio', 'events', 'cueTracks', 'clips', 'sequences'] :
-        ['duration', 'tempoMap', 'tracks', 'markers', 'audio', 'events', 'cueTracks', 'clips']), 'Invalid timeline sequence ' + (name ?? '(root)'));
+        ['duration', 'tempoMap', 'tracks', 'markers', 'audio', 'events', 'cueTracks', 'presentationCues', 'clips', 'sequences'] :
+        ['duration', 'tempoMap', 'tracks', 'markers', 'audio', 'events', 'cueTracks', 'presentationCues', 'clips']), 'Invalid timeline sequence ' + (name ?? '(root)'));
       const clock = name === null || input.tempoMap === undefined ? rootClock : timing.compile(input.tempoMap);
       const tracks = list(input.tracks, 'tracks').map(row => track(row, clock));
       check(new Set(tracks.map(({ target }) => JSON.stringify(target))).size === tracks.length,
         'A timeline sequence needs one track per target');
       const markers = items(input.markers, 'marker', clock, row => {
-        check(has(row, ['id', 'time', 'label']) && (row.label === undefined || typeof row.label === 'string'),
-          'Invalid timeline marker label');
-        return row.label === undefined ? {} : { label: row.label };
+        const { label, category, beatId, source } = row;
+        check(has(row, ['id', 'time', 'label', 'category', 'beatId', 'source']) &&
+          (label === undefined || typeof label === 'string') && (category === undefined || id(category)) &&
+          (beatId === undefined || K.world.inspectionLinks.parse(beatId)) &&
+          (source === undefined || K.world.storySceneTimeline.validSource(source, beatId)),
+          'Invalid timeline marker label, category or source');
+        return Object.fromEntries(Object.entries({ label, category, beatId, source }).filter(([, value]) => value !== undefined));
       });
       const events = items(input.events, 'event', clock, row => {
         check(has(row, ['id', 'time', 'kind', 'detail']) && id(row.kind) && record(row.detail ?? {}), 'Invalid timeline world event');
         return { kind: row.kind, detail: row.detail ?? {} };
       });
+      const presentationRows = input.presentationCues===undefined?[]:
+        K.world.presentationCues.read(input.presentationCues).cues.map(({timecode,...row})=>
+          ({...row,originalTimecode:timecode??T.pack(T.read(row.time)),time:exact?(timecode??row.time):row.time}));
+      const presentation = items(presentationRows, 'presentation', clock, ({id,time,...row})=>row);
       const audio = items(input.audio, 'audio', clock, row => {
         const { cue, duration: rawDuration = 0, offset: rawOffset = 0, gain = 1 } = row;
         const duration = point(rawDuration), offset = point(rawOffset);
@@ -131,7 +138,7 @@
         .map(row => exact ? row : { ...row, time: T.seconds(row.time) });
       check(cueTracks === undefined || clips.every(clip => !own(cueTracks, clip.id)),
         'Timeline clips and cue tracks need distinct names within a sequence');
-      const content = [...markers, ...audio, ...events, ...imported];
+      const content = [...markers, ...audio, ...events, ...imported, ...presentation];
       let end = tracks.reduce((end, track) => max(end, track.duration), zero);
       for (const item of [...content, ...clips]) end = max(end, add(item.time, item.duration ?? zero));
       const duration = input.duration == null ? end : point(input.duration, clock);
@@ -155,7 +162,8 @@
 
     function mappedPoint(item, path, time, fields) {
       const { cueTrack, ...entry } = item;
-      const row = { ...entry, ...fields, path: cueTrack === undefined ? path : [...path, cueTrack], time: seconds(time) };
+      const row = { ...entry, ...fields, path: cueTrack === undefined ? path : [...path, cueTrack], time: seconds(time),
+        ...((item.type==='presentation'||item.type==='marker'&&item.source!==undefined)&&{timecode:T.pack(exact?time:T.read(time))}) };
       if (exact) precise.set(row, time);
       points.push(row);
     }
@@ -163,7 +171,7 @@
       check(depth <= 32 && Number.isFinite(seconds(rate)) && seconds(rate) > 0, 'Timeline nesting or retiming limit exceeded');
       spend(node.tracks.length + node.content.length + node.clips.length + 1);
       const mapped = local => !compare(local, low) ? start :
-        !compare(local, high) ? end : add(start, div(sub(local, low), rate));
+        !compare(local, high) ? end : exact?T.affine(local,low,high,start,end):add(start, div(sub(local, low), rate));
       for (const tr of node.tracks) {
         const key = JSON.stringify(tr.target);
         targets.set(key, tr.target);
@@ -235,6 +243,7 @@
       audioSchedule,
       duration: seconds(graph.duration), targets: [...targets.values()], markers: points.filter(row => row.type === 'marker'),
       events: points.filter(row => row.type === 'event'), audio: sounds.map(row => row.clip),
+      presentationCues: points.filter(row => row.type === 'presentation'),
       sample(time) {
         check(timeOK(time), 'Timeline sample time must be finite and nonnegative');
         return sampleAt(read(time));

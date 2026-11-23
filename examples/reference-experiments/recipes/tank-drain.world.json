@@ -1,0 +1,28 @@
+{
+  "format": "ink-studio/world",
+  "version": 1,
+  "id": "reference-tank",
+  "dt": 0.01,
+  "systems": {
+    "hydraulics": {
+      "kind": "pipe-network",
+      "config": {
+        "nodes": {
+          "tank": {
+            "capacity": 2,
+            "initial": 1.44,
+            "area": 1.2
+          }
+        },
+        "leaks": {
+          "drain": {
+            "node": "tank",
+            "conductance": 0.65,
+            "outsideHead": 0,
+            "maxFlow": 2
+          }
+        }
+      }
+    }
+  }
+}

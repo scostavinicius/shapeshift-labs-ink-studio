@@ -1,9 +1,27 @@
-import { layerSamplingGLSL, captureFrameCamera } from './frame-composite.mjs';
+import { layerSamplingGLSL, depthLayerSamplingGLSL, createCompositeDepth, captureFrameCamera } from './frame-composite.mjs';
 import { createRenderEffects } from './render-effects.mjs';
 import { inspectionDepth } from './inspection.mjs';
 
 export const graphCapture = Symbol('render graph raster capture');
 export const graphOwner = Symbol('render graph owner capture');
+
+const tileScheduleGLSL = `
+bool tileDue(vec2 pixel, ivec3 tiles, ivec4 cycle) {
+  if (cycle.w <= 0) return false;
+  ivec2 tile = ivec2(pixel) / tiles.xy;
+  int index = tile.y * tiles.z + tile.x, period = cycle.x;
+  int offset = ((index % period) * cycle.y) % period;
+  return (cycle.z + period - offset) % period < cycle.w;
+}
+`;
+
+function tileUniforms(grid, width) {
+  if (!grid) return { cycle: [1, 0, 0, 0], tiles: [1, 1, 1] };
+  return {
+    cycle: [grid.every, grid.step, (grid.head - grid.phase + grid.every) % grid.every, grid.span],
+    tiles: [...grid.size, Math.ceil(width / grid.size[0])]
+  };
+}
 
 const fragment = `#version 300 es
 precision highp float;
@@ -13,6 +31,9 @@ uniform highp sampler2D u_source;
 uniform highp sampler2D u_rows, u_schedulePalette;
 uniform bool u_scheduleIndexed, u_addressLinear;
 uniform ivec2 u_addressEdges;
+uniform vec4 u_windowCrop, u_windowDest, u_windowLine, u_windowInk;
+uniform float u_windowBorder, u_windowLeader;
+uniform bool u_windowLinear, u_windowHasSourceMask;
 uniform highp sampler3D u_cube;
 uniform vec2 u_size, u_passSize, u_offset, u_amplitude;
 uniform bool u_packedDepth, u_depthMask, u_depthInvert, u_background, u_displayMask, u_budgetLinear;
@@ -33,13 +54,19 @@ uniform vec2 u_feedbackPivot, u_feedbackTransform, u_threshold;
 uniform float u_blockSize, u_gain;
 uniform bool u_feedbackLinear, u_hasThreshold;
 uniform bool u_scanlines, u_rejectDepth, u_hasDepth, u_isolated, u_over, u_wrap;
-uniform bool u_rawMotion, u_motionPerFrame;
+uniform bool u_rawMotion, u_motionPerFrame, u_needsRawMotion, u_blockMemory, u_hasBlockHold;
+uniform sampler2D u_blockHold;
+uniform vec4 u_blockRect;
+uniform ivec4 u_blockCycle;
+uniform ivec3 u_blockTiles;
 uniform float u_depthThreshold;
 uniform vec2 u_flowScale, u_flowVelocity, u_flowBlock;
 uniform float u_smearElapsed;
 out vec4 color;
 
 ${layerSamplingGLSL}
+${depthLayerSamplingGLSL}
+${tileScheduleGLSL}
 
 float depthAt(vec2 pixel) {
   ivec2 size = textureSize(u_depth, 0);
@@ -74,6 +101,42 @@ vec4 textureAddress(vec2 uv) {
     mix(addressedColor(p + ivec2(0, 1), size), addressedColor(p + ivec2(1), size), f.x), f.y);
 }
 
+vec4 windowTap(ivec2 site, ivec2 size) {
+  site = clamp(site, ivec2(0), size - 1);
+  site.y = size.y - 1 - site.y;
+  vec4 sampleColor = texelFetch(u_source, site, 0);
+  return u_windowHasSourceMask ? sampleColor * texelFetch(u_auxMask, site, 0).r : sampleColor;
+}
+
+vec4 windowPixel(vec2 pixel) {
+  vec2 local = pixel - u_windowDest.xy;
+  if (all(greaterThanEqual(local, vec2(0.0))) && all(lessThan(local, u_windowDest.zw))) {
+    vec2 edges = min(local, u_windowDest.zw - local);
+    if (min(edges.x, edges.y) < u_windowBorder) return u_windowInk;
+    ivec2 size = textureSize(u_source, 0);
+    if (!u_windowLinear) {
+      if (any(lessThanEqual(u_windowCrop.xy + u_windowCrop.zw, vec2(0.0))) ||
+          any(greaterThanEqual(u_windowCrop.xy, vec2(size)))) return vec4(0.0);
+      ivec2 donor = ivec2(u_windowCrop.xy) + (2 * ivec2(local) + 1) * ivec2(u_windowCrop.zw) / (2 * ivec2(u_windowDest.zw));
+      return any(lessThan(donor, ivec2(0))) || any(greaterThanEqual(donor, size)) ? vec4(0.0) : windowTap(donor, size);
+    }
+    vec2 at = u_windowCrop.xy + local * u_windowCrop.zw / u_windowDest.zw;
+    if (any(lessThan(at, vec2(0.0))) || any(greaterThanEqual(at, vec2(size)))) return vec4(0.0);
+    at -= .5;
+    ivec2 p = ivec2(floor(at));
+    vec2 f = fract(at);
+    return mix(mix(windowTap(p, size), windowTap(p + ivec2(1, 0), size), f.x),
+      mix(windowTap(p + ivec2(0, 1), size), windowTap(p + ivec2(1), size), f.x), f.y);
+  }
+  if (u_windowLeader > 0.0) {
+    vec2 line = u_windowLine.zw - u_windowLine.xy;
+    vec2 from = pixel - u_windowLine.xy;
+    vec2 delta = from - line * clamp(dot(from, line) / dot(line, line), 0.0, 1.0);
+    if (dot(delta, delta) <= u_windowLeader * u_windowLeader * .25) return u_windowInk;
+  }
+  return vec4(0.0);
+}
+
 void main() {
   ivec2 pos = ivec2(gl_FragCoord.xy);
   vec2 pixel = vec2(gl_FragCoord.x, u_passSize.y - gl_FragCoord.y) * u_size / u_passSize;
@@ -98,7 +161,7 @@ void main() {
     weight *= n >= 1.0 ? (u_background ? 1.0 : 0.0) : (u_depthInvert ? 1.0 - a : a);
   }
   if (u_operation == 1) {
-    if (u_layer) weight *= placedLayerAt(u_source, pixel, u_layerDest, u_layerRegion, u_layerTopDown, u_linear).a;
+    if (u_layer) weight *= guidedLayerAt(u_source, pixel, u_size, u_layerDest, u_layerRegion, u_layerTopDown, u_linear).a;
     if (u_volume) {
       ivec2 size = textureSize(u_depth, 0);
       ivec2 site = min(ivec2(pixel / u_size * vec2(size)), size - 1);
@@ -186,7 +249,7 @@ void main() {
         if (all(greaterThanEqual(sampleAt, vec2(0.0))) && all(lessThan(sampleAt, u_size)))
           previous = layerAt(u_history, sampleAt, u_size, false, u_feedbackLinear);
       }
-      vec4 fresh = u_layer ? placedLayerAt(u_source, pixel, u_layerDest, u_layerRegion, u_layerTopDown, u_linear)
+      vec4 fresh = u_layer ? guidedLayerAt(u_source, pixel, u_size, u_layerDest, u_layerRegion, u_layerTopDown, u_linear)
         : layerAt(u_source, pixel, u_size, false, false);
       float gain = weight * u_gain;
       if (u_hasThreshold && fresh.a > 0.0) {
@@ -215,27 +278,48 @@ void main() {
   if (u_operation == 15) {
     color = inputColor;
     if (!u_hasHistory) return;
-    vec2 offset = u_flowVelocity * u_smearElapsed;
-    float strength = 1.0;
-    if (u_hasFlow) {
-      vec2 block = floor(pixel / u_flowBlock) * u_flowBlock;
-      vec4 flow = layerAt(u_source, block + min(u_flowBlock, u_size - block) * .5, u_size, u_rawMotion, false);
-      if (flow.a <= 0.0 || flow.b <= 0.0) return;
-      if (u_rawMotion) {
-        offset += flow.rg * u_flowScale * (u_motionPerFrame ? 1.0 : u_smearElapsed);
-      } else {
-        vec2 bytes = floor(flow.rg / flow.a * 255.0 + .5);
-        vec2 velocity = u_flowVelocity + max(vec2(-1.0), (bytes - 128.0) / 127.0) * u_flowScale;
-        offset = velocity * u_smearElapsed;
+    vec2 origin = u_blockMemory ? u_blockRect.xy : vec2(0.0);
+    vec2 edge = u_blockMemory ? u_blockRect.zw : u_size;
+    if (any(lessThan(pixel, origin)) || any(greaterThanEqual(pixel, edge))) return;
+    if (u_blockMemory && tileDue(pixel - origin, u_blockTiles, u_blockCycle)) return;
+    vec2 block = origin + floor((pixel - origin) / u_flowBlock) * u_flowBlock;
+    vec2 center = block + min(u_flowBlock, edge - block) * .5;
+    vec2 maskPixel = u_blockMemory ? center : pixel;
+    float keep = u_hasAuxMask ? 1.0 - layerAt(u_auxMask, maskPixel, u_size, false, false).r : 1.0;
+    if (keep <= 0.0) return;
+    bool held = u_blockMemory && u_hasBlockHold && layerAt(u_blockHold, center, u_size, false, false).r > .5;
+    float amount = keep;
+    vec2 donor = pixel;
+    if (!held) {
+      if (u_decay <= 0.0 || (u_needsRawMotion && !u_hasFlow)) return;
+      vec2 offset = u_flowVelocity * u_smearElapsed;
+      amount *= u_decay;
+      if (u_hasFlow) {
+        vec4 flow = layerAt(u_source, center, u_size, u_rawMotion, false);
+        if (flow.a <= 0.0 || flow.b <= 0.0) return;
+        if (u_rawMotion) {
+          offset += flow.rg * u_flowScale * (u_motionPerFrame ? 1.0 : u_smearElapsed);
+        } else {
+          vec2 bytes = floor(flow.rg / flow.a * 255.0 + .5);
+          vec2 velocity = u_flowVelocity + max(vec2(-1.0), (bytes - 128.0) / 127.0) * u_flowScale;
+          offset = velocity * u_smearElapsed;
+        }
+        amount *= flow.b;
       }
-      strength = flow.b;
+      donor -= offset;
+      if (any(lessThan(donor, origin)) || any(greaterThanEqual(donor, edge))) return;
     }
-    if (u_hasAuxMask) strength *= 1.0 - layerAt(u_auxMask, pixel, u_size, false, false).r;
-    vec2 donor = pixel - offset;
-    if (strength <= 0.0 || any(lessThan(donor, vec2(0.0))) || any(greaterThanEqual(donor, u_size))) return;
-    vec4 old = layerAt(u_history, u_captureHistory ? donor : pixel, u_size, false, u_budgetLinear);
+    vec2 site = u_captureHistory ? donor : pixel;
+    if (u_blockMemory) {
+      vec2 scale = vec2(textureSize(u_history, 0)) / u_size;
+      vec2 first = ceil(origin * scale - .5) + .5;
+      vec2 last = ceil(edge * scale - .5) - .5;
+      if (any(greaterThan(first, last))) return;
+      site = clamp(site * scale, first, last) / scale;
+    }
+    vec4 old = layerAt(u_history, site, u_size, false, u_budgetLinear);
     if (u_captureHistory) {
-      vec4 delta = (old - inputColor) * (u_decay * strength * 255.0);
+      vec4 delta = (old - inputColor) * (amount * 255.0);
       color = inputColor + sign(delta) * floor(abs(delta) + .00001) / 255.0;
     } else color = floor(mix(inputColor, old, weight * u_opacity) * 255.0 + .50001) / 255.0;
     return;
@@ -248,12 +332,16 @@ void main() {
   weight *= u_opacity;
   color = inputColor;
   if (weight <= 0.0) return;
-  if (u_operation == 2) {
+  if (u_operation == 19) {
+    vec2 center = vec2(pos.x, int(u_passSize.y) - 1 - pos.y) + .5;
+    vec4 overlay = windowPixel(center) * weight;
+    color = floor((overlay + inputColor * (1.0 - overlay.a)) * 255.0 + .50001) / 255.0;
+  } else if (u_operation == 2) {
     if (inputColor.a <= 0.0) return;
     vec3 lookup = (clamp(inputColor.rgb / inputColor.a, 0.0, 1.0) * (u_cubeSize - 1.0) + 0.5) / u_cubeSize;
     color.rgb = mix(inputColor.rgb, texture(u_cube, lookup).rgb * inputColor.a, weight);
   } else if (u_operation == 5) {
-    vec4 over = u_layer ? placedLayerAt(u_source, pixel, u_layerDest, u_layerRegion, u_layerTopDown, u_linear) : layerAt(u_source, pixel, u_size, false, false);
+    vec4 over = u_layer ? guidedLayerAt(u_source, pixel, u_size, u_layerDest, u_layerRegion, u_layerTopDown, u_linear) : layerAt(u_source, pixel, u_size, false, false);
     over *= weight;
     color.a = over.a + inputColor.a * (1.0 - over.a);
     color.rgb = min(vec3(color.a), over.rgb + inputColor.rgb * (u_add ? 1.0 : 1.0 - over.a));
@@ -307,6 +395,7 @@ uniform ivec4 u_cycle;
 uniform ivec3 u_tiles;
 out vec4 color;
 ${layerSamplingGLSL}
+${tileScheduleGLSL}
 
 bool inside(vec2 p, vec4 rect) {
   return all(greaterThanEqual(p, rect.xy)) && all(lessThan(p, rect.xy + rect.zw));
@@ -317,12 +406,7 @@ void main() {
   vec4 fresh = layerAt(u_current, pixel, u_size, false, false);
   if (u_first) { color = fresh; return; }
   float weight = u_hasPulse ? layerAt(u_pulse, pixel, u_size, false, false).r : 0.0;
-  if (u_cycle.w > 0) {
-    ivec2 tile = ivec2(pixel) / u_tiles.xy;
-    int index = tile.y * u_tiles.z + tile.x, period = u_cycle.x;
-    int offset = ((index % period) * u_cycle.y) % period;
-    if ((u_cycle.z + period - offset) % period < u_cycle.w) weight = 1.0;
-  }
+  if (tileDue(pixel, u_tiles, u_cycle)) weight = 1.0;
   ${Array.from({ length: 8 }, (_, i) => `
   if (u_rules > ${i} && weight < 1.0 && inside(pixel, u_rects[${i}]))
     weight = max(weight, u_masked[${i}] != 0 ? layerAt(u_masks[${i}], pixel, u_size, false, false).r : 1.0);`).join('')}
@@ -341,6 +425,7 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
   const pool = [],
     historyFree = [];
   const groupsTexture = resources.texture();
+  const layerDepth = createCompositeDepth(gl, resources, textureUnit, 6, 11);
   const effects = createRenderEffects(gl, { program, target, textureUnit, fullscreen });
   const history = api.history({ release: buffer => historyFree.push(buffer), releaseAge: buffer => buffer.dispose() });
   let lastCube, ageScratch, bankShader;
@@ -390,12 +475,11 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
       masked[i] = Number(Boolean(mask));
       rects.set(rule?.rect ?? [0, 0, w, h], i * 4);
     }
-    const grid = bank.grid;
+    const { cycle, tiles } = tileUniforms(bank.grid, w);
     fullscreen(bankShader, stamp.framebuffer, width, height, {
       u_current: 0, u_previous: 1, u_pulse: 10, u_masks: units, u_size: [w, h], u_work: [width, height],
       u_first: bank.first, u_hasPulse: Boolean(bank.pulse), u_rules: bank.regions.length, u_masked: masked, u_rects: rects,
-      u_cycle: grid ? [grid.every, grid.step, (grid.head - grid.phase + grid.every) % grid.every, grid.span] : [1, 0, 0, 0],
-      u_tiles: grid ? [...grid.size, Math.ceil(w / grid.size[0])] : [1, 1, w]
+      u_cycle: cycle, u_tiles: tiles
     });
     return stamp;
   }
@@ -491,6 +575,10 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
         const layer =
           node.enabled && node.layer && (!feedback || memory.capture) &&
           api.layer(node, w, h, world, time, camera, gl, frame.time, frame.renderGraphInputs);
+        const window = node.window && node.opacity && api.windowFrame(node.window, {
+          world, time, sceneTime: frame.time, width: w, height: h, camera
+        });
+        const sourceMask = window && outputs.get(node.window.sourceMask);
         const scanlines = api.rowTable(node.rows, w, h, time, node.rowEdits);
         const schedule = node.schedule && api.scheduleTable(node.schedule, w, h, time);
         const indexed = node.indices !== undefined && api.indexedSchedule(node, frame.renderGraphInputs, schedule);
@@ -514,7 +602,7 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
         } else if (rawMotion) {
           textureUnit(1, raster);
           gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, w, h, 0, gl.RGBA, gl.FLOAT, rawMotion);
-        } else textureUnit(1, (outputs.get(node.source ?? node.field) ?? scene).textures[0]);
+        } else textureUnit(1, (outputs.get(window?.source ?? node.source ?? node.field) ?? scene).textures[0]);
         if (table && table !== lastCube) {
           gl.activeTexture(gl.TEXTURE4);
           gl.texImage3D(
@@ -552,9 +640,10 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
         textureUnit(6, depth ?? scene.textures[0]);
         const addresses = node.address && api.addressRaster(node, frame.renderGraphInputs, w, h);
         const registers = addresses || (schedule?.registers ?? scanlines);
-        textureUnit(8, registers ? rows : scene.textures[0]);
+        textureUnit(8, registers ? rows : (sourceMask ?? scene).textures[0]);
         if (registers) gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA32F, addresses ? w : 2, h, 0, gl.RGBA, gl.FLOAT, registers);
         const values = {
+          ...layerDepth(layer, ownership?.depth && {texture:depth, range:depthRange}, depth ?? scene.textures[0]),
           u_input: 0,
           u_source: 1,
           u_mask: 2,
@@ -563,7 +652,18 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
           u_selected: 5,
           u_size: [w, h],
           u_passSize: [w, h],
-          u_operation: node.operation,
+          u_operation: node.window && !window ? 0 : node.operation,
+          ...(window && {
+            u_windowCrop: window.crop,
+            u_windowDest: window.dest,
+            u_windowLine: window.line,
+            u_windowInk: window.ink?.rgba.map(n => n / 255) ?? [0, 0, 0, 0],
+            u_windowBorder: window.ink?.border ?? 0,
+            u_windowLeader: window.leader,
+            u_windowLinear: window.linear,
+            u_windowHasSourceMask: Boolean(sourceMask),
+            u_auxMask: 8
+          }),
           u_opacity: opacity,
           u_enabled: node.enabled,
           u_hasMask: Boolean(mask),
@@ -582,6 +682,7 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
           u_cubeSize: table?.size ?? 1,
           u_depth: 6,
           u_history: 7,
+          u_blockHold: 0,
           u_volume: Boolean(node.volume && depth && camera),
           u_rows: 8,
           u_scanlines: Boolean(scanlines),
@@ -682,11 +783,19 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
         } else if (memory) {
           const elapsed = smear ? memory.sampleElapsed : 0;
           const smearDecay = elapsed > 0 && (!node.motion || rawMotion) ? 2 ** (-elapsed / node.halfLife) : 0;
+          const heldBlocks = smear && outputs.get(node.hold);
+          const smearActive = smearDecay > 0 || elapsed > 0 && Boolean(heldBlocks);
           if (smear) {
-            const refresh = outputs.get(node.refresh);
+            const refresh = outputs.get(node.refresh), blocks = memory.blocks;
+            const rect = blocks?.rect ?? [0, 0, w, h];
+            const { cycle, tiles } = tileUniforms(blocks?.grid, rect[2] - rect[0]);
             textureUnit(8, (refresh ?? scene).textures[0]);
+            textureUnit(10, (heldBlocks ?? scene).textures[0]);
             Object.assign(values, {
               u_auxMask: 8, u_hasAuxMask: Boolean(refresh), u_hasFlow: Boolean(node.field || rawMotion),
+              u_needsRawMotion: Boolean(node.motion), u_blockMemory: Boolean(blocks),
+              u_blockHold: 10, u_hasBlockHold: Boolean(heldBlocks), u_blockRect: rect,
+              u_blockCycle: cycle, u_blockTiles: tiles,
               u_rawMotion: Boolean(rawMotion), u_motionPerFrame: node.units === 'pixels/frame',
               u_flowScale: node.direction === 'backward' ? node.fieldScale.map(value => -value) : node.fieldScale,
               u_flowVelocity: node.velocity, u_flowBlock: node.blockSize,
@@ -708,7 +817,7 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
               ...values,
               u_passSize: [work.width, work.height],
               u_captureHistory: true,
-              u_hasHistory: smear ? smearDecay > 0 : Boolean(memory.value) && (!feedback || memory.decay > 0),
+              u_hasHistory: smear ? smearActive : Boolean(memory.value) && (!feedback || memory.decay > 0),
               u_hold: node.mode === 'hold',
               u_decay: smear ? smearDecay : feedback || node.mode === 'persistence' ? memory.decay : 0,
               ...(motion && {
@@ -729,7 +838,7 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
           }
           textureUnit(7, stamp.textures[0]);
           fullscreen(shader, out.framebuffer, w, h, {
-            ...values, u_captureHistory: false, u_hasHistory: !smear || smearDecay > 0
+            ...values, u_captureHistory: false, u_hasHistory: !smear || smearActive
           });
         } else {
           textureUnit(7, scene.textures[0]);

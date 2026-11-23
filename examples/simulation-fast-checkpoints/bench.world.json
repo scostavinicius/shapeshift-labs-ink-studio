@@ -1,0 +1,18 @@
+{
+  "format": "ink-studio/world",
+  "version": 1,
+  "id": "fast-checkpoint-bench",
+  "dt": 0.016666666666666666,
+  "modules": { "tone": { "file": "voice.model.json", "revision": 1 } },
+  "instances": { "voice": { "module": "tone" } },
+  "systems": {
+    "meter": { "kind": "checkpoint-note-meter", "schedule": { "every": 4 } }
+  },
+  "commands": [
+    { "tick": 1, "action": "world/event", "args": { "kind": "initial-excitation" } }
+  ],
+  "connections": [
+    { "from": "voice/notes", "to": "meter/notes", "signal": "event" },
+    { "from": "voice/voice", "to": "meter/level", "sample": "hold", "delay": 2 }
+  ]
+}

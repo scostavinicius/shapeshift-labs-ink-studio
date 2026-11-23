@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Turntable Cabinet · Ink Studio</title>
+<style>
+:root{color-scheme:dark;--bg:#161719;--panel:#202225;--rule:#404247;--ink:#fff4e5;--soft:#c9c2b9;--bass:#f7bc72;--mid:#a0d5b7;--high:#dcb3f2}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,sans-serif}main{max-width:1010px;margin:auto;padding:39px 26px 28px}header{margin-bottom:20px}h1{font:clamp(2.7rem,8vw,5.6rem)/.92 Georgia,serif;letter-spacing:-.065em;margin:0}p{margin:10px 0;color:var(--soft)}header p{max-width:63ch}.grid{display:grid;grid-template-columns:1.18fr 1fr;gap:12px}.panel{border:1px solid var(--rule);border-radius:13px;background:var(--panel);min-width:0}.plot svg{display:block;width:100%;height:auto}.control{padding:17px;display:flex;flex-direction:column;justify-content:space-between;gap:20px}.transport,.buttons,.legend{display:flex;align-items:center;gap:7px;flex-wrap:wrap}.transport{margin-bottom:13px}.transport output{margin-left:auto;color:var(--soft);font-variant-numeric:tabular-nums}button{background:#2a2c30;border:1px solid #4b4a4c;border-radius:7px;color:var(--ink);font:inherit;padding:7px 10px;cursor:pointer}button:hover{border-color:var(--bass)}button:focus-visible,input:focus-visible{outline:2px solid var(--mid);outline-offset:3px}button[aria-pressed=true]{background:var(--ink);color:#242022;border-color:var(--ink)}#play{font-weight:650;min-width:79px;color:#2c2017;background:var(--bass);border-color:var(--bass)}.timeline{width:100%;accent-color:var(--bass)}.positions{margin:8px 0}.positions button{padding:5px 9px;font-size:.86rem}.bearing{font:1.4rem Georgia,serif}.caption{font-size:.84rem;color:var(--soft)}.spectrum{display:grid;gap:9px}.line{display:grid;grid-template-columns:45px 1fr 66px;align-items:center;gap:8px}.line span,.line output{color:var(--soft);font-size:.86rem}.line output{text-align:right;font-variant-numeric:tabular-nums}.meter{height:6px;background:#37383d;border-radius:4px}.meter i{height:100%;width:100%;display:block;background:var(--color);border-radius:4px}.legend{gap:12px;color:var(--soft);padding:0 15px 10px;font-size:.83rem}.legend i{display:inline-block;width:.65em;height:.65em;border-radius:50%;margin-right:.35em;background:var(--color)}.summary{margin:12px 0;font-size:.86rem}@media(max-width:710px){main{padding:25px 13px}.grid{grid-template-columns:1fr}.plot svg{max-height:365px}.control{padding:13px}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>The Turntable Cabinet</h1>
+<p>One loudspeaker turns in place while you listen from a fixed spot. The bass stays present as the cabinet turns away. Switch to Omni at the rear to hear the treble return.</p>
+</header>
+<div class="grid">
+<section class="panel plot" aria-label="Rotating loudspeaker radiation plot">
+<svg viewBox="0 0 530 384" role="img" aria-labelledby="plot-title">
+<title id="plot-title">Overhead view of the loudspeaker, fixed listener, and three rotating polar curves</title>
+<g fill="none" stroke="#505155"><circle cx="265" cy="222" r="130"/><circle cx="265" cy="222" r="99" stroke-dasharray="3 4"/><circle cx="265" cy="222" r="68" stroke-dasharray="3 4"/></g>
+<path d="M265 73V222 M135 222h260" stroke="#57565b" stroke-dasharray="4 4"/>
+<g fill="#c9c2b9" font-size="13"><text x="403" y="224">0 dB</text><text x="404" y="243" opacity=".66">rings every 12 dB</text></g>
+<text x="265" y="30" font-size="16" text-anchor="middle" fill="#fff4e5">Listener</text>
+<circle cx="265" cy="53" r="11" fill="#d0c5b8"/><path d="M250 57H280 M255 74Q265 66 275 74" stroke="#d0c5b8" stroke-width="2" fill="none"/>
+<g id="cabinet" transform="rotate(0 265 222)">
+<path id="low-path" fill="none" stroke="#f7bc72" stroke-width="2.5"/>
+<path id="mid-path" fill="none" stroke="#a0d5b7" stroke-width="2.5"/>
+<path id="high-path" fill="none" stroke="#dcb3f2" stroke-width="2.5"/>
+<path d="M265 197V103m-5 8 5-8 5 8" stroke="#d2c9be" stroke-dasharray="3 4" fill="none"/>
+<rect x="245" y="197" width="40" height="51" rx="5" fill="#382f29" stroke="#d6ad83" stroke-width="2"/>
+<path d="M247 201h36" stroke="#f7bc72" stroke-width="4"/>
+<circle cx="265" cy="229" r="9" fill="#29272a" stroke="#a78870"/>
+</g>
+</svg>
+<div class="legend"><span><i style="--color:var(--bass)"></i>Bass</span><span><i style="--color:var(--mid)"></i>Mids</span><span><i style="--color:var(--high)"></i>Treble</span></div>
+</section>
+<section class="panel control" aria-label="Audio and source levels">
+<div>
+<div class="transport"><button id="play" type="button">Play</button><output id="time" aria-label="Playback time"></output></div>
+<output class="bearing" id="bearing">Front · 0° off axis</output>
+<input id="timeline" class="timeline" type="range" min="0" max="12.8" step=".01" value="0" aria-label="Playback position">
+<div class="buttons positions" role="group" aria-label="Jump by cabinet orientation">
+<button type="button" data-time="0">Front</button><button type="button" data-time="3.2">Side</button><button type="button" data-time="6.4">Rear</button>
+</div>
+</div>
+<div>
+<div class="spectrum" id="spectrum" aria-label="Band level sent toward the listener"></div>
+<p class="caption">Band levels sent toward the listener</p>
+</div>
+<div class="buttons" role="group" aria-label="Radiation comparison">
+<button type="button" data-mode="directional" aria-pressed="true">Directional</button><button type="button" data-mode="omni" aria-pressed="false">Omni</button>
+</div>
+</section>
+</div>
+<p class="summary" id="summary"></p>
+<audio id="audio" preload="auto" aria-label="Turntable Cabinet audition"></audio>
+</main>
+<script>
+const demo=/*INK_RADIATION_DEMO*/;
+const get=id=>document.getElementById(id), audio=get('audio'), play=get('play'), timeline=get('timeline');
+const modeButtons=[...document.querySelectorAll('[data-mode]')], bands=['low','mid','high'], labels=['Bass','Mids','Treble'];
+let mode='directional', seekPending=null, resume=false, animation=0;
+function dbAt(angle,band){
+  const j=demo.points.findIndex(point=>point.angle>=angle), b=demo.points[j],a=demo.points[Math.max(0,j-1)];
+  const u=a===b?0:(angle-a.angle)/(b.angle-a.angle);
+  return a.db[band]+u*(b.db[band]-a.db[band]);
+}
+function curves(){
+  for(const band of bands){
+    const d=Array.from({length:361},(_,angle)=>{
+      const db=mode==='omni'?0:dbAt(Math.min(angle,360-angle),band);
+      const r=130+Math.max(-40,db)*31/12, radians=angle*Math.PI/180;
+      return (angle?'L':'M')+(265+r*Math.sin(radians)).toFixed(2)+' '+(222-r*Math.cos(radians)).toFixed(2);
+    }).join('')+'Z';
+    get(band+'-path').setAttribute('d',d);
+  }
+}
+const meters=bands.map((band,i)=>{
+  const line=document.createElement('div');line.className='line';line.style.setProperty('--color',`var(--${['bass','mid','high'][i]})`);
+  line.innerHTML=`<span>${labels[i]}</span><div class="meter"><i></i></div><output></output>`;
+  get('spectrum').append(line);
+  return {band,bar:line.querySelector('i'),value:line.querySelector('output')};
+});
+get('summary').textContent=`Near the rear, the directional recording is ${Math.abs(demo.rearBroadbandReductionDb).toFixed(1)} dB quieter overall. The source, listener, and distance stay fixed.`;
+function show(t){
+  const row=demo.trace[Math.min(demo.trace.length-1,Math.round(t/demo.dt))];
+  const yaw=Math.atan2(row.forward[0],-row.forward[2])*180/Math.PI;
+  get('cabinet').setAttribute('transform',`rotate(${yaw} 265 222)`);
+  const angle=Math.round(row.angle), face=angle<45?'Front':angle>135?'Rear':'Side';
+  get('bearing').value=`${face} · ${angle}° off axis`;
+  get('time').value=`${t.toFixed(2)} s / ${demo.duration.toFixed(2)} s`;
+  timeline.value=t;
+  for(const {band,bar,value} of meters){
+    const d=mode==='omni'?0:row.db[band];
+    bar.style.width=Math.max(0,100*(1+d/40))+'%';
+    value.value=d.toFixed(1)+' dB';
+  }
+}
+function follow(){show(audio.currentTime);if(!audio.paused)animation=requestAnimationFrame(follow);}
+function seek(t){if(audio.readyState)audio.currentTime=t;else seekPending=t;show(t);}
+function choose(next){
+  if(audio.getAttribute('src')&&mode===next)return;
+  seekPending=seekPending??audio.currentTime;
+  resume=resume||!audio.paused;
+  mode=next;
+  modeButtons.forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.mode===mode)));
+  audio.src=demo.clips[mode];curves();show(seekPending);
+}
+audio.addEventListener('loadedmetadata',()=>{
+  if(seekPending!==null){audio.currentTime=seekPending;seekPending=null;}
+  if(resume){resume=false;audio.play().catch(()=>{});}
+  show(audio.currentTime);
+});
+audio.addEventListener('play',()=>{play.textContent='Pause';cancelAnimationFrame(animation);follow();});
+audio.addEventListener('pause',()=>{play.textContent='Play';cancelAnimationFrame(animation);show(seekPending??audio.currentTime);});
+audio.addEventListener('ended',()=>{play.textContent='Replay';show(demo.duration);});
+play.addEventListener('click',()=>{if(audio.paused)audio.play().catch(()=>{});else audio.pause();});
+timeline.addEventListener('input',()=>seek(Number(timeline.value)));
+modeButtons.forEach(button=>button.addEventListener('click',()=>choose(button.dataset.mode)));
+for(const button of document.querySelectorAll('[data-time]'))button.addEventListener('click',()=>seek(Number(button.dataset.time)));
+choose('directional');
+</script>
+</body>
+</html>

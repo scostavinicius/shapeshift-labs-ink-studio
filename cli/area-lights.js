@@ -39,7 +39,7 @@ function rasterize(lights, { w, h, rayAt, near, capture, clip }) {
 
 const {staticSources,occludes}=AreaLights;
 
-function createLighting(lights, world, data, alpha, { spots = [], shadow, shot } = {}) {
+function createLighting(lights, world, data, alpha, { spots = [], shadow, cutoutShadow, shot } = {}) {
   const active = lights.filter(light=>light.intensity>0).map(light=>({
     ...light, extent:Math.hypot(...light.half), tint:linear(light.rgb)
   }));
@@ -48,11 +48,13 @@ function createLighting(lights, world, data, alpha, { spots = [], shadow, shot }
   if (!active.length && !projectors.length && !rig) return null;
   const sources = active.some(light=>light.shadows) || (!shadow && spots.some(light=>light.castsShadow))
     ? staticSources(world,data,alpha) : [];
+  const areaShadow = sources.length || cutoutShadow ? (origin, direction, stop) =>
+    cutoutShadow?.(origin, direction, stop) || occludes(sources, origin, direction, stop) : null;
   const cache = [];
 
-  function evaluate(point, normal, row) {
+  function evaluate(point, normal, row, biasNormal) {
     const rgb=[0,0,0];
-    AreaLights.evaluate(active,point,normal,rgb,{shadow:sources.length?(o,d,s)=>occludes(sources,o,d,s):null});
+    AreaLights.evaluate(active,point,normal,rgb,{shadow:areaShadow,biasNormal});
     for (const light of projectors) {
       const offset = light.at.map((value,k) => value-point[k]), distance = Math.hypot(...offset);
       if (distance <= spotBias || distance >= light.radius) continue;
@@ -61,11 +63,12 @@ function createLighting(lights, world, data, alpha, { spots = [], shadow, shot }
       if (receive <= 0) continue;
       const weight = spotWeight(light,direction);
       if (!weight) continue;
-      if (light.castsShadow && (shadow || sources.length)) {
-        const origin = point.map((value,k) => value+normal[k]*spotBias);
+      if (light.castsShadow && (shadow || sources.length || cutoutShadow)) {
+        const origin = point.map((value,k) => value+(biasNormal??normal)[k]*spotBias);
         const ray = light.at.map((value,k) => value-origin[k]), stop = Math.hypot(...ray);
         if (stop > spotBias) {
           const toLight = ray.map(value => value/stop);
+          if (cutoutShadow?.(origin,toLight,stop-spotBias)) continue;
           if (shadow ? shadow(...origin,toLight,stop) : occludes(sources,origin,toLight,stop-spotBias)) continue;
         }
       }
@@ -76,17 +79,19 @@ function createLighting(lights, world, data, alpha, { spots = [], shadow, shot }
     if (!rig) return rgb.map(n => 1 + n);
     const additional = [0, 0, 0];
     const retention = rig.sample(row, point, normal, additional);
-    return rgb.map((n, c) => n + additional[c] + retention);
+    return rgb.map((n, c) => (n + additional[c] + retention) * rig.exposure);
   }
 
-  function shade(pixel, point, normal, rgb, fog, fogMix = 0, row) {
+  function shade(pixel, point, normal, rgb, fog, fogMix = 0, row, biasNormal) {
     const previous = cache[pixel];
     let light;
     if (previous && previous.row === row && point.every((n,k)=>Math.abs(n-previous.point[k])<1e-6) &&
-        normal.every((n,k)=>Math.abs(n-previous.normal[k])<1e-6)) light=previous.light;
+        normal.every((n,k)=>Math.abs(n-previous.normal[k])<1e-6) &&
+        (biasNormal===previous.biasNormal || biasNormal&&previous.biasNormal&&
+          biasNormal.every((n,k)=>Math.abs(n-previous.biasNormal[k])<1e-6))) light=previous.light;
     else {
-      light=evaluate(point,normal,row);
-      cache[pixel]={point,normal,light,row};
+      light=evaluate(point,normal,row,biasNormal);
+      cache[pixel]={point,normal,biasNormal,light,row};
     }
     if (light.every(n => n === 1) || fogMix>=1) return rgb;
     const surface = fogMix ? rgb.map((n,k)=>clamp((n-fog[k]*fogMix)/(1-fogMix))) : rgb;

@@ -103,8 +103,8 @@
         if (renderer === 'webgl') {
           if (explicit) unsupported(path, 'does not evaluate explicit ' + stage + ' stages');
           else if (mode === 'surface') unsupported(path, 'does not evaluate surface look layers');
-          else if (['world', 'object'].includes(definition.palette?.dither?.space))
-            unsupported(path, 'uses screen space for palette dither');
+          else if (look.coverageAware && ['world', 'object', 'view'].includes(definition.palette?.dither?.space))
+            unsupported(path, 'uses screen space for coverage-aware palette dither');
           else if (definition.palette?.dither?.regions?.length)
             unsupported(path, 'uses base palette dither settings without regional tuning');
           else if (definition.mask && !ContributionRules.supportsMask(definition.mask))
@@ -178,17 +178,18 @@
         bySurface.get(slot).push(row);
       }
     }
-    for (const [i, { settings }] of (world.surfaces ?? []).entries()) {
+    for (const [i, { settings, facingRamp }] of (world.surfaces ?? []).entries()) {
       const surface = i + 1, eligible = bySurface.get(surface) ?? [];
       const base = 'surfaces[' + i + ']';
       const roles = check(base + '.paletteRoles', () => PixelLook.bindRoles(world.pal, world.paletteRoles, settings.paletteRoles));
       if (!roles) continue;
       staged(base + '.renderStages', settings.renderStages, eligible, surface, { ...context, roles });
       const layers = Object.entries(settings.layers ?? {}).filter(([id, layer]) => rgbLayer(layer?.type) ||
+        SurfaceLook.facingColors.isDirectionalLayer(layer) ||
         (id === 'lookAssetRamp' && settings.lookAssetId && layer?.lightingRamp));
-      if (!layers.length && settings.paletteConstraint === undefined) continue;
+      if (!layers.length && settings.paletteConstraint === undefined && !settings.facingColors) continue;
       check(base, () => SurfaceLook.prepare(settings, world.pal, undefined, world.surfaceEffects, {
-        paletteRoles: world.paletteRoles, blueNoise: context.blueNoise
+        paletteRoles: world.paletteRoles, facingRamp, blueNoise: context.blueNoise
       }));
       for (const [id, layer] of layers) add(base + '.layers.' + id, 'lit',
         { ...layer, assetId: ['lookAsset','lookAssetRamp'].includes(id) ? settings.lookAssetId : undefined }, eligible, { mode: 'surface', surface });
@@ -231,8 +232,6 @@
       issues.push({ code: 'unsupported-renderer', message: 'webgl does not evaluate explicit ' + stage + ' stages' });
     else if (mask && renderer === 'webgl')
       issues.push({ code: 'unsupported-renderer', message: 'webgl does not evaluate spatial look masks' });
-    else if (renderer === 'webgl' && ['world', 'object'].includes(palette?.dither?.space))
-      issues.push({ code: 'unsupported-renderer', message: 'webgl uses screen space for palette dither' });
     else if (renderer === 'webgl' && palette?.dither?.regions?.length)
       issues.push({ code: 'unsupported-renderer', message: 'webgl uses base palette dither settings without regional tuning' });
     return { ...definitionInfo(definition, params), stage: stage ?? null, issues };

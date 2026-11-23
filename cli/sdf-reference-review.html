@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SDF reference review · Ink Studio</title>
+<style>
+:root {color-scheme:dark;--bg:#111920;--panel:#19242c;--line:#35454b;--ink:#f2eee2;--muted:#b5c2c3;--mint:#b6e3cf;--warm:#eecb89}
+* {box-sizing:border-box}
+body {margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,sans-serif}
+main {max-width:1152px;margin:auto;padding:clamp(18px,4.5vw,58px)}
+header {display:flex;align-items:end;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:24px}
+header p {margin:0;color:var(--mint);font:600 .78rem/1.4 ui-monospace,monospace;letter-spacing:.11em;text-transform:uppercase}
+h1 {font:500 clamp(2.25rem,5.5vw,4.2rem)/.98 Georgia,serif;margin:10px 0 0;letter-spacing:-.043em}
+a {color:var(--mint);text-underline-offset:4px}
+nav {display:flex;gap:8px;flex-wrap:wrap}
+button {font:inherit;color:var(--muted);background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:7px 11px;cursor:pointer}
+button[aria-pressed="true"] {color:#122322;background:var(--mint);border-color:var(--mint)}
+button:focus-visible,a:focus-visible,input:focus-visible {outline:2px solid var(--warm);outline-offset:3px}
+#times {margin:0 0 17px}
+#times button {font:600 .84rem/1.35 ui-monospace,monospace}
+#views {margin:0 0 14px}
+#compare {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+#compare[data-swipe="true"] {grid-template-columns:1fr}
+#compare[data-swipe="true"] figure:nth-child(1) {display:none}
+figure {margin:0;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--panel)}
+figcaption {padding:8px 12px;font:600 .81rem/1.4 ui-monospace,monospace;letter-spacing:.035em;color:var(--muted)}
+.canvas {position:relative;background:#0c1419}
+img {display:block;width:100%;height:auto;image-rendering:pixelated}
+.layer {position:absolute;inset:0}
+#swipeRaster {clip-path:inset(0 calc(100% - var(--split,50%)) 0 0)}
+#divider {position:absolute;inset:0 auto 0 var(--split,50%);width:2px;background:var(--warm);box-shadow:0 0 0 1px #101619}
+#swipeArea {margin:14px 0 0;display:flex;align-items:center;gap:13px;color:var(--muted);flex-wrap:wrap}
+#swipe {accent-color:var(--mint);width:min(250px,100%)}
+#notes {min-height:3.2em;max-width:78ch;color:var(--muted);margin:17px 0 13px}
+#notes b {color:var(--ink)}
+#stats {display:grid;grid-template-columns:repeat(auto-fit,minmax(132px,1fr));gap:1px;margin:0;background:var(--line);border:1px solid var(--line);border-radius:6px;overflow:hidden}
+#stats div {padding:10px 12px;background:var(--panel)}
+dt {font-size:.79rem;color:var(--muted)}
+dd {margin:1px 0 0;font:600 1.26rem/1.35 ui-monospace,monospace;color:var(--ink)}
+[hidden] {display:none!important}
+@media(max-width:570px) {#compare {grid-template-columns:1fr} figcaption {padding:6px 10px}button {padding:6px 8px}}
+</style>
+</head>
+<body>
+<main>
+<header><div><p>Ink Studio / SDF reference</p><h1 id="title"></h1></div>
+<a id="download" download="review.json">Download frame report</a></header>
+<nav id="times" aria-label="Frame time"></nav>
+<nav id="views" aria-label="Comparison view"></nav>
+<div id="compare">
+  <figure><figcaption>Native splat render</figcaption><img id="native" alt="Native splat render"></figure>
+  <figure><figcaption id="label">Path-traced SDF reference</figcaption><div class="canvas" id="canvas">
+    <img id="reference" alt="Directly traced SDF geometry">
+    <img id="overlay" class="layer" aria-hidden="true" alt="" hidden>
+    <img id="swipeRaster" class="layer" aria-hidden="true" alt="" hidden>
+    <div id="divider" aria-hidden="true" hidden></div>
+  </div></figure>
+</div>
+<div id="swipeArea" hidden><label for="swipe">Splat / reference split</label><input id="swipe" type="range" min="0" max="100" value="50"></div>
+<p id="notes" role="status" aria-live="polite"></p>
+<dl id="stats" aria-label="Frame measurements"></dl>
+</main>
+<script>
+const data=/*REFERENCE_DATA*/;
+const {report,pictures}=data;
+const at=id=>document.getElementById(id);
+const modes={
+  picture:['Compare','Path-traced SDF reference','Both renders share the native camera and art grid. The reference uses authored base materials and traces light through the retained sculpt.'],
+  swipe:['Swipe','Native splats on left · SDF reference on right','Move the split to compare the same detail in both renders.'],
+  coverage:['Coverage','Coverage disagreement','Cyan marks missing splat coverage. Pink marks excess splat coverage. Gray marks a foreground surface outside the retained fields.'],
+  geometry:['Geometry','Depth and normal disagreement','Orange marks a depth difference larger than the art-pixel tolerance. Violet marks a normal difference where depths agree.'],
+  shading:['Shading','Color difference on matching surfaces','Gold marks visible color differences on surfaces with comparable coverage, depth and normals. Palette and finish choices can contribute.'],
+  spacing:['Splat spacing','Distance to a baked surface sample','Violet marks traced surfaces more than 1.35 art pixels from the nearest similarly facing dab on that sculpt part. Pale violet means no compatible dab was found.'],
+  sampling:['Reference noise','Difference between sample groups','Orange marks pixels where two equally sized sample groups diverged by at least 8% in a display channel. Increase samples to check whether the difference settles.'],
+  indirect:['Indirect light','Indirect light contribution','Light that reaches the visible surface after reflecting from other retained geometry.'],
+  transmission:['Transmission','Transmitted light contribution','Light carried by paths through glass or a thin transmitting surface.']
+};
+const keys={
+  coverage:[['Missing coverage','missingCoverage'],['Excess coverage','extraCoverage'],['Out of scope','unretainedForeground']],
+  geometry:[['Depth differences','depthMismatch'],['Normal differences','normalMismatch']],
+  shading:[['Comparable pixels','comparableShading'],['Mean channel difference','meanShadingDifference']],
+  spacing:[['Sparse pixels','sparseSampling'],['No compatible sample','unsupportedSampling']],
+  sampling:[['Diverging pixels','unstableSampling'],['Marches at step cap','stepLimit']],
+  indirect:[['Indirect-lit pixels','indirectPixels']],
+  transmission:[['Transmitted-light pixels','transmissionPixels']]
+};
+let activeFrame=0, mode='picture';
+const nodes=[];
+function button(parent,label,click) {
+  const b=document.createElement('button');
+  b.type='button'; b.textContent=label; b.setAttribute('aria-pressed','false'); b.addEventListener('click',click); at(parent).append(b);
+  return b;
+}
+for (const [i,frame] of report.frames.entries()) {
+  const b=button('times',frame.time.toLocaleString(undefined,{maximumFractionDigits:4})+' s',()=>{activeFrame=i; update();});
+  nodes.push([b,()=>i===activeFrame]);
+}
+for (const [id,[label]] of Object.entries(modes)) {
+  const b=button('views',label,()=>{mode=id; update();});
+  nodes.push([b,()=>id===mode]);
+}
+const {width,height,samples}=report.settings;
+for (const image of document.images) {image.width=width; image.height=height;}
+at('title').textContent=report.title;
+document.title=report.title+' · Ink Studio SDF reference';
+at('download').href=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)+'\n'],{type:'application/json'}));
+at('swipe').addEventListener('input',()=>at('canvas').style.setProperty('--split',at('swipe').value+'%'));
+function setImage(id,url) {const image=at(id); if(image.getAttribute('src')!==url) image.src=url;}
+function update() {
+  for (const [b,selected] of nodes) b.setAttribute('aria-pressed',String(selected()));
+  const frame=report.frames[activeFrame], picture=pictures[activeFrame], swipe=mode==='swipe';
+  const transport=mode==='indirect'||mode==='transmission';
+  at('compare').dataset.swipe=String(swipe);
+  at('swipeArea').hidden=at('divider').hidden=at('swipeRaster').hidden=!swipe;
+  at('label').textContent=modes[mode][1];
+  at('reference').alt=modes[mode][1];
+  at('notes').textContent=modes[mode][2];
+  setImage('native',picture.splats); setImage('reference',picture[transport ? mode : 'reference']);
+  if (swipe) setImage('swipeRaster',picture.splats);
+  const overlay=!swipe&&!transport&&mode!=='picture';
+  at('overlay').hidden=!overlay;
+  if(overlay) setImage('overlay',picture[mode]);
+  const items=[['Art grid',width+' × '+height],['Samples / pixel',samples],
+    ...(keys[mode]??[['Traced surface pixels','referencePixels'],['Excluded moving solids','excludedMoving']])];
+  at('stats').replaceChildren(...items.map(([label,key])=>{
+    const row=document.createElement('div'), title=document.createElement('dt'), value=document.createElement('dd');
+    title.textContent=label;
+    value.textContent=key==='meanShadingDifference' ? (frame.stats[key]*100).toFixed(1)+'%' :
+      (frame.stats[key]??key).toLocaleString();
+    row.append(title,value); return row;
+  }));
+}
+update();
+</script>
+</body>
+</html>

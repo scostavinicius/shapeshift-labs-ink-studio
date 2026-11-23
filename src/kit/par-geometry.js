@@ -10,6 +10,17 @@
   const slices = { value: 'mesh', bounds: 'record', report: 'record' };
 
   A.operations = Object.freeze({
+    'textile.pattern': {
+      inputs: { kind: param('string', 'stitch'), options },
+      ...value('record', ({ kind, options }) => {
+        if (!['stitch', 'knit', 'weave'].includes(kind)) throw new RangeError('Unknown textile pattern: ' + kind);
+        return K.textile[kind](options);
+      })
+    },
+    'textile.world': {
+      inputs: { source: 'record', options },
+      ...value('world', ({ source, options }) => K.textile.world(source, options))
+    },
     'geo.mesh': { inputs: { source: 'mesh' }, ...value('mesh', ({ source }) => A.mesh(source)) },
     'geo.box': { inputs: { options }, ...value('mesh', ({ options }) => A.box(options)) },
     'geo.tube': {

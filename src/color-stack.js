@@ -16,7 +16,8 @@ const ColorStack = (() => {
   const copy = (from, to) => { for (let i = 0; i < 3; i++) to[i] = from[i]; };
   const fields = {
     exposure: ['stops'], contrast: ['factor', 'pivot'], saturation: ['factor'],
-    hue: ['degrees'], channelMix: ['matrix', 'offset'], curves: ['curves'],
+    hue: ['degrees'], channelMix: ['matrix', 'offset'], oklabChroma: ['correction', 'maxShift'],
+    swatchReplace: ['replacements'], curves: ['curves'],
     lut: ['lut'], paletteRemap: ['remap']
   };
 
@@ -101,6 +102,42 @@ const ColorStack = (() => {
     };
   }
 
+  function oklabChroma({ correction, maxShift = .14, color }) {
+    if (!Array.isArray(correction) || correction.length !== 2 || !Array.from(correction).every(vector) ||
+        !Number.isFinite(maxShift) || maxShift <= 0 || maxShift > .5 || color !== undefined)
+      throw new TypeError('OKLab chroma needs two finite correction rows, a shift limit from 0 to .5 and sRGB input');
+    const [aRow, bRow] = correction.map(row => row.slice());
+    if (![...aRow, ...bRow].some(Boolean)) return copy;
+    return (rgb, out) => {
+      const [L, a, b] = spaces.toOKLab(rgb);
+      if (L <= 0 || L >= 1) { copy(rgb, out); return; }
+      const scale = Math.max(.08, L), u = a / scale, v = b / scale;
+      const da = aRow[0] + aRow[1] * u + aRow[2] * v, db = bRow[0] + bRow[1] * u + bRow[2] * v;
+      const gain = L * Math.min(1, maxShift / (Math.hypot(da, db) || 1));
+      copy(spaces.fromOKLab([L, a + da * gain, b + db * gain]), out);
+    };
+  }
+
+  function swatchReplace({ replacements, color }) {
+    const hex = value => typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
+    if (!record(replacements) || Object.keys(replacements).length > 48 || color !== undefined ||
+        Object.entries(replacements).some(([from, to]) => !hex(from) || !hex(to)))
+      throw new TypeError('Swatch replacement needs up to 48 hex pairs in working sRGB');
+    const table = new Map();
+    for (const [from, to] of Object.entries(replacements)) {
+      const key = parseInt(from.slice(1), 16), rgb = to.slice(1).match(/../g).map(channel => parseInt(channel, 16) / 255);
+      if (table.has(key)) throw new TypeError('Duplicate swatch replacement ' + from);
+      table.set(key, rgb);
+    }
+    if (!table.size) return copy;
+    return (rgb, out) => {
+      const bytes = rgb.map(value => Math.round(value * 255));
+      const exact = bytes.every((byte, i) => byte >= 0 && byte <= 255 && Math.abs(rgb[i] - byte / 255) < 1e-7);
+      const replacement = exact && table.get(bytes[0] * 65536 + bytes[1] * 256 + bytes[2]);
+      copy(replacement || rgb, out);
+    };
+  }
+
   function transfer(step, resolveColor) {
     const { type, factor, pivot = .5 } = step;
     switch (type) {
@@ -122,6 +159,8 @@ const ColorStack = (() => {
       }
       case 'hue': return hue(step);
       case 'channelMix': return channelMix(step);
+      case 'oklabChroma': return oklabChroma(step);
+      case 'swatchReplace': return swatchReplace(step);
       case 'curves': {
         const plan = curves.prepare(step.curves, resolveColor, step.color);
         if (!plan) throw new TypeError('A curves step needs a color transfer');
@@ -175,7 +214,7 @@ const ColorStack = (() => {
         }
       } else {
         const op = transfer(step, resolveColor);
-        const run = step.type === 'curves' || step.type === 'lut' ? op : spaces.wrap(op, step.color, { normalized: true });
+        const run = ['curves', 'lut', 'oklabChroma', 'swatchReplace'].includes(step.type) ? op : spaces.wrap(op, step.color, { normalized: true });
         if (active) steps.push({ amount, run: (rgb, out) => run(rgb, out) });
       }
     }

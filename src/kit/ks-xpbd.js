@@ -390,6 +390,40 @@
     }
   };
 
+  K.xpbd.contactField = (sdf, { friction, tolerance, fallback }) => {
+    const V=K.V;
+    function distance(p, time) {
+      const d = sdf(...p, time);
+      if (!Number.isFinite(d) && d !== Infinity) throw new RangeError('Contact field must return a signed distance');
+      return d;
+    }
+    function hit(p, time, radius) {
+      const d = distance(p, time);
+      if (d > radius + tolerance) return null;
+      const gradient = p.map((_, axis) => {
+        const a = p.slice(), b = p.slice();
+        const e = Math.max(.0001, radius * .01);
+        a[axis] += e;
+        b[axis] -= e;
+        return distance(a, time) - distance(b, time);
+      });
+      const length = V.len(gradient);
+      // A point at the center of a solid has no unique outward normal.
+      const normal = length > 1e-8 && Number.isFinite(length) ? V.mul(gradient, 1 / length) : fallback.slice();
+      return { distance: d, normal, point: V.mad(p, normal, -d) };
+    }
+    function project(_, p, previous, clearance, time) {
+      const contact = hit(p, time, clearance);
+      if (!contact || contact.distance >= clearance) return null;
+      const { normal, distance: d } = contact;
+      const push = V.mad(p, normal, clearance - d);
+      const movement = V.sub(p, previous);
+      const tangent = V.mad(movement, normal, -V.dot(movement, normal));
+      return V.mad(push, tangent, -friction);
+    }
+    return { hit, project };
+  };
+
   K.xpbd.clothGrid = ({nu,nv,at,u,v,stretch=1e-6,shear=1e-5,bend=2e-3,tear=0}) => {
     const points=[], links=[], faces=[], horizontal=[], vertical=[];
     const link=(a,b,compliance,ratio,kind)=>links.push({a,b,compliance,ratio,kind})-1;
@@ -576,6 +610,33 @@
         put(st, first + m, x, y, z, nn, R, thin, cols[ci]);
       }
     }
+    const strokes = [];
+    function strokeChart(position, torn = false) {
+      function cell([u, v]) {
+        const x = u * (nu - 1), y = v * (nv - 1);
+        return [Math.min(nu - 2, Math.floor(x)), Math.min(nv - 2, Math.floor(y)), x, y];
+      }
+      return {
+        sample(uv) {
+          const [i, j, x, y] = cell(uv), k = j * nu + i, fu = x - i, fv = y - j;
+          const a = position(k), b = position(k + 1), c = position(k + nu), d = position(k + nu + 1);
+          const top = K.V.lerp(a, b, fu), bottom = K.V.lerp(c, d, fu);
+          const du = K.V.lerp(K.V.sub(b, a), K.V.sub(d, c), fv), dv = K.V.sub(bottom, top);
+          return { p: K.V.lerp(top, bottom, fv), n: K.V.norm(cross(du, dv), norm(cross(U, Vv))),
+            tangent:du,bitangent:dv };
+        },
+        ...(torn && { intact(uv) {
+          const [i, j] = cell(uv), k = j * nu + i;
+          return ![EH[k], EH[k + nu], EV[k], EV[k + 1]].some(sim.broken);
+        } })
+      };
+    }
+    function present(st, positions, offset, torn, time) {
+      draw(st, positions, offset, torn);
+      if (!strokes.length) return;
+      const chart = strokeChart(i => positions.slice((offset + i) * 3, (offset + i + 1) * 3), torn);
+      for (const binding of strokes) binding.pose(st.W, { stage: st, chart, time });
+    }
     let presented, windOptions, hasSceneWind;
     const sys = {
       sim,
@@ -586,6 +647,18 @@
       independentCloth: !o.sim,
       count: dabs.length,
       restPose: () => Float32Array.from(rest.flat()),
+      bindStroke(source, appearance) {
+        const stroke = { ...source, kind: 'surface', chart: strokeChart(i => rest[i]) };
+        const binding = K.curveSplats.bind(B, stroke, K.curveSplats.drivers.chart(context => context.chart), appearance);
+        strokes.push(binding);
+        return binding;
+      },
+      bindGrowth(growth, appearance) {
+        const chart=strokeChart(i=>rest[i]);
+        const binding=K.curveSplats.grow(B,{kind:'uv',chart:context=>context.chart ?? chart},growth,appearance);
+        strokes.push(binding);
+        return binding;
+      },
       makeProxy({ pins = () => false, pinAt, ...options } = {}) {
         const solver = K.xpbd.sim({ ...o, ...(sceneWind && {wind:sim.wind}), ...options });
         linkGrid(solver, pins, pinAt, grid(0));
@@ -594,7 +667,7 @@
       drawPose(st, positions) {
         if (!validPose(positions, rest.length * 3))
           throw new TypeError('A cloth pose needs one finite XYZ position per point');
-        draw(st, positions, 0, false);
+        present(st, positions, 0, false, st.time);
       },
       bind(st) { if (sceneWind) st.usesSceneWind = true; },
       update(dt, t, st) {
@@ -608,7 +681,7 @@
         const sample = ArtDirection.time(settings, t, 'cloth');
         if (rate && sample === presented) return;
         presented = sample;
-        draw(st, sim.X, base0, sim.torn);
+        present(st, sim.X, base0, sim.torn, sample);
       }
     };
     return sys;
@@ -724,7 +797,16 @@
     }
     const first = B.count(),
       per = 2;
-    for (const s of strands)
+    const curveStrands = o.renderer === 'curve-splats' ? strands.map((s, i) =>
+      K.curveSplats.bind(B, { kind: 'path', id: s.r.id ?? 'strand:' + i, points: s.restL },
+        K.curveSplats.drivers.xpbd(sim, s.idx), {
+          object: o.object ?? 'hair', material: o.material ?? 'hair', radius: wid * 1.1,
+          edge: 'beta', profileSamples: 24, taper: [[0, 1], [1, .45]],
+          color: ({ u }) => B.P[ramp0[Math.max(0, Math.min(ramp0.length - 1,
+            Math.floor((.22 + .68 * u + s.tone) * ramp0.length)))]],
+          ...o.curveProfile
+        })) : null;
+    if (!curveStrands) for (const s of strands)
       for (let k = 0; k < segs * per; k++) B.iso(0, -99, 0, 0.02, B.P[ramp0[0]], 3, { nd: true });
     const sys = {
       sim,
@@ -737,6 +819,10 @@
       update(dt, t, st) {
         Mx = st.rig ? st.rig.M : null;
         if (!sys.shared) sim.step(dt, t);
+        if (curveStrands) {
+          for (const binding of curveStrands) binding.pose(st.W, { stage: st, time: t, dt });
+          return;
+        }
         const X = sim.X;
         let m = first;
         for (const s of strands) {

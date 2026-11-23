@@ -1,0 +1,60 @@
+{
+  "format": "ink-studio/world",
+  "version": 1,
+  "id": "reference-impact",
+  "dt": 0.05,
+  "systems": {
+    "rig": {
+      "kind": "mechanics",
+      "config": {
+        "gravity": [
+          0,
+          0,
+          0
+        ],
+        "ground": -4,
+        "drag": 0,
+        "contactSamples": true,
+        "impactEvents": "timed",
+        "bodies": {
+          "left": {
+            "position": [
+              -1.05,
+              1,
+              0
+            ],
+            "velocity": [
+              2.5,
+              0,
+              0
+            ],
+            "mass": 1.5,
+            "half": [
+              0.18,
+              0.16,
+              0.18
+            ]
+          },
+          "right": {
+            "position": [
+              0.82,
+              1,
+              0
+            ],
+            "velocity": [
+              -0.5,
+              0,
+              0
+            ],
+            "mass": 2.25,
+            "half": [
+              0.18,
+              0.2,
+              0.22
+            ]
+          }
+        }
+      }
+    }
+  }
+}

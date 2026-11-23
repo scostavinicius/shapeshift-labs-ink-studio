@@ -8,7 +8,7 @@ const ink = require('..');
 
 const root = path.resolve(__dirname, '..');
 const cli = path.join(root, 'cli', 'ink-studio.js');
-const run = (args, cwd = root) => spawnSync(process.execPath, args, { cwd, encoding: 'utf8' });
+const run = (args, cwd = root) => spawnSync(process.execPath, args, { cwd, encoding: 'utf8', maxBuffer: 4 * 1024 * 1024 });
 const command = (...args) => run([cli, 'graph', ...args]);
 
 test('catalog membership, actual socket defaults and examples agree with the runner', () => {

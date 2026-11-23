@@ -14,6 +14,9 @@ function surfaceShading(world, options, camera) {
   const projected = i => materials[surfaceData[i * STRIDE] - 1]?.projected;
   const local = i => localMaterials?.[surfaceData[i * STRIDE] - 1];
   const thin = i => materials[surfaceData[i * STRIDE] - 1]?.thin;
+  const materialFor = i => materials[surfaceData[i * STRIDE] - 1];
+  const facing = i => materialFor(i)?.facingProfile;
+  const viewColor = i => facing(i) || materialFor(i)?.directionProfile;
   const bevel = i => materials[surfaceData[i * STRIDE] - 1]?.bevelDistance;
 
   function rigFrame(i) {
@@ -34,16 +37,24 @@ function surfaceShading(world, options, camera) {
   const liveLight = camera.sun ?? (world.surfaceLight === undefined ? undefined :
     SurfaceLook.prepareLightTrack(world.surfaceLight)(time));
   const ramps = options.raw ? null : SurfaceLook.lightRamps(options.surfaceLightRamps ?? world.look?.surfaceLightRamps);
-  const materials = world.surfaces.map(({ settings, light, bevelDistance }) => {
+  const materials = world.surfaces.map(({ settings, light, bevelDistance, facingRamp }) => {
     const material = SurfaceLook.prepare(SurfaceLook.withLightRamps(settings, ramps), world.pal, liveLight ?? light, world.surfaceEffects,
       { colorCurves: options.colorCurves !== false, colorLut: options.colorLut !== false, colorStack: options.colorStack !== false,
         paletteConstraints: options.paletteConstraints !== false && (options.lookMasks !== false || !settings.paletteConstraint?.mask),
-        skipMasks: options.lookMasks === false, transmission: options.transmission !== false, detailKits:options.surfaceDetailKits!==false,
-        paletteRoles: world.paletteRoles, blueNoise, onPaletteClip: camera.onPaletteClip,
+        skipMasks: options.lookMasks === false, diffuseRamps: options.diffuseRamps !== false,
+        paintShadowBands: options.shadowBandPaint !== false,
+        shadeNormals: options.shadeNormals !== false, transmission: options.transmission !== false, detailKits:options.surfaceDetailKits!==false,
+        paletteRoles: world.paletteRoles, facingRamp, facingColors: options.facingColors !== false && !options.raw,
+        directionalColors: options.directionalColors !== false && !options.raw, blueNoise, onPaletteClip: camera.onPaletteClip,
         ditherSpaceOverride:options.ditherSpaceOverride });
     if (bevelDistance && material.needsDistance) material.bevelDistance = bevelDistance;
     return material;
   });
+  const posedFrames = materials.some(material => material.facingProfile || material.directionProfile || material.diffuseLayers) &&
+    (world.anim?.bones || rig || world.reconstructionPose) &&
+    require('./art-passes.js').sampleFrames(world, time);
+  const posedRows = [];
+  const poseAt = i => posedFrames && (posedRows[i] ??= posedFrames(i));
   const lamps = materials.some(material => material.thinLocal) ?
     (camera.transmissionLamps?.() ?? []).map(light => ({ ...light, tint: linear(light.color) })) : [];
   const ids = new Map(), albedos = new Map();
@@ -115,6 +126,10 @@ function surfaceShading(world, options, camera) {
   }
 
   function surfaceNormal(i) {
+    if (facing(i) && posedFrames) {
+      const posed = poseAt(i).normal;
+      if (posed) return posed;
+    }
     const offset = i * STRIDE;
     const normal = [surfaceData[offset + 1], surfaceData[offset + 2], surfaceData[offset + 3]];
     const frame = rigFrame(i);
@@ -124,7 +139,7 @@ function surfaceShading(world, options, camera) {
   const sampleSky = sky && ((direction, out) => sky(direction, out, sample.worldPosition));
   const sampleLocal = localReflection && ((layer, ray, axis, detail) =>
     localReflection(layer.probe, sample.worldPosition, ray, layer.roughness, axis, detail));
-  function shade(i, x, y, z, centerX, centerY, centerZ, r, g, b, sx, sy, visit, reflected, paintedAlbedo, stagePaint) {
+  function shade(i, x, y, z, centerX, centerY, centerZ, r, g, b, sx, sy, visit, reflected, paintedAlbedo, stagePaint, planarMatte) {
     const offset = i * STRIDE;
     const { position, normal, view } = sample;
     const prepared = materials[surfaceData[offset] - 1];
@@ -173,6 +188,19 @@ function surfaceShading(world, options, camera) {
     view[0] = c * vx - s * vz;
     view[1] = parallel ? parallel[1] : eye[1] - y;
     view[2] = s * vx + c * vz;
+    if (prepared.facingProfile || prepared.directionProfile) {
+      const ray = !parallel && sx !== undefined ? camera.artRay?.(sx, sy) : null;
+      const artView = parallel ?? (ray ? [-ray[0], -ray[1], -ray[2]] : [vx, view[1], vz]);
+      if (prepared.facingProfile) {
+        sample.facingNormal = surfaceNormal(i);
+        sample.facingView = artView;
+      }
+      if (prepared.directionProfile) {
+        const posed = poseAt(i);
+        sample.directionalView = posed ? posed.localDirection(...artView) :
+          angle ? [c * artView[0] - s * artView[2], artView[1], s * artView[0] + c * artView[2]] : artView;
+      }
+    }
     if (prepared.bevelDistance || prepared.hasKits || camera.detail?.texture || camera.detail?.specular) {
       const depth = camera.orthographic ? 1 :
         (eye[0]-x)*forward[0]+(eye[1]-y)*forward[1]+(eye[2]-z)*forward[2];
@@ -213,6 +241,16 @@ function surfaceShading(world, options, camera) {
       const length = Math.hypot(...ray);
       sample.lightDirection = ray.map(x => x / length);
     }
+    const shadePose = prepared.diffuseLayers && poseAt(i);
+    sample.shadeNormalFrame = shadePose || undefined;
+    if (shadePose) {
+      const local = shadePose.localOffset(dx,y-centerY,dz);
+      sample.shadeNormalPosition = local.map((value,k) => value+shadePose.rest[k]);
+      sample.shadeNormalLight = prepared.sun;
+    } else {
+      sample.shadeNormalPosition = undefined;
+      sample.shadeNormalLight = undefined;
+    }
     sample.reflection =
       planar(i) && sx !== undefined
         ? (layer, n, original, detail) => {
@@ -225,6 +263,7 @@ function surfaceShading(world, options, camera) {
             return reflection(layer, sx, sy, c * dx + s * dz, n[1] - original[1], c * dz - s * dx, undefined, detail);
           }
         : undefined;
+    sample.planarMatte = planarMatte;
     sample.transmissionSun = prepared.thin ? {
       direction: prepared.sun,
       intensity: camera.sunIntensity ?? 1,
@@ -264,7 +303,7 @@ function surfaceShading(world, options, camera) {
 
   return {
     has, normalAt, surfaceNormal, planar, environment, shade, palettes, constraints, paletteSlots,
-    projected, bevel, local, thin, paintsBase: i => materials[surfaceData[i * STRIDE] - 1]?.paintsBase,
+    projected, viewColor, bevel, local, thin, paintsBase: i => materials[surfaceData[i * STRIDE] - 1]?.paintsBase,
     finishBeforeFog: i => materials[surfaceData[i * STRIDE] - 1]?.finishBeforeFog,
     reveals: i => materials[surfaceData[i * STRIDE] - 1]?.reveals
   };

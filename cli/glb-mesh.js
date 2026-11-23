@@ -2,6 +2,7 @@
 const png = require('./png');
 const { unwrap, area2 } = require('./glb-uv');
 const bake = require('./glb-bake');
+const MeshUV = require('../src/mesh-uv.js');
 
 function meshWriter(doc, mesh, rig, { V }, options) {
   const { name, points } = mesh;
@@ -16,7 +17,9 @@ function meshWriter(doc, mesh, rig, { V }, options) {
   if (mesh.faceMaterials && mesh.faceMaterials.length !== mesh.faces.length)
     throw new Error('Face material count does not match faces');
   const materials = mesh.materials?.length ? mesh.materials : [{ name, color: [0.45, 0.45, 0.45] }];
-  const faces = [], faceMaterials = [], corners = [], hardNormals = [], sourceFaces = [];
+  const faces = [], faceMaterials = [], corners = [], hardNormals = [], sourceFaces = [], splits = [];
+  const {registered, meshIndex:registeredIndex} = options;
+  const source=registered?.layout(registeredIndex,mesh);
   const once = new Set();
   for (const [f, face] of mesh.faces.entries()) {
     if (!Array.isArray(face) || face.length < 3 || face.length > 4 || new Set(face).size !== face.length ||
@@ -29,11 +32,12 @@ function meshWriter(doc, mesh, rig, { V }, options) {
       throw new Error('Expected normals for every face corner');
     const m = mesh.faceMaterials?.[f] ?? 0;
     if (!Number.isInteger(m) || m < 0 || m >= materials.length) throw new Error('Invalid face material on ' + name);
+    const mainDiagonal = face.length===4 && (source?.state.splits[f] ??
+      (V.dist(points[face[0]],points[face[2]]) <= V.dist(points[face[1]],points[face[3]])));
+    splits.push(mainDiagonal);
     let split = [[0, 1, 2]];
-    if (face.length === 4) {
-      split = V.dist(points[face[0]], points[face[2]]) <= V.dist(points[face[1]], points[face[3]])
-        ? [[0, 1, 2], [0, 2, 3]] : [[0, 1, 3], [1, 2, 3]];
-    }
+    if (face.length === 4)
+      split = mainDiagonal ? [[0, 1, 2], [0, 2, 3]] : [[0, 1, 3], [1, 2, 3]];
     for (const tri of split) {
       const ids = tri.map(i => face[i]), key = ids.slice().sort((a, b) => a - b).join('/');
       if (once.has(key)) throw new Error('Duplicate triangles on ' + name);
@@ -66,14 +70,20 @@ function meshWriter(doc, mesh, rig, { V }, options) {
     return V.mul(cross, 1 / length);
   });
   const normals = (mesh.normals || vertexNormals).map(n => V.norm(n));
-  const { uvMargin } = options, textureSize = options.textureSize === 0 ? 0 : mesh.textureSize ?? options.textureSize;
+  const { uvMargin } = options;
+  const textureSize = options.textureSize === 0 ? 0 : mesh.textureSize ?? options.textureSize ?? source?.row.width ?? 1024;
   if (![0, 256, 512, 1024, 2048, 4096].includes(textureSize)) throw new Error('Invalid texture size on ' + name);
-  const generated = !mesh.uvs, atlas = generated ? unwrap(points, faces, faceNormals, {
+  const generated = !mesh.uvs;
+  const atlas = source ? {
+    uvs:source.state.uvs,padding:source.row.padding,charts:source.state.chartCount,utilization:source.state.utilization
+  } : generated ? unwrap(points, faces, faceNormals, {
     size: textureSize || 1024, margin: uvMargin, groups: mesh.chartGroups ? sourceFaces.map(i => mesh.chartGroups[i]) : undefined
   }) : { uvs: corners, padding: Math.max(2, Math.ceil(textureSize * uvMargin / 2)) };
-  const uvs = atlas.uvs;
+  const uvs = registered ? atlas.uvs.map(face=>face.map(uv=>uv.map(Math.fround))) : atlas.uvs;
   if (uvs.some(uv => Math.abs(area2(...uv)) < 1e-15)) throw new Error('Degenerate UV mapping on ' + name);
-  const bakeSource = (generated || mesh.bakeUVs) && textureSize && materials.every(m => !m.texture && !m.alphaMode);
+  if (registered && (!textureSize || materials.some(m=>m.alphaMode && m.alphaMode!=='OPAQUE' || (m.opacity??1)!==1)))
+    throw new TypeError('Registered baking needs a texture size and opaque source materials');
+  const bakeSource = registered || (generated || mesh.bakeUVs) && textureSize && materials.every(m => !m.texture && !m.alphaMode);
   if (bakeSource && uvs.some(face => face.some(uv => uv.some(x => x < 0 || x > 1))))
     throw new Error('UV coordinates for a texture bake must be inside the atlas');
   const texture = (bytes, label, mime) => ({ index: doc.texture(bytes, name + ' · ' + label, mime) });
@@ -104,11 +114,24 @@ function meshWriter(doc, mesh, rig, { V }, options) {
     return doc.add('materials', material);
   }
   let materialIds;
+  let registeredBake;
   if (bakeSource) {
+    if (registered && !generated && !source) {
+      const {overlap} = MeshUV.inspect({points,triangles:faces,uvs},{size:textureSize,padding:0,maxChecks:16000000});
+      if (!overlap.complete || overlap.count)
+        throw new Error('Registered bake needs a non-overlapping UV atlas on '+name+'. Inspect the layout with mesh-uv.');
+    }
     const sample = mesh.sampleSurface;
-    const { textures, strength, coverage } = bake({
-      ...mesh, materials, faceMaterials, cornerNormals: hardNormals, sampleSurface: sample && ((p, n, f) => sample(p, n, sourceFaces[f]))
-    }, faces, uvs, normals, textureSize, atlas.padding, { V });
+    const bakeNormals = hardNormals.length ? hardNormals : mesh.smooth === false ? faceNormals.map(n=>[n,n,n]) : undefined;
+    const bakeMesh = { ...mesh, materials, faceMaterials, cornerNormals: bakeNormals,
+      sampleSurface: sample && ((p, n, f) => sample.call(mesh,p,n,sourceFaces[f]))
+    };
+    const {chartBake,projection} = registered?.plan(registeredIndex,{
+      mesh:{...bakeMesh,faces:mesh.faces},faces,uvs,normals,atlas,splits,size:textureSize,source
+    },{V}) ?? {};
+    const baked = bake(bakeMesh,faces,uvs,normals,textureSize,atlas.padding,{V},{registered:Boolean(registered),projection,chartBake});
+    const {textures,strength,coverage}=baked;
+    if(registered)registeredBake=registered.record(registeredIndex,mesh,faces,uvs,textureSize,atlas.padding,baked,chartBake,projection,source,{V});
     const material = { name, pbrMetallicRoughness: {
       baseColorTexture: texture(textures.base, 'base color'), metallicFactor: 0, roughnessFactor: 0.8
     } };
@@ -159,7 +182,7 @@ function meshWriter(doc, mesh, rig, { V }, options) {
         pos.push(...points[vertex]);
         nr.push(...normal);
         uv.push(...tex);
-        if (mesh.colors) colors.push(...mesh.colors[vertex]);
+        if (mesh.colors && !registered) colors.push(...mesh.colors[vertex]);
         if (weights) for (const [i, w] of weights[vertex]) {
           joint.push(i);
           weight.push(w);
@@ -170,7 +193,7 @@ function meshWriter(doc, mesh, rig, { V }, options) {
     vertices += pos.length / 3;
     const float = (data, type, bounds = false) => doc.accessor(Float32Array.from(data), type, { target: 34962, bounds });
     const attributes = { POSITION: float(pos, 'VEC3', true), NORMAL: float(nr, 'VEC3'), TEXCOORD_0: float(uv, 'VEC2') };
-    if (mesh.colors) attributes.COLOR_0 = float(colors, 'VEC3');
+    if (colors.length) attributes.COLOR_0 = float(colors, 'VEC3');
     if (weights) {
       attributes.JOINTS_0 = doc.accessor(Uint16Array.from(joint), 'VEC4', { target: 34962 });
       attributes.WEIGHTS_0 = float(weight, 'VEC4');
@@ -182,6 +205,7 @@ function meshWriter(doc, mesh, rig, { V }, options) {
   const node = doc.add('nodes', { name, mesh: meshIndex, ...(weights ? { skin: rig.skin() } : {}) });
   doc.gltf.scenes[0].nodes.push(node);
   return { name, vertices: new Set(faces.flat()).size, renderVertices: vertices, triangles: faces.length, uvLayers: 1,
+    ...(registeredBake && {registeredBake}),
     generatedUVs: generated, ...(mesh.sourceTriangles === undefined ? {} : { sourceTriangles: mesh.sourceTriangles }), ...(generated ? { charts: atlas.charts, uvUtilization: atlas.utilization } : {}) };
 }
 

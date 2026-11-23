@@ -147,6 +147,9 @@ and retained static SDF ray queries. New area lights also reuse those casters in
 lit fog if no explicit volume shadow query is supplied. The existing spotlight
 shadow callback remains supported.
 
+Painted faces and scenery cards with `castsShadow: true` can block local
+light on surfaces and in lit fog. [Shadows from painted cutouts](painted-cutout-shadows.md)
+
 The browser renderer shares the source frames and cookie assets. It evaluates
 splats in a GPU receiver pass feeding the existing relight table, so pixel-art
 material/detail paths retain their light contribution. Textured surfaces use

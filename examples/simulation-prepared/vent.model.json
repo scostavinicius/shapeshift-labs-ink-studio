@@ -1,0 +1,14 @@
+{
+  "format": "ink-studio/simulation-model",
+  "version": 1,
+  "id": "prepared-vent-network",
+  "revision": 1,
+  "seed": 4,
+  "numerics": { "dt": 0.000020833333333333333, "blockSize": 160 },
+  "domain": {}, "parameters": {}, "initial": {}, "boundaries": {},
+  "operators": { "solver": { "kind": "prepared-vent-network", "revision": 1 } },
+  "inputs": { "inlet": "solver/inlet" },
+  "outputs": { "outlet": "solver/outlet" },
+  "commands": [{ "tick": 1, "input": "inlet", "value": 0.03 }],
+  "probes": {}
+}

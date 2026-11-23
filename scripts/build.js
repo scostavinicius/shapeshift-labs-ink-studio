@@ -5,6 +5,7 @@ const studio = require('..');
 
 const targets = {
   development: ['ink-studio.browser.js', { profile: 'development', format: 'script' }],
+  bake: ['ink-studio.bake.js', { profile: 'bake', format: 'script' }],
   node: ['ink-studio.node.cjs', { profile: 'development', format: 'commonjs' }],
   playback: ['ink-studio.player.mjs', { profile: 'playback', format: 'module' }]
 };
@@ -12,7 +13,7 @@ const dist = path.join(__dirname, '../dist');
 
 function build(profile = 'all', directory = dist) {
   if (profile !== 'all' && !Object.hasOwn(targets, profile))
-    throw new TypeError('Build profile must be all, development, node or playback');
+    throw new TypeError('Build profile must be all, development, bake, node or playback');
   const pairs = profile === 'all' ? Object.values(targets) : [targets[profile]];
   return pairs.map(([name, options]) => {
     const file = path.join(directory, name);
@@ -24,7 +25,7 @@ function build(profile = 'all', directory = dist) {
 
 if (require.main === module) {
   try {
-    if (process.argv.length > 3) throw new TypeError('Use npm run build -- [all|development|node|playback]');
+    if (process.argv.length > 3) throw new TypeError('Use npm run build -- [all|development|bake|node|playback]');
     const quiet = process.argv[2] === '--quiet';
     const files = build(quiet ? 'all' : process.argv[2]);
     if (!quiet) for (const { file, rawBytes, gzipBytes } of files)

@@ -189,9 +189,87 @@ function checkPalette({ createRenderer, createSplatPipeline }) {
   context.deleteTexture(texture);
 }
 
-test('WebGL resolves tones and high palette entries across materials, lamps, grading and history', {
-  skip: !process.env.INK_TEST_CHROME
-}, t => {
+function checkResolveModes({ createRenderer, pixelShaderSources }) {
+  const toolkit = { KIT, PixelLook }, width = 64, height = 48;
+  const full = pixelShaderSources(PixelLook, { packedTone: true });
+  const camera = { target: [0, 0, 0], dist: 7, yaw: 0, pitch: 0 };
+  const b = makeBuilder(7, [0, 0x2468cc, 0xf2bd41]);
+  const s = makeSculpt(b);
+  s.pixel = true;
+  s.box([0, 0, 0], [1.3, 1, .35], { r: [1, 2] }, { res: .18 });
+  s.bake();
+  const world = b.finish({ cam: camera, radius: 7, look: { pixel: false } });
+  const frame = { width, height, time: 0, dither: 0 };
+
+  function setup(options, blockFull = false) {
+    const canvas = new OffscreenCanvas(width, height);
+    const gl = canvas.getContext('webgl2', { alpha: false, antialias: false, depth: false, stencil: false });
+    const resolveShaders = [];
+    const shaderSource = gl.shaderSource.bind(gl);
+    gl.shaderSource = (shader, source) => {
+      if (source.includes('vec3 lookAt(ivec2 p)')) {
+        const kind = source === full.POST_FS ? 'full' : /u_toneOn > 0\.5/.test(source) ? 'advanced' : 'simple';
+        resolveShaders.push(kind);
+        if (blockFull && kind !== 'simple') throw Error('Attempted to compile a full resolve shader');
+      }
+      shaderSource(shader, source);
+    };
+    const renderer = createRenderer(canvas, { toolkit, ...options });
+    const draw = (scene = world, options) => {
+      renderer.render(scene, { ...frame, ...options });
+      const pixels = new Uint8Array(width * height * 4);
+      gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      const error = gl.getError();
+      if (error) throw Error('WebGL readback failed with error ' + error);
+      return pixels;
+    };
+    return { draw, resolveShaders, dispose: () => renderer.dispose() };
+  }
+
+  const simple = setup({ resolve: 'simple', specialize: false }, true);
+  const auto = setup({});
+  const forcedFull = setup({ specialize: false });
+  try {
+    if (String(simple.resolveShaders) !== 'simple' || auto.resolveShaders.length || forcedFull.resolveShaders.length)
+      throw Error('Resolve programs were built at the wrong time during startup');
+    const plain = simple.draw();
+    if (!plain.some((value, i) => i % 4 !== 3 && value > 0)) throw Error('Simple resolve drew an empty frame');
+    if (!auto.draw().every((value, i) => value === plain[i])) throw Error('Simple and auto plain frames differ');
+    if (!forcedFull.draw().every((value, i) => value === plain[i])) throw Error('Full and simple plain frames differ');
+    if (String(auto.resolveShaders) !== 'simple' || String(forcedFull.resolveShaders) !== 'full')
+      throw Error('Auto mode selected the wrong shader for a plain frame');
+
+    const tone = auto.draw(world, { tone: 'stipple' });
+    if (tone.every((value, i) => value === plain[i])) throw Error('Auto mode ignored the tone');
+    auto.draw(world, { tone: 'stipple' });
+    auto.draw();
+    if (String(auto.resolveShaders) !== 'simple,full') throw Error('Auto mode rebuilt a cached resolve shader');
+
+    for (const [feature, scene, options] of [
+      ['tone mapping', world, { tone: 'stipple' }],
+      ['palette grading', world, { paletteRemap: { rules: [{ from: 1, to: '#ddeeff' }] } }],
+      ['ambient occlusion', { ...world, ao: {} }],
+      ['glass beams', { ...world, glass: {} }],
+      ['per-pixel materials', { ...world, look: { pixel: true } }],
+      ['palette constraints', world, { paletteConstraints: { default: { palette: ['#2468cc', '#f2bd41'] } } }],
+      ['coverage-aware resolve', world, { coverageAware: true }],
+      ['water', { ...world, water: { count: 1 } }]
+    ]) {
+      let failure;
+      try { simple.draw(scene, options); } catch (error) { failure = error; }
+      if (!failure?.message.includes('simple resolve does not support ' + feature))
+        throw Error('Expected a simple resolve diagnostic for ' + feature + ', got ' + failure);
+    }
+    if (!simple.draw({ ...world, look: { tone: 'stipple' } }, { tone: false }).every((value, i) => value === plain[i]))
+      throw Error('Simple resolve failed after disabling an authored tone');
+    simple.draw({ ...world, ao: {} }, { raw: true });
+    if (String(simple.resolveShaders) !== 'simple') throw Error('Simple mode rebuilt or replaced its resolve shader');
+  } finally {
+    for (const fixture of [simple, auto, forcedFull]) fixture.dispose();
+  }
+}
+
+function runChromeFixture(t, fixture) {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'ink-webgl-tone-palette-'));
   t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
   const entry = pathToFileURL(path.join(__dirname, '../webgl.mjs')).href;
@@ -202,7 +280,7 @@ test('WebGL resolves tones and high palette entries across materials, lamps, gra
 import * as api from ${JSON.stringify(entry)};
 const result = document.querySelector('#result');
 try {
-  (${checkPalette.toString()})(api);
+  (${fixture.toString()})(api);
   result.textContent = 'PASS';
 } catch (error) {
   result.textContent = error.stack;
@@ -216,4 +294,12 @@ try {
   if (chrome.error) throw chrome.error;
   const result = chrome.stdout.match(/<pre id="result">([^<]*)<\/pre>/)?.[1];
   assert.equal(result, 'PASS', result || 'Chrome exited before reporting fixture results (' + chrome.status + ')');
+}
+
+const browser = { skip: !process.env.INK_TEST_CHROME };
+test('WebGL resolves tones and high palette entries across materials, lamps, grading and history', browser, t => {
+  runChromeFixture(t, checkPalette);
+});
+test('WebGL simple mode avoids the full resolve and auto mode loads it on demand', browser, t => {
+  runChromeFixture(t, checkResolveModes);
 });

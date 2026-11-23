@@ -1,0 +1,21 @@
+{
+  "format": "ink-studio/palette-sequence",
+  "version": 1,
+  "title": "The night courier",
+  "width": 160,
+  "height": 112,
+  "budget": 12,
+  "previewBudgets": [8, 16, 24],
+  "pins": [
+    { "color": "#ffffdb", "label": "Lantern flame" },
+    { "color": "#b3d2bd", "label": "Enamel glint" }
+  ],
+  "shots": [
+    { "id": "arrival", "label": "Arrival", "scene": "../courier-shot-lighting.js",
+      "shotLighting": "../courier-shot-lighting.json", "camera": { "target": [0.12, 1.18, 0.05], "dist": 4.6 } },
+    { "id": "courier", "label": "The courier", "scene": "../courier-shot-lighting.js",
+      "shotLighting": "../courier-shot-lighting.json", "camera": { "target": [-0.29, 1.50, 0.36], "dist": 2.45, "yaw": 0.21 } },
+    { "id": "signal", "label": "The signal", "scene": "../courier-shot-lighting.js",
+      "shotLighting": "../courier-shot-lighting.json", "camera": { "target": [0.47, 1.27, 0.63], "dist": 1.75, "yaw": -0.15 } }
+  ]
+}

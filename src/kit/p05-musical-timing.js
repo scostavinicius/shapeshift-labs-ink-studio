@@ -80,7 +80,7 @@
       return time;
     }
 
-    function samplePoint(time, numeric) {
+    function beatCoordinate(time, numeric) {
       const row = latest(rows, entry => numeric !== undefined ? numeric >= entry.wall : compare(time, entry.time) >= 0);
       const linear = add(row.at, div(sub(time, row.time), row.length));
       let whole = [roundDown(linear), 1n], frac = sub(linear, whole);
@@ -95,6 +95,10 @@
       }
       const swung = compare(frac, row.swing) <= 0 ? div(frac, row.firstHalf) :
         add(half, div(sub(frac, row.swing), row.secondHalf));
+      return {whole,swung,row};
+    }
+    function samplePoint(time, numeric) {
+      const {whole,swung,row}=beatCoordinate(time,numeric);
       const position = seconds(add(whole, swung));
       if (!bounded(position, -limit, limit)) throw new RangeError('Musical clock exceeds its beat range');
       const index = T.index(whole[0]), bar = Math.floor(index / beatsPerBar), phrase = Math.floor(bar / barsPerPhrase);
@@ -104,6 +108,10 @@
 
     return Object.freeze({
       resolve,
+      offsetBeats(time, beats) {
+        const {whole,swung}=beatCoordinate(time);
+        return beatTime(add(add(whole,swung),checked(beats,0,limit,'beat offset')));
+      },
       timeAt: position => seconds(resolve(position)),
       timecodeAt(position) {
         const [n, d] = resolve(position);

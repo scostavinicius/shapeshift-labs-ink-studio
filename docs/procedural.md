@@ -55,6 +55,7 @@ const mesh = P.geometry.toKitMesh(geometry, (owner, material) => [.6, .64, .61])
 | `supportSkirt({outline, ground, embed, overlap, maxDrop})` | Fill vertically below a convex planar carrier and above the supplied height field, up to the configured drop |
 | `supportCourses(skirt, {unit, joint, depth, budget, omit, anchors})` | Fit recessed courses around a closed gravity support and retain facing omissions by key or surface position |
 | `basins.surface(carrier, mask, options)`, `terraces.surface(carrier, configuration)` | Masked level cuts and configurable height bands. Carrier provides bounds, height, normal and domain predicates |
+| `pathSections.measure(options)` | Measure area, perimeter, opening and axial span on mesh, SDF or contour sections. See [path sections](path-sections.md). |
 | `spans.catenary(a, b, options)` | Gravity-aware sagging curve with arc-length sampling, finite frames and closest-point queries |
 | `proximity.connect(sockets, options)` | Deterministic matching of named sockets with reach, degree and compatibility limits |
 | `attachments.layout(slots, families, options)` | Stable weighted selection for framed, typed attachment slots, with fit and clearance callbacks |
@@ -96,6 +97,7 @@ const mesh = P.geometry.toKitMesh(geometry, (owner, material) => [.6, .64, .61])
 | `traversal.create({supports, clearance, ...body})` | Ground-following body with bounded displacement, head clearance, step limits and wall sliding |
 | `supportSweep.segment(from, to, patches, options)` | Check continuous support across level footprints with height differences and cutouts |
 | `routes.follower(route, options)` | Distance-based position and a look-ahead frame for cameras or assemblies on sampled routes |
+| `routes.projected.create(options)` | [Project painted roads, tracks and flowing strips](projected-routes.md), with crest occlusion, route-distance props and hand-drawn size cels |
 | `ambientMotion.create(members, {place, move, destination?, step?})` | Seeded roaming, local avoidance, temporary attraction and habitat revalidation |
 | `layerMix.create(layers, {budget})` | Combine continuous controls into bounded per-layer gains with optional fades |
 | `inputActions.compile(contexts)` | Map physical keys and analog controls to semantic actions in named contexts |
@@ -1406,7 +1408,8 @@ const eyesMedium = environment.mediumAt(...eyePosition);
   sample the body center for swimming and current drift, and sample the eyes
   separately for submersion.
 - `inlet.shoreline()` returns world-space segment endpoint pairs along wet
-  cell edges bordering dry cells or the grid exterior.
+  cell edges bordering dry cells or the grid exterior. Use those edges to
+  place [hand-drawn shoreline foam](shore-foam.md).
   `inlet.particles({seed, count})` returns seeded `{position, current}`
   samples inside wet cells. Emit Gaussian splats there for suspended detail.
 - `W.fromShallowWater(solver.snapshot(), {id, optics})` captures the existing
@@ -1688,6 +1691,9 @@ brick data and remain readable.
   `distance` as its base, then call `prepare(view, {bricks, water})`. The
   compiler samples its continuous field, applies the brick offsets and emits
   Gaussian splats at the resulting zero crossings.
+
+For live indexed scene geometry driven by sparse edits, see
+[Local SDF-to-mesh updates](brick-meshes.md).
 
 ### Traversal graph
 
@@ -2586,9 +2592,13 @@ collapse must preserve the local mesh link and avoid reversed or
 duplicate faces. Open boundaries and group seams are locked by
 default. Pass one owner, surface, and material record per face in
 `groups`. The result maps source vertices to surviving indices.
+Supply corner `uvs` to carry the authored atlas through reduction and
+lock UV seams, or set `protectedSeams` to pin specific geometric edges.
+[UV and seam inspection](mesh-uv.md) documents the diagnostics and CLI.
 
 `lod.mergeSplats(records, {ratio, target, maxDistance, maxRadius,
-viewDirections, silhouette, lockSeams, seamDistance})` reduces native Gaussian samples.
+viewDirections, silhouette, lockSeams, seamDistance, maxSeamPairs, maxPairs})`
+reduces up to 250,000 native Gaussian samples.
 Each record has `id`, `position`, `normal`, `color` in normalized RGB,
 optional `opacity`, and a `radius` or symmetric six-component
 `covariance`. Owner, material, and surface names define independent
@@ -2602,13 +2612,21 @@ used by the renderer. `examples/preview-lod.js` packs an original and
 reduced shield side by side.
 
 The search ranks up to `candidateLimit` nearest candidates per survivor
-(default 8) within each group and merges disjoint pairs in rounds. Set
-`maxPairs` to bound candidate and cross-group pair checks. Increase
-`candidateLimit` if close samples have incompatible normals or colours.
+(default 8) within each group and merges disjoint pairs in rounds. `maxPairs`
+bounds ranked merge candidates evaluated against the distance, normal, and
+colour thresholds (`work.pairs`). `maxSeamPairs` independently bounds
+cross-group distance checks (`work.seamPairs`). Both default to 1,900,000 and
+accept integers from 1 to 10,000,000. Spatial index traversal is separate
+from these pair counts. Increase `candidateLimit` if close samples have
+incompatible normals or colours.
 Use `seamDistance` to set the width of the protected area around boundaries
 independently of the merge distance. It defaults to `maxDistance`.
-A result with status `budget` may still contain valid merges. If the seam
-scan stops early, the original rows are retained.
+If the seam scan runs out of checks, verified interiors can still merge.
+Unverified rows stay at their original positions for this call, and
+`work.seamUnverified` reports how many were held back. They can be checked
+again on a later pass. A result with status `budget` is above the requested
+count and may contain valid merges. An `ok` result can include unverified
+rows when the verified merges were enough to reach the target.
 
 To protect a screen-space result, pass `guard(splats)`. It receives the
 candidate records and returns a boolean. A failed guard returns status
@@ -2621,10 +2639,67 @@ Repeat at the cameras and zoom levels the preview is intended for.
 The packed output is static. Authoring data indexed by the original samples
 must be rebuilt or remapped through each survivor's `members`.
 
+#### Bake and check a cascade of coarse levels
+
+For static baked worlds, use `lod.reduceWorld` so each pass carries the
+world's palette and provenance. Reduce in bounded steps, aiming to remove
+at most half the rows in a pass, then increase the merge distance as sample
+spacing grows. Keep `seamDistance` tied to the surface detail you need to
+protect. Supply a descending series of target counts, a finite list of
+estimated spacings for each level, and views at the intended display
+distances. Pass the same camera and render options to the full and reduced
+worlds when comparing coverage.
+
+```js
+const studio = require('@shapeshift-labs/ink-studio');
+const { lod } = studio.load().KIT.procedural;
+
+function buildCoarseLevels(full, levels) {
+  let previous = full;
+  const capture = (world, view) => studio.render(world, { ...view, captureCoverage: true }).coverage;
+  return levels.map(({ target, spacings, seamDistance, maxSeamPairs, maxPairs, views, rebake }) => {
+    if (!views.length) throw new Error('Each coarse level needs a coverage view');
+    const reference = views.map(view => capture(full, view));
+    const accepts = world => world.count <= target && views.every((view, i) =>
+      lod.compareCoverage(reference[i], capture(world, view)).accepted);
+    let candidate = previous;
+    for (const spacing of spacings) {
+      if (candidate.count <= target) break;
+      candidate = lod.reduceWorld(candidate, {
+        target: Math.max(target, Math.ceil(candidate.count / 2)),
+        maxDistance: 1.7 * spacing,
+        seamDistance, maxSeamPairs, maxPairs
+      });
+    }
+    if (accepts(candidate)) {
+      previous = candidate;
+      return { world: candidate, method: 'merge' };
+    }
+    const coarse = rebake?.(target);
+    if (coarse && accepts(coarse)) return { world: coarse, method: 'resculpt' };
+    return { world: previous, method: 'previous' };
+  });
+}
+```
+
+Use at least one view for each level. `rebake` can resculpt the asset with
+coarser `S.focus` settings. If the merge and rebake both miss the count or
+coverage threshold, the example retains the previous accepted merge.
+Inspect a pass's `candidate.lod` to identify budget limits before tuning it.
+
+`S.aoR` controls the ambient-occlusion probe spacing in world units. Coarser
+bakes sample different surface points and use larger splat footprints, so
+review their baked shading at the intended display distance as well as coverage.
+Check authored colours separately in the same views. The reducer blends
+RGB within each group. For assets that require exact authored ramp entries,
+a record-based delivery pipeline can use `members` to select an authored
+colour before packing. Run the coverage comparison on the delivered level
+after any covariance refit or colour selection.
+
 ### Delivery of baked rows
 
 `KIT.procedural.splatCodec.encode(world.data, world.count, options)` returns a
-`Uint8Array`. `decode(bytes, { maxRows })` returns `{ data, count }`.
+`Uint8Array`. `decode(bytes, { maxRows, expectedCount })` returns `{ data, count }`.
 Row order is preserved. Rig IDs, light captures, per-sample arrays, scene
 settings and palettes travel with the host's scene data.
 
@@ -2644,8 +2719,24 @@ reordering. Within each block, fields are stored as constants or transposed
 byte planes, with dedicated modes for position deltas and axial covariance.
 Gzip or Brotli is applied by the host. The decoder validates its section bounds
 and defaults to a four-million-row limit. Set a smaller `maxRows` for the
-maximum size of the scene you expect to load. Use
-`node scripts/benchmark-splat-codec.js` to compare size and decode time.
+maximum size of the scene you expect to load. If the scene metadata already
+has a row count, pass it as `expectedCount` to catch a count mismatch before
+the decoder reads the payload or allocates the rows. For example, a browser
+host can assemble a world from its matching scene metadata and row stream:
+
+```js
+const response = await fetch(scene.rowsUrl);
+if (!response.ok) throw new Error('Could not load baked splat rows');
+const rows = KIT.procedural.splatCodec.decode(new Uint8Array(await response.arrayBuffer()), {
+  maxRows: 250_000,
+  expectedCount: scene.world.count
+});
+const world = { ...scene.world, ...rows };
+```
+
+Use the same bake revision for `scene.world`, its per-sample arrays and
+the row stream. Equal row counts alone cannot distinguish two different
+bakes. Use `node scripts/benchmark-splat-codec.js` to compare size and decode time.
 
 ### Currents and surface motion
 

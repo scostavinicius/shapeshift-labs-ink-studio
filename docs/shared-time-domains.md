@@ -68,6 +68,9 @@ The adapter aligns an untouched simulation clock's step/start with the native ru
 
 Clock `maxSteps` bounds scheduled work on each advance. Default `backlog:'retain'` preserves debt for later frames, including `advance(0)` drains; pausing a clock also pauses its debt drain. `backlog:'drop'` explicitly discards excess elapsed time and counts it in `droppedSeconds`; tick numbering remains sequential. Different budgets/rates can produce retained debt rather than pretending the simulation has caught up. Compensated accumulation and tick-index arithmetic avoid losing ticks during long 60 Hz runs.
 
+[Gesture scores](gesture-scores.md) sample authored controls on an
+integer clock and can follow a take or a native simulation host.
+
 ## Freeze and slow cues
 
 ```js

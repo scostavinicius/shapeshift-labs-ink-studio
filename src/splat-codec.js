@@ -345,7 +345,7 @@ const SplatCodec = (() => {
     return out;
   }
 
-  function decode(bytes, { maxRows = MAX_ROWS } = {}) {
+  function decode(bytes, { maxRows = MAX_ROWS, expectedCount } = {}) {
     if (!(bytes instanceof Uint8Array) || bytes.length < HEADER_BYTES)
       throw new TypeError('Invalid splat codec header');
     if (!Number.isSafeInteger(maxRows) || maxRows < 0 || maxRows > MAX_ROWS)
@@ -354,6 +354,11 @@ const SplatCodec = (() => {
     if (view.getUint32(0, true) !== MAGIC) throw new TypeError('Unsupported splat codec format');
     const count = view.getUint32(4, true);
     if (count > maxRows) throw new RangeError('Splat codec row limit exceeded');
+    if (expectedCount !== undefined) {
+      if (!Number.isSafeInteger(expectedCount) || expectedCount < 0 || expectedCount > MAX_ROWS)
+        throw new RangeError('Invalid expected splat row count');
+      if (count !== expectedCount) throw new RangeError(`Expected ${expectedCount} splat rows, got ${count}`);
+    }
 
     // Validate all lengths and tags before allocating the decoded rows.
     function visit(words, data) {

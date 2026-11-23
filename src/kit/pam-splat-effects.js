@@ -186,8 +186,8 @@
       const camera = typeof eye === 'function' ? eye(time) : eye;
       if (lit && lastTime !== time) {
         const direction = world.surfaceLight && SurfaceLook.prepareLightTrack(world.surfaceLight)(time);
-        prepared = world.surfaces.map(({ settings, light }) =>
-          SurfaceLook.prepare(settings, world.pal, direction || light, world.surfaceEffects, { paletteRoles: world.paletteRoles }));
+        prepared = world.surfaces.map(({ settings, light, facingRamp }) =>
+          SurfaceLook.prepare(settings, world.pal, direction || light, world.surfaceEffects, { paletteRoles: world.paletteRoles, facingRamp }));
         lastTime = time;
       }
       for (let tryIndex = 0; tryIndex < attempts; tryIndex++) {

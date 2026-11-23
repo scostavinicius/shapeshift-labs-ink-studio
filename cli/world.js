@@ -2,6 +2,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { randomUUID } = require('node:crypto');
 const CheckpointStore = require('../src/simulation-checkpoint-store.js');
+const {embedModels} = require('./simulation-model-files.js');
+const {embedStoryDocuments} = require('./story-document.js');
+const StoryRun = require('./story-run-controls.js');
+const StoryWatch = require('./story-watch.js');
+const StoryExplanation = require('./story-explanation.js');
+const StoryForkCompare = require('./story-fork-compare.js');
+const StorySeedMatrix = require('./story-seed-matrix.js');
+const SimulationFixture = require('./simulation-fixture.js');
 
 const read = file => JSON.parse(fs.readFileSync(path.resolve(file),'utf8'));
 const parse = input => JSON.parse(String(input));
@@ -38,7 +46,7 @@ function target(opt) {
   return {};
 }
 
-module.exports = function createCLI({kit,build,pose,dataScene,opt,renderOptions,sequenceHistory,inkOption,atmosphereEmittersOption,depthBandsOption,effectPalettesOption,stabilityOption,artDirectionOption,silhouetteOption,horizonOption,skyTransitionsOption,weatherTracksOption,skyOptions,cameraOptions,compositeOption,colorClustersOption,shot,shotReplay,shotRender}) {
+module.exports = function createCLI({kit,build,pose,dataScene,opt,renderOptions,sequenceHistory,inkOption,inkShotOption,atmosphereEmittersOption,depthBandsOption,effectPalettesOption,stabilityOption,artDirectionOption,silhouetteOption,horizonOption,skyTransitionsOption,weatherTracksOption,skyOptions,cameraOptions,compositeOption,colorClustersOption,shot,shotReplay,shotRender}) {
   const W = kit.KIT.world, R = W.runtime;
   let workerPool;
   const args = () => opt.args ? parse(opt.args) : {};
@@ -55,27 +63,50 @@ module.exports = function createCLI({kit,build,pose,dataScene,opt,renderOptions,
     if (opt.out) write(opt.out,value);
     else process.stdout.write(JSON.stringify(value,null,opt.json?0:2)+'\n');
   };
-  function document(world, file) {
+  function checkReportPath(sources,destination=opt.out,inputLabel='story sources') {
+    if (destination===undefined) return;
+    ensure(typeof destination==='string'&&destination.trim(),'--out needs a report path');
+    const out = path.resolve(destination), existing = fs.existsSync(out)?fs.statSync(out):null;
+    for (const source of sources) if (typeof source==='string') {
+      const stat = existing&&fs.existsSync(source)?fs.statSync(source):null;
+      ensure(path.resolve(source)!==out&&(!stat||stat.dev!==existing.dev||stat.ino!==existing.ino),
+        'Use a report path separate from the '+inputLabel);
+    }
+  }
+  function document(world, file, dependency) {
+    const track = source=>{shot?.dependency(source); dependency?.(source);};
+    if (file !== undefined) world = embedModels(world, file, track);
+    if (world.format === W.models.format) world = W.models.compile(world);
+    if (file !== undefined) world = require('./asset-references.js').visual(kit.KIT.authoring.assetReferences, world, 'world', file, track);
+    if (file !== undefined) world = embedStoryDocuments(world, file, track);
     if (file !== undefined && world.dataInputs !== undefined) world = { ...world,
-      dataInputs: require('./data-inputs.js').embed(kit.KIT.dataInputs, world.dataInputs, file, shot?.dependency) };
+      dataInputs: require('./data-inputs.js').embed(kit.KIT.dataInputs, world.dataInputs, file, track) };
     if (opt['asset-pack'] === undefined) return {world};
     const packs = require('./asset-pack.js').install(kit.KIT.authoring.assetPacks, world.assetPacks, opt['asset-pack']);
+    dependency?.(path.resolve(opt['asset-pack']));
     return {world:{...world,assetPacks:packs}};
   }
-  function load(file, { lookPreview = false } = {}) {
+  function load(file, { lookPreview = false, dependency } = {}) {
     ensure(typeof file === 'string','Expected a scene or run file');
     if (/\.(js|cjs)$/i.test(file)) {
       const factory = require(path.resolve(file)), value = typeof factory === 'function' ? factory(kit) : factory;
-      return value.format===W.format ? document(value,file) : value.simulation ? document(value.simulation,file) : {legacy:file};
+      return [W.format,W.models.format].includes(value.format) ? document(value,file,dependency) :
+        value.simulation ? document(value.simulation,file,dependency) : {legacy:file};
     }
     if (/\.json$/i.test(file)) {
-      const { value,store } = readCheckpointFile(file);
-      if (value.format === W.format) return document(value,file);
+      let { value,store } = readCheckpointFile(file);
+      const bundles=kit.KIT.authoring.projectBundles;
+      if(value?.format===bundles.format&&value.version===bundles.storyVersion){
+        const project=require('./project-bundle.js').readProjectBundle(file);
+        value=require('./story-exchange.js').readRecording(project);
+        ensure(value,'This story bundle has no native recording. Use story events or import its definitions.');
+      }
+      if ([W.format,W.models.format].includes(value.format)) return document(value,file,dependency);
       if (!lookPreview && [R.checkpointFormat,R.runFormat].includes(value.format))
         ensure(opt['asset-pack']===undefined,'Recorded runs and checkpoints keep their original asset packs');
       if (value.format === R.checkpointFormat) return {world:value.world,checkpoint:value,store};
       if (value.format === R.runFormat) return {world:value.end.world,checkpoint:value.end,log:value,store};
-      const bundles = kit.KIT.authoring.projectBundles;
+      if (value.format === SimulationFixture.format) return {fixture:value};
       if (bundles && value.format === bundles.format) return { legacy: file, document: bundles.open(value).scene() };
       return {legacy:file,document:value};
     }
@@ -84,12 +115,21 @@ module.exports = function createCLI({kit,build,pose,dataScene,opt,renderOptions,
   function sourceWorld(input) {
     ensure(input.world,'The scene must expose an Ink Studio world manifest');
     if (input.checkpoint) ensure(opt.seed===undefined && opt.dt===undefined,'A resumed run uses its checkpoint seed and timestep');
-    return !input.checkpoint && (opt.seed !== undefined || opt.dt !== undefined)
-      ? {...input.world,...(opt.seed===undefined?{}:{seed:Number(opt.seed)}),...(opt.dt===undefined?{}:{dt:Number(opt.dt)})}
+    if (input.world.simulationModel) ensure(opt.seed===undefined && opt.dt===undefined,'A simulation model pins its seed and timestep');
+    const storyteller = opt.storyteller;
+    if (storyteller!==undefined) {
+      ensure(!input.checkpoint,'A recorded world keeps its original storyteller profile');
+      ensure(typeof storyteller==='string'&&W.data.own(input.world.storyteller?.profiles,storyteller),
+        '--storyteller needs an authored profile ID');
+    }
+    return !input.checkpoint && (opt.seed!==undefined||opt.dt!==undefined||storyteller!==undefined)
+      ? {...input.world,...(opt.seed!==undefined&&{seed:Number(opt.seed)}),...(opt.dt!==undefined&&{dt:Number(opt.dt)}),
+        ...(storyteller!==undefined&&{storyteller:{...input.world.storyteller,active:storyteller}})}
       : input.world;
   }
   function runtime(input, profile = false, regionRevisions, recordRun) {
-    return R.create(sourceWorld(input),{checkpoint:input.checkpoint,profile,workerPool,regionRevisions,traceSteps:traceRetention(),recordRun});
+    return R.create(sourceWorld(input),{checkpoint:input.checkpoint,profile,workerPool,regionRevisions,traceSteps:traceRetention(),
+      recordRun,branch:opt.branch});
   }
   function recordingRun(input, options) {
     sourceWorld(input);
@@ -189,17 +229,19 @@ module.exports = function createCLI({kit,build,pose,dataScene,opt,renderOptions,
     const input = load(file, { lookPreview: true });
     return input.world ? visualSnapshot(input) : null;
   }
-  function view(file) {
-    const input = load(file);
-    if (input.world) {
-      let run = runtime(input);
-      if (opt.actions || opt.ticks !== undefined || opt.steps !== undefined || opt.t !== undefined) {
-        const tick = to(run);
-        run = snapshotRun(input, run, tick);
-        run.advance(tick);
-      }
-      return run.query();
+  function snapshot(input) {
+    let run = runtime(input);
+    if (opt.actions || opt.ticks !== undefined || opt.steps !== undefined || opt.t !== undefined) {
+      const tick = to(run);
+      run = snapshotRun(input, run, tick);
+      run.advance(tick);
     }
+    return run;
+  }
+  function view(file, {worldOnly=false} = {}) {
+    const input = load(file);
+    if (input.world) return snapshot(input).query();
+    ensure(!worldOnly,'The inspector needs an Ink Studio world, checkpoint, or recording');
     const world = build(input.legacy);
     const t = Number(opt.t ?? 0);
     ensure(Number.isFinite(t) && t>=0,'Invalid probe time');
@@ -211,8 +253,12 @@ module.exports = function createCLI({kit,build,pose,dataScene,opt,renderOptions,
   }
   function inspectTimeline(file) {
     const input = load(file);
+    const standalone = input.document?.format === undefined && Array.isArray(input.document?.markers) &&
+      !Object.hasOwn(input.document, 'timeline') && !Object.hasOwn(input.document, 'solids');
+    if (standalone) checkReportPath([file], opt.out, 'timeline definition');
     const timeline = input.world ? W.sceneTimeline(input.world) :
-      input.document?.format === W.scrub.takeFormat ? W.scrub.openTake(input.document) : build(input.legacy).timeline;
+      input.document?.format === W.scrub.takeFormat ? W.scrub.openTake(input.document) :
+      standalone ? kit.KIT.timeline.compile(input.document, { exact: true }) : build(input.legacy).timeline;
     ensure(timeline, 'This scene has no unified timeline');
     const at = Number(opt.at ?? 0), from = Number(opt.from ?? -1), to = Number(opt.to ?? timeline.duration);
     ensure(![opt.at, opt.from, opt.to].includes(true), 'Timeline times need numeric values');
@@ -288,7 +334,7 @@ module.exports = function createCLI({kit,build,pose,dataScene,opt,renderOptions,
       ...(chunkLevels&&{chunkLevels}),
       ...(workerPool&&{partitions:run.partitions()}),
       systems:Object.keys(checkpoint.states),commands:run.commandCounts(),events:checkpoint.history.length,historyDropped:checkpoint.dropped,
-      scenario:run.scenario,...(checks?{checks}:{}),...(opt.profile?{profile:run.profile()}:{})};
+      scenario:run.scenario,...(world.simulationModel&&{model:W.models.sample(run)}),...(checks?{checks}:{}),...(opt.profile?{profile:run.profile(),...processingSummary(run)}:{})};
   }
   function saveCheckpoints(sourceStore) {
     const directory=opt['checkpoint-store']==='off'?undefined:opt['checkpoint-store']??sourceStore;
@@ -302,14 +348,40 @@ module.exports = function createCLI({kit,build,pose,dataScene,opt,renderOptions,
       storage[key]={root:reference.root,...stats};
     } };
   }
-  function finish(run, sourceStore) {
+  function processingSummary(run) {
+    const processing = run.processing();
+    return Object.keys(processing).length ? {processing} : {};
+  }
+  function finish(run, sourceStore, detail, output = respond) {
     const checks = opt.assert ? assert(run,read(opt.assert)) : null;
     const { storage, save } = saveCheckpoints(sourceStore);
     if (opt.checkpoint) save('checkpoint',opt.checkpoint,run.checkpoint());
     if (opt.record) save('record',opt.record,run.recording());
-    respond({...summary(run,checks),...(Object.keys(storage).length&&{storage})});
+    const report = {...summary(run,checks),...(Object.keys(storage).length&&{storage}),...detail};
+    output(report);
     if (checks?.some(row => !row.pass) || opt.scenario && ['fail','timeout'].includes(run.scenario.status))
       process.exitCode = 2;
+    return report;
+  }
+  async function watchSimulation(input, mode, sources, play) {
+    let watch, run;
+    try {
+      async function onStart(engine) {
+        run = engine;
+        watch = await StoryWatch.open(W,run.view(),opt,mode,[...sources,opt.actions,opt.assert,
+          opt.observations,opt['until-condition'],opt.out,opt.checkpoint,opt.record]);
+        await watch.begin();
+        await watch.sample(run.view(),run.query());
+      }
+      const onTick = (frame,query)=>watch.sample(frame,query,run.events);
+      const {unmet,...detail} = await play(onStart,onTick)??{};
+      const output = opt['watch-out']!==undefined||opt.out?respond:()=>{};
+      const report = finish(run,input.store,detail,output);
+      await watch.end(report);
+      if (unmet) process.exitCode = 2;
+    } finally {
+      await watch?.close();
+    }
   }
   function getCheckpoint(file) {
     const input = load(file);
@@ -398,7 +470,7 @@ module.exports = function createCLI({kit,build,pose,dataScene,opt,renderOptions,
       fromTick:start,toTick:end,declarations:run.dependencies().declarations,ticks,
       ...(workerPool&&{partitions:run.partitions()})});
   }
-  function sim(args) {
+  async function sim(args) {
     ensure(opt['checkpoint-store']===undefined||typeof opt['checkpoint-store']==='string'&&
       opt['checkpoint-store'].length>0,'--checkpoint-store needs a directory or off');
     if(opt.workers!==undefined){
@@ -406,7 +478,7 @@ module.exports = function createCLI({kit,build,pose,dataScene,opt,renderOptions,
       workerPool=require('../index.js').createSimulationWorkers(Number(opt.workers));
     }
     try {
-      return runSimulation(args);
+      return await runSimulation(args);
     } finally {
       workerPool?.close();
       workerPool=undefined;
@@ -475,20 +547,497 @@ module.exports = function createCLI({kit,build,pose,dataScene,opt,renderOptions,
       for(const pool of pools)pool.close();
     }
   }
-  function runSimulation([mode,file,other]) {
+  function modelCommand(mode,file) {
+    ensure(['validate','inspect','compile'].includes(mode) && typeof file === 'string',
+      'Use sim model validate|inspect|compile <model.json>');
+    const source = embedModels(read(file), file, shot?.dependency);
+    ensure(source?.format === W.models.format, 'Expected an Ink Studio simulation model');
+    const world = R.validate(source,{workerPool});
+    if (mode === 'compile') return respond(world);
+    const {id,version,revision,inputs,outputs,probes} = world.simulationModel;
+    if (mode === 'validate') return respond({valid:true,id,version,revision});
+    const operators = Object.fromEntries(Object.entries(world.systems).map(([name, spec]) =>
+      [name,{kind:spec.kind,revision:spec.operatorRevision,schedule:spec.schedule??{}}]));
+    return respond({id,version,revision,seed:world.seed,numerics:source.numerics,domain:source.domain,
+      parameters:source.parameters,initial:source.initial,boundaries:source.boundaries,
+      operators,inputs,outputs,probes,
+      ...(source.modules !== undefined && {modules:Object.fromEntries(Object.entries(source.modules).map(([name, model]) =>
+        [name,{id:model.id,revision:model.revision}]))}),
+      ...(source.instances !== undefined && {instances:source.instances}),
+      ...(world.simulationModel.exposedParameters && {exposedParameters:world.simulationModel.exposedParameters})});
+  }
+  async function worldView(mode,file,other) {
+    const Live=require('./live-world.js'), streaming=mode==='live';
+    const common=['ticks','queries','policy','actions','workers'];
+    const modeOptions=streaming?['step-ms','linger-ms','host','port','record']:['view','out','json'];
+    const usage=streaming?Live.usage:
+      'Use sim view <world|checkpoint|run> --policy access.json --view ID [--ticks N --queries queries.json --out file]';
+    ensure(typeof file==='string'&&other===undefined&&Object.keys(opt).every(key=>common.includes(key)||modeOptions.includes(key))&&
+      (opt.ticks===undefined||typeof opt.ticks==='string'&&/^\d+$/.test(opt.ticks))&&
+      ['queries','actions','policy','record'].every(key=>opt[key]===undefined||typeof opt[key]==='string'&&opt[key].trim())&&
+      (streaming||opt.policy!==undefined&&W.data.id(opt.view)&&(opt.json===undefined||opt.json===true)),usage);
+    const sources=new Set([file,opt.queries,opt.policy,opt.actions]);
+    const input=load(file,{dependency:source=>sources.add(source)});
+    ensure(input.world&&(!input.log||opt.actions===undefined&&opt.record===undefined),
+      'World views need a world, checkpoint or recording. Recordings are read-only.');
+    checkReportPath([...sources],streaming?opt.record:opt.out,'world view inputs');
+    const run=input.log?recordingRun(input):runtime(input,false,undefined,opt.record===undefined?undefined:true);
+    const until=opt.ticks===undefined?input.log?.end.tick??(streaming?undefined:run.view().tick):Number(opt.ticks);
+    ensure(!input.log||until<=input.log.end.tick,'World view exceeds the recording end tick');
+    schedule(run);
+    const queries=opt.queries===undefined?{}:read(opt.queries), policy=opt.policy===undefined?undefined:read(opt.policy);
+    if(streaming){
+      const emit=value=>new Promise((resolve,reject)=>
+        process.stdout.write(JSON.stringify(value)+'\n',error=>error?reject(error):resolve()));
+      await Live.serve(W,run,opt,{until,queries,policy,playback:!!input.log,emit});
+      if(opt.record!==undefined)write(opt.record,run.recording());
+      return;
+    }
+    const access=W.worldAccess.compile(policy,run.view().world,{queries});
+    access.audience(opt.view);
+    await run.advanceAsync(until);
+    respond(access.project(opt.view,run.view(),run.query(),run.committedEvents()));
+  }
+  function runSimulation([mode,file,other,...extra]) {
+    const watching = StoryWatch.enabled(opt);
+    if (watching) ensure(['run','resume','fork','replay'].includes(mode)&&other===undefined,
+      'Use sim run, resume, fork, or replay with '+StoryWatch.usage);
+    ensure(opt.storyteller===undefined||['run','preflight','why','why-not','seed-matrix'].includes(mode),
+      'Use --storyteller with a fresh world in sim run, preflight, why, why-not, or seed-matrix');
+    ensure(opt.branch===undefined||['run','resume','fork'].includes(mode)&&W.data.id(opt.branch),
+      'Use --branch ID with sim run, resume or fork');
     switch (mode) {
+      case 'model': return modelCommand(file,other);
+      case 'sections': {
+        ensure(typeof file==='string' && other===undefined,'Use sim sections <plan.json> [--out report.json]');
+        const result=require('./path-sections.js').measure(kit,read(file),file,shot?.dependency);
+        return respond(result);
+      }
+      case 'mass-properties': {
+        ensure(typeof file==='string' && other===undefined,'Use sim mass-properties <plan.json> [--asset-pack file.json --out report.json]');
+        return respond(require('./mass-properties.js').measure(kit,read(file),file,
+          {dependency:shot?.dependency,assetPack:opt['asset-pack']}));
+      }
+      case 'reference': {
+        ensure((file===undefined||typeof file==='string')&&other===undefined&&
+          Object.keys(opt).every(key=>['out','suite','json'].includes(key))&&
+          (opt.suite===undefined||typeof opt.suite==='string')&&(opt.out===undefined||typeof opt.out==='string'),
+        'Use sim reference [experiment] [--suite suite.json --out report.json]');
+        const destination=opt.out===undefined?undefined:path.resolve(opt.out);
+        const {report}=require('./reference-experiments.js').run(kit,{
+          suite:opt.suite,id:file,dependency:source=>{
+            ensure(path.resolve(source)!==destination,'Reference report must be separate from its source assets');
+            shot?.dependency?.(source);
+          }
+        });
+        respond(report);
+        if(!report.passed)process.exitCode=2;
+        return;
+      }
+      case 'review': {
+        ensure(other===undefined,'Use sim review <recipe.json> --out directory [--require-match]');
+        return require('./aligned-simulation-review.js').command(kit,file,opt);
+      }
+      case 'budget': {
+        ensure(typeof file==='string'&&other===undefined&&Object.keys(opt).every(key=>['out','json','require-budget'].includes(key))&&
+          (opt.out===undefined||typeof opt.out==='string')&&(opt['require-budget']===undefined||opt['require-budget']===true),
+        'Use sim budget <plan.json> [--out report.json --require-budget]');
+        const report=require('./simulation-performance.js').run(kit,file,{destination:opt.out,dependency:shot?.dependency});
+        respond(report);
+        if(opt['require-budget']&&!report.passed)process.exitCode=2;
+        return;
+      }
+      case 'measure': {
+        ensure(typeof file==='string'&&other===undefined&&Object.keys(opt).every(key=>['out','json'].includes(key)),
+          'Use sim measure <run.json> [--out report.json]');
+        const destination=typeof opt.out==='string'?path.resolve(opt.out):undefined;
+        ensure(opt.out===undefined||destination&&destination!==path.resolve(file),'Measurement report needs a separate output file');
+        const report=require('./simulation-measurements.js').run(kit,read(file),file,source=>{
+          ensure(path.resolve(source)!==destination,'Measurement report must be separate from its source assets');
+          shot?.dependency?.(source);
+        });
+        respond(report);
+        if(!report.passed)process.exitCode=2;
+        return;
+      }
+      case 'diagnose': {
+        const failOn=opt['fail-on'];
+        ensure(typeof file==='string'&&other===undefined&&(failOn===undefined||['warning','error'].includes(failOn)),
+          'Use sim diagnose <plan.json> [--out report.json --fail-on warning|error]');
+        const report=require('./simulation-diagnostics.js').run(kit,read(file),file,shot?.dependency);
+        respond(report);
+        if(failOn)ensure(report.status==='pass'||(report.status==='warning'&&failOn==='error'),
+          'Simulation diagnostics reached '+report.status);
+        return;
+      }
+      case 'sound-controls': {
+        ensure(typeof file==='string'&&other===undefined&&(opt.at===undefined||opt.sample===undefined)&&
+          (opt.at===undefined||typeof opt.at==='string')&&(opt.sample===undefined||typeof opt.sample==='string'),
+        'Use sim sound-controls <run.json|controls.json> [--out controls.json] [--at seconds | --sample index]');
+        const input=read(file), controls=W.motionSound;
+        const result=input.format===controls.resultFormat?input:
+          require('./motion-sound.js').run(kit,input,file,{build,dependency:shot?.dependency});
+        return respond(opt.at!==undefined?controls.sample(result,{at:opt.at.trim().startsWith('{')?parse(opt.at):Number(opt.at)}):
+          opt.sample!==undefined?controls.sample(result,{sample:Number(opt.sample)}):result);
+      }
+      case 'physical-audio': {
+        ensure(typeof file==='string'&&other===undefined&&(opt.stems===undefined||typeof opt.stems==='string'),
+          'Use sim physical-audio <run.json> [--out report.json --stems directory]');
+        const physical=require('./physical-audio.js'), dependencies=new Set([file]);
+        const result=physical.run(kit,read(file),file,filename=>{
+          dependencies.add(filename);
+          shot?.dependency?.(filename);
+        });
+        if(opt.stems!==undefined){
+          if(typeof opt.out==='string')dependencies.add(opt.out);
+          result.report.files=physical.writeStems(opt.stems,result,{exclude:[...dependencies]});
+        }
+        return respond(result.report);
+      }
+      case 'sensors': {
+        ensure(typeof file==='string'&&other===undefined&&(opt.wav===undefined||typeof opt.wav==='string')&&
+          (opt.wav===undefined||typeof opt.out!=='string'||path.resolve(opt.wav)!==path.resolve(opt.out)),
+          'Use sim sensors <run.json> [--out report.json --wav microphones.wav]');
+        const plan=read(file), sensors=require('./virtual-sensors.js');
+        const report=sensors.run(kit,plan,file,shot?.dependency);
+        if(opt.wav!==undefined)sensors.writeWav(opt.wav,report,plan.audio);
+        return respond(report);
+      }
+      case 'controller': {
+        ensure(typeof file==='string'&&other===undefined,'Use sim controller <run.json> [--out trace.json]');
+        return respond(require('./controller-tools.js').run(kit,read(file),file,shot?.dependency));
+      }
+      case 'fit-targets': {
+        ensure(typeof file==='string'&&other===undefined&&(opt['require-tolerance']===undefined||opt['require-tolerance']===true),
+          'Use sim fit-targets <plan.json> [--out report.json --require-tolerance]');
+        const report=require('./controller-tools.js').fit(kit,read(file),file,shot?.dependency);
+        respond(report);
+        if(opt['require-tolerance'])ensure(report.converged,'Inverse target fit ended with status '+report.status);
+        return;
+      }
+      case 'fit-parameters': {
+        ensure(typeof file==='string'&&other===undefined&&Object.keys(opt).every(key=>['out','json','require-tolerance'].includes(key))&&
+          (opt['require-tolerance']===undefined||opt['require-tolerance']===true),
+        'Use sim fit-parameters <run.json> [--out report.json --require-tolerance]');
+        const destination=typeof opt.out==='string'?path.resolve(opt.out):undefined;
+        ensure(opt.out===undefined||destination&&destination!==path.resolve(file),'Parameter fit needs a separate report file');
+        const report=require('./parameter-fit.js').run(kit,read(file),file,source=>{
+          ensure(path.resolve(source)!==destination,'Fit report must be separate from its source assets');
+          shot?.dependency?.(source);
+        });
+        respond(report);
+        if(opt['require-tolerance']&&!report.metTolerance)process.exitCode=2;
+        return;
+      }
+      case 'input-compile': {
+        ensure(typeof file==='string'&&other===undefined,'Use sim input-compile <plan.json> [--out score.json]');
+        return respond(require('./input-compiler.js').load(kit,read(file),file,shot?.dependency));
+      }
+      case 'input-edit': {
+        ensure(typeof file==='string'&&typeof other==='string','Use sim input-edit <score.json> <edits.json> [--out score.json]');
+        return respond(W.inputCompilers.edit(read(file),read(other)));
+      }
+      case 'input-export': {
+        const kind=opt.kind;
+        ensure(typeof file==='string'&&['recording','events','gesture'].includes(kind)&&
+          (kind==='gesture'?typeof other==='string':other===undefined),
+        'Use sim input-export <score.json> --kind recording|events, or sim input-export <score.json> <bindings.json> --kind gesture');
+        const score=W.inputCompilers.prepare(read(file));
+        return respond(kind==='gesture'?score.gestures(read(other)):kind==='events'?score.events():score.recording());
+      }
+      case 'gesture-score': {
+        const point=opt.t!==undefined||opt.tick!==undefined;
+        const range=['from-tick','to-tick','every'].some(key=>opt[key]!==undefined);
+        ensure(typeof file==='string'&&other===undefined&&!(point&&range)&&
+          (opt.t===undefined||opt.tick===undefined)&&(!range||opt['to-tick']!==undefined)&&
+          ['resume','checkpoint'].every(key=>opt[key]===undefined||typeof opt[key]==='string'),
+        'Use sim gesture-score <score.json> [--t seconds | --tick N | --from-tick N --to-tick N --every N]');
+        const score=W.gestureScores.prepare(read(file));
+        const index=key=>{
+          const value=opt[key];
+          if(value===undefined)return undefined;
+          ensure(typeof value==='string'&&/^\d+$/.test(value),'--'+key+' needs an integer score tick');
+          return Number(value);
+        };
+        ensure(opt.t===undefined||typeof opt.t==='string'&&opt.t.trim(),'--t needs seconds');
+        const checkpoint=opt.resume===undefined?undefined:read(opt.resume);
+        const at=opt.t===undefined?index('tick'):score.tickAt(Number(opt.t));
+        const result=score.trace({fromTick:point?at:index('from-tick'),toTick:point?at:index('to-tick'),
+          every:index('every'),checkpoint});
+        if(opt.checkpoint!==undefined){
+          ensure(opt.out===undefined||path.resolve(opt.checkpoint)!==path.resolve(opt.out),
+            'Gesture trace and checkpoint need distinct output paths');
+          write(opt.checkpoint,result.checkpoint);
+        }
+        return respond(result);
+      }
+      case 'boundaries': {
+        ensure(typeof file==='string'&&other===undefined&&
+          (opt.t===undefined||typeof opt.t==='string')&&(opt.dt===undefined||typeof opt.dt==='string'),
+        'Use sim boundaries <asset.json> [--t seconds --dt seconds --out file.json]');
+        return respond(W.boundaryConditions.prepare(read(file)).sample(Number(opt.t??0),Number(opt.dt??0)));
+      }
+      case 'resonator': {
+        ensure(['bake','render'].includes(file)&&typeof other==='string'&&
+          (opt.wav===undefined||file==='render'&&typeof opt.wav==='string'),
+        'Use sim resonator bake <plan.json> or sim resonator render <run.json> [--out file.json --wav sound.wav]');
+        ensure(opt.wav===undefined||typeof opt.out!=='string'||path.resolve(opt.wav)!==path.resolve(opt.out),
+          'Modal trace and WAV need distinct output files');
+        const modal=require('./modal-resonator.js'), plan=read(other);
+        const result=file==='bake'?modal.bake(kit,plan,other,shot?.dependency):modal.run(kit,plan,other,shot?.dependency);
+        if(opt.wav!==undefined)modal.writeWav(opt.wav,result,plan.audio);
+        return respond(result);
+      }
+      case 'excite': {
+        ensure(typeof file==='string' && other===undefined && (opt.wav===undefined||typeof opt.wav==='string'),
+        'Use sim excite <run.json> [--out trace.json --wav force.wav]');
+        ensure(opt.wav===undefined||typeof opt.out!=='string'||path.resolve(opt.wav)!==path.resolve(opt.out),
+          'Contact trace and WAV need distinct output files');
+        const exciter=require('./contact-exciter.js'), plan=read(file);
+        const result=exciter.run(kit,plan,file,shot?.dependency);
+        if(opt.wav!==undefined)exciter.writeWav(opt.wav,result,plan.audio);
+        return respond(result);
+      }
+      case 'waves': {
+        ensure(typeof file==='string' && other===undefined && (opt.wav===undefined||typeof opt.wav==='string'),
+        'Use sim waves <run.json> [--out trace.json --wav audition.wav]');
+        ensure(opt.wav===undefined||typeof opt.out!=='string'||path.resolve(opt.wav)!==path.resolve(opt.out),
+          'Wave trace and WAV need distinct output files');
+        const wave=require('./wave-network.js'), plan=read(file);
+        const result=wave.run(kit,plan,file,shot?.dependency);
+        if(opt.wav!==undefined)wave.writeWav(opt.wav,result,plan.audio);
+        return respond(result);
+      }
+      case 'network': {
+        ensure(typeof file==='string' && other===undefined,'Use sim network <run.json> [--out trace.json]');
+        return respond(require('./lumped-network.js').run(kit,read(file),file,shot?.dependency));
+      }
+      case 'solve': {
+        ensure(typeof file==='string' && other===undefined &&
+          (opt['require-convergence']===undefined||opt['require-convergence']===true),
+        'Use sim solve <plan.json> [--out report.json --require-convergence]');
+        const result=require('./numerical-solvers.js').run(kit,read(file),file,shot?.dependency);
+        respond(result);
+        if(opt['require-convergence'])ensure(result.converged,'Solve ended with status '+result.status);
+        return;
+      }
+      case 'grid-ops': {
+        ensure(typeof file==='string' && other===undefined,'Use sim grid-ops <plan.json> [--out report.json]');
+        return respond(require('./grid-operators.js').run(kit,read(file),file,shot?.dependency));
+      }
+      case 'integrate': {
+        ensure(typeof file==='string' && other===undefined,'Use sim integrate <plan.json> [--out trace.json]');
+        return respond(require('./state-integrators.js').run(kit,read(file),file,shot?.dependency));
+      }
+      case 'reduce': {
+        ensure(typeof file==='string' && other===undefined,'Use sim reduce <plan.json> [--out asset.json]');
+        return respond(require('./model-reduction.js').bake(kit,read(file),file,shot?.dependency));
+      }
+      case 'remap': {
+        ensure(typeof file==='string' && other===undefined,'Use sim remap <plan.json> [--out report.json]');
+        return respond(require('./state-remap.js').run(kit,read(file),file,shot?.dependency));
+      }
+      case 'discretize': {
+        ensure(typeof file==='string' && other===undefined,'Use sim discretize <plan.json> [--out compiled.json]');
+        return respond(require('./discretization.js').compile(kit,read(file),file,shot?.dependency));
+      }
+      case 'domain': {
+        ensure(typeof file==='string' && other===undefined &&
+          (opt.section===undefined||typeof opt.section==='string') &&
+          (opt.world===undefined?opt.ticks===undefined&&opt.steps===undefined&&opt.t===undefined:typeof opt.world==='string'),
+        'Use sim domain <domain.json> [--world world.json --section tube/index --out file.json]');
+        const source=read(file);
+        let domain;
+        if (source?.format===W.domains.compiledFormat) {
+          ensure(source.version===1&&opt.world===undefined,'A compiled domain already pins its socket positions');
+          domain=source;
+        } else {
+          let query,snapshot;
+          if (opt.world!==undefined) {
+            shot?.dependency(opt.world);
+            const run=runtime(load(opt.world));
+            if (opt.ticks!==undefined||opt.steps!==undefined||opt.t!==undefined) run.advance(to(run));
+            query=run.query();
+            const {world,tick}=run.view();
+            snapshot={world:world.id,tick};
+          }
+          const {resolveSource}=require('./path-sections.js');
+          domain=W.domains.compile(source,{query,snapshot,
+            resolveSource:definition=>resolveSource(kit,definition,file,shot?.dependency)});
+        }
+        return respond(opt.section===undefined?domain:W.domains.trace(domain,opt.section));
+      }
+      case 'live':
+      case 'view': return worldView(mode,file,other);
       case 'run':
       case 'resume':
       case 'fork': {
-        const input = load(file);
+        const sources = new Set([file]);
+        const input = load(file,{dependency:watching?source=>sources.add(source):undefined});
         ensure(mode==='run' || input.checkpoint,'Expected a checkpoint or recording to resume or fork');
         const run = runtime(input,!!(opt.profile||opt.assert),undefined,recordOptions());
+        if (mode === 'run' && !input.checkpoint) for (const issue of run.storyDiagnostics())
+          console.error(`Story warning [${issue.code}] ${issue.document} ${issue.path}: ${issue.message}`);
+        const stopping = StoryRun.enabled(opt);
+        let controls, limit = to(run);
+        if (stopping) {
+          ensure(other===undefined,'Use one world, checkpoint, or recording with story run controls');
+          controls = StoryRun.create(W,run,opt,read);
+          const {tick,world} = run.view();
+          const timed = [opt.ticks,opt.steps,opt.t,world.scenario?.until].some(value=>value!==undefined);
+          if (!timed) limit = Math.min(R.maxTick,tick+(controls.hasStops?1000:1));
+          controls.schedule();
+        }
         schedule(run);
-        run.advance(to(run),{stopOnOutcome:!!opt.scenario});
+        if (watching) {
+          return watchSimulation(input,mode,sources,async (onStart,onTick)=>{
+            await onStart(run);
+            if (controls) return controls.advanceAsync(limit,!!opt.scenario,onTick);
+            await run.advanceAsync(limit,{stopOnOutcome:!!opt.scenario,onTick});
+          });
+        }
+        if (controls) {
+          const {unmet,...detail} = controls.advance(limit,!!opt.scenario);
+          finish(run,input.store,detail);
+          if (unmet) process.exitCode = 2;
+          break;
+        }
+        run.advance(limit,{stopOnOutcome:!!opt.scenario});
         finish(run,input.store);
         break;
       }
+      case 'cast': {
+        ensure(typeof file==='string' && other===undefined && typeof opt.spec==='string' && opt.args===undefined,
+          'Use sim cast <world|checkpoint|run> --spec casting.json');
+        const result = view(file).probe(W.storyCasting.field,undefined,read(opt.spec));
+        ensure(result.status==='ok',result.reason);
+        return respond(result.value);
+      }
+      case 'why':
+      case 'why-not': {
+        ensure(typeof file==='string'&&Object.keys(opt).every(key=>['offer','role','actor','spec','stage','outcome','trace',
+          'ticks','steps','t','actions','seed','dt','storyteller','asset-pack','workers','out','json'].includes(key)),StoryExplanation.usage);
+        const question = StoryExplanation.request(W,mode,other,opt,read);
+        const sources = new Set([file,opt.spec,opt.actions]);
+        const input = load(file,{dependency:source=>sources.add(source)});
+        checkReportPath(sources);
+        return respond(StoryExplanation.explain(W,snapshot(input),question));
+      }
+      case 'fork-compare': {
+        ensure(typeof file==='string'&&typeof other==='string'&&!extra.length&&typeof opt.out==='string'&&opt.out.trim()&&
+          Object.keys(opt).every(key=>['out','workers','seed','dt','asset-pack','json'].includes(key)),StoryForkCompare.usage);
+        const sources = new Set([file,other]), plan = StoryForkCompare.prepare(W,read(other),other,read,sources);
+        const input = load(file,{dependency:source=>sources.add(source)});
+        const fromRecording = input.log&&(plan.capture.stage!==undefined||plan.capture.tick<input.checkpoint.tick);
+        const report = StoryForkCompare.run(W,plan,{
+          engine:fromRecording?recordingRun(input):runtime(input),recordedEnd:input.log?.end.tick,
+          workerPool,destination:opt.out,sources
+        });
+        process.stdout.write(JSON.stringify(report,null,opt.json?0:2)+'\n');
+        return;
+      }
+      case 'seed-matrix': {
+        ensure(typeof file==='string'&&typeof other==='string'&&!extra.length&&
+          Object.keys(opt).every(key=>['out','workers','storyteller','asset-pack','json'].includes(key)),StorySeedMatrix.usage);
+        const sources = new Set([file,other]), plan = StorySeedMatrix.prepare(W,read(other),other,read,sources);
+        const input = load(file,{dependency:source=>sources.add(source)});
+        ensure(!input.checkpoint,'A seed matrix needs a fresh world. Checkpoints keep their original seed');
+        checkReportPath(sources);
+        return respond(StorySeedMatrix.run(W,sourceWorld(input),plan,{workerPool}));
+      }
+      case 'fixture': {
+        ensure(typeof file==='string'&&other===undefined&&typeof opt.out==='string'&&opt.out.trim()&&
+          Object.keys(opt).every(key=>['out','json','from','ticks','actions','event','event-where','fault','minimize',
+            'workers','asset-pack'].includes(key))&&['from','ticks'].every(key=>opt[key]===undefined||/^\d+$/.test(opt[key]))&&
+          (opt.actions===undefined||typeof opt.actions==='string')&&(opt['event-where']===undefined||
+            typeof opt.event==='string'&&typeof opt['event-where']==='string')&&
+          (opt.event===undefined||typeof opt.event==='string'&&opt.event.trim()&&opt.fault===undefined)&&
+          ['fault','minimize'].every(key=>opt[key]===undefined||opt[key]===true),SimulationFixture.usage);
+        const sources = new Set([file,opt.actions]);
+        const input = load(file,{dependency:source=>sources.add(source)});
+        checkReportPath(sources,opt.out,'source files');
+        if (input.store) {
+          const output = fs.existsSync(opt.out)?fs.realpathSync(opt.out):path.resolve(opt.out);
+          const relative = path.relative(fs.realpathSync(input.store),output);
+          ensure(relative==='..'||relative.startsWith('..'+path.sep)||path.isAbsolute(relative),
+            'Write fixtures outside the source checkpoint store');
+        }
+        const where = opt['event-where']===undefined?undefined:parse(opt['event-where']);
+        W.query.condition(where,undefined);
+        const focus = opt.fault?{kind:'fault'}:opt.event?{kind:'event',event:opt.event,...(where!==undefined&&{where})}:undefined;
+        const fixture = JSON.parse(JSON.stringify(SimulationFixture.build(W,input,{
+          from:opt.from===undefined?undefined:Number(opt.from),until:opt.ticks===undefined?undefined:Number(opt.ticks),
+          actions:opt.actions===undefined?undefined:read(opt.actions),focus,reduce:opt.minimize,workerPool
+        })));
+        const {report} = SimulationFixture.replay(W,fixture,{workerPool});
+        ensure(report.status==='verified','Fixture could not be replayed after export at tick '+report.mismatch?.tick);
+        write(opt.out,fixture);
+        process.stdout.write(JSON.stringify({...report,file:path.resolve(opt.out),focus:fixture.focus,reduction:fixture.reduction},
+          null,opt.json?0:2)+'\n');
+        return;
+      }
+      case 'scheduler': {
+        ensure(typeof file==='string'&&other===undefined&&opt.args===undefined&&
+          (opt.incident===undefined||typeof opt.incident==='string'),
+        'Use sim scheduler <world|checkpoint|run> [--ticks N] [--incident document/story]');
+        const result = view(file,{worldOnly:true}).probe(W.schedulerInspector.field,undefined,
+          opt.incident===undefined?{}:{incident:opt.incident});
+        ensure(result.status==='ok',result.reason);
+        return respond(result.value);
+      }
+      case 'preflight': {
+        ensure(typeof file==='string','Use sim preflight <world.json> [--strict]');
+        const source = path.resolve(file), directory = path.dirname(source), files = new Set([source]);
+        const input = load(file,{dependency:filename=>files.add(path.resolve(filename))});
+        ensure(!input.checkpoint && other===undefined && (opt.strict===undefined || opt.strict===true),
+          'Use sim preflight <world.json> [--strict]');
+        const report = R.storyPreflight(sourceWorld(input),{workerPool});
+        const relative = [...files].map(filename=>path.relative(directory,filename).split(path.sep).join('/')).sort();
+        respond({...report,inventory:{...report.inventory,files:relative}});
+        if (!report.valid||opt.strict&&report.diagnostics.length) process.exitCode = 1;
+        break;
+      }
       case 'plan': return respond(runtime(load(file)).composition());
+      case 'block-play': {
+        ensure(typeof file==='string' && typeof opt.samples==='string' && /^\d+$/.test(opt.samples) &&
+          (opt.resume===undefined||typeof opt.resume==='string') && (opt.seek===undefined||opt.seek===true),
+        'Use sim block-play <model.json> --samples N [--resume file.json --checkpoint file.json --seek]');
+        const source=embedModels(read(file),file,shot?.dependency);
+        const {value:checkpoint,store}=opt.resume===undefined?{}:readCheckpointFile(opt.resume);
+        const samples=Number(opt.samples);
+        const play=W.blockReview.playback(source,{path:opt.path??'offline',checkpoint,retainEvents:true});
+        if (opt.seek||samples<play.cursor()) play.seek(samples);
+        else play.process(samples-play.cursor());
+        const saved=play.checkpoint(), {storage,save}=saveCheckpoints(store);
+        if(opt.checkpoint!==undefined) save('checkpoint',opt.checkpoint,saved);
+        return respond({id:saved.identity.id,sample:play.cursor(),capacity:play.capacity,
+          outputs:saved.kernel.outputs,pendingEvents:saved.events,...(Object.keys(storage).length&&{storage})});
+      }
+      case 'model-changes': {
+        ensure(typeof file==='string' && (opt.samples===undefined||typeof opt.samples==='string' && /^\d+$/.test(opt.samples)) &&
+          (opt.resume===undefined||typeof opt.resume==='string') &&
+          (opt.checkpoint===undefined||typeof opt.checkpoint==='string') &&
+          (opt.samples!==undefined||opt.resume===undefined&&opt.checkpoint===undefined),
+        'Use sim model-changes <plan.json> [--samples N --resume file.json --checkpoint file.json]');
+        const source=embedModels(read(file),file,shot?.dependency);
+        const {value:checkpoint,store}=opt.resume===undefined?{}:readCheckpointFile(opt.resume);
+        const play=W.modelChanges.create(source,{checkpoint});
+        if (opt.samples!==undefined) play.process(Number(opt.samples)-play.cursor());
+        const {storage,save}=saveCheckpoints(store);
+        if (opt.checkpoint!==undefined) save('checkpoint',opt.checkpoint,play.checkpoint());
+        return respond({...play.inspect(),...(Object.keys(storage).length&&{storage})});
+      }
+      case 'block-check': {
+        ensure(typeof file==='string' && typeof other==='string' &&
+          (opt.candidate===undefined||typeof opt.candidate==='string'),
+        'Use sim block-check <model.json> <plan.json> [--candidate trace.json]');
+        const source=embedModels(read(file),file,shot?.dependency);
+        const {reference,report}=W.blockReview.review(source,read(other),opt.candidate===undefined?undefined:read(opt.candidate));
+        if (opt['trace-out']!==undefined) write(opt['trace-out'],reference);
+        respond(report);
+        if (report.status==='diverged') process.exitCode=2;
+        break;
+      }
       case 'dependencies': return dependencyReport(file);
       case 'scrub': return scrubSimulation(file);
       case 'take': return captureTake(file);
@@ -503,16 +1052,40 @@ module.exports = function createCLI({kit,build,pose,dataScene,opt,renderOptions,
       }
       case 'replay': {
         const input=load(file);
-        ensure(input.log,'Expected a run recording');
+        ensure(input.log||input.fixture,'Expected a run recording or simulation fixture');
         ensure(opt.observations===undefined,'The replay uses the observation plan saved with the run');
-        finish(R.replay(input.log,{profile:!!(opt.profile||opt.assert),workerPool,traceSteps:traceRetention(),
-          recordRun:recordOptions()}),input.store);
+        const options = {profile:!!(opt.profile||opt.assert),workerPool,traceSteps:traceRetention(),recordRun:recordOptions()};
+        if(input.fixture){
+          ensure(!watching&&other===undefined&&Object.keys(opt).every(key=>['out','json','workers','profile','assert',
+            'checkpoint','record','checkpoint-store','trace-steps'].includes(key)),
+          'Use sim replay <fixture> [--checkpoint file.json --record file.json --out report.json --workers N]');
+          const outputs=[opt.out,opt.checkpoint,opt.record].filter(value=>value!==undefined);
+          for (const [i,destination] of outputs.entries())
+            checkReportPath([file,...outputs.slice(0,i)],destination,'source files');
+          const {run,report}=SimulationFixture.replay(W,input.fixture,options);
+          if(report.status==='diverged'){
+            respond(report);
+            process.exitCode=2;
+            break;
+          }
+          finish(run,undefined,{fixture:report});
+          break;
+        }
+        if (watching) return watchSimulation(input,mode,[file],async (onStart,onTick)=>{
+          await R.replayAsync(input.log,{...options,onStart,onTick});
+        });
+        finish(R.replay(input.log,options),input.store);
         break;
       }
       case 'verify': {
-        const {log}=load(file);
-        ensure(log,'Expected a run recording');
-        const report=R.verify(log,{workerPool});
+        const {log,fixture}=load(file);
+        ensure(log||fixture,'Expected a run recording or simulation fixture');
+        if (fixture) {
+          ensure(other===undefined&&Object.keys(opt).every(key=>['out','workers','json'].includes(key)),
+            'Use sim verify <fixture> [--out report.json --workers N]');
+          checkReportPath([file],opt.out,'source files');
+        }
+        const report=fixture?SimulationFixture.replay(W,fixture,{workerPool}).report:R.verify(log,{workerPool});
         respond(report);
         if(report.status==='diverged')process.exitCode=2;
         break;
@@ -584,25 +1157,59 @@ module.exports = function createCLI({kit,build,pose,dataScene,opt,renderOptions,
       case 'render': {
         const recording=shotReplay?.runtime;
         const input=recording ? null : load(file);
+        const beat=opt.beat===undefined?undefined:W.inspectionLinks.parse(opt.beat);
+        if(opt.beat!==undefined)ensure(beat&&!beat.projected&&W.committedEvents.eventId(beat.id)&&
+          (recording||input.checkpoint)&&['t','ticks','steps','actions'].every(key=>opt[key]===undefined),
+          'Render a native beat from a recording or checkpoint without time or action overrides');
         const initial=recording ? R.openRecording(recording,{workerPool,recordRun:recording.evidence?.plan}) : runtime(input);
-        const tick=recording?.end.tick ?? to(initial);
+        const tick=beat?W.committedEvents.tickOf(beat.id):recording?.end.tick??to(initial);
+        if(beat)ensure((recording?tick===recording.end.tick:input.log?tick<=input.log.end.tick:tick===initial.view().tick),
+          'Beat falls outside the recorded render source');
         const run=recording ? initial : snapshotRun(input,initial,tick);
         ensure(typeof opt.out==='string','Simulation render needs --out image.png');
         const output=path.resolve(opt.out), diagnostics=require('./look-preview.js').preview(opt);
-        const suffixes=diagnostics?.suffixes ?? [];
-        shot?.destination(output,suffixes);
+        ensure(opt.consequences === undefined || ['on','off'].includes(opt.consequences), 'Use --consequences on|off');
+        const effectsFile = opt['event-effects'];
+        const effectsReport = effectsFile === undefined ? undefined : output.replace(/\.png$/i, '') + '-effects.json';
+        if (effectsReport) {
+          ensure(typeof effectsFile === 'string' && effectsFile.trim() && /\.png$/i.test(output),
+            'Use --event-effects SHEET with a PNG output');
+          checkReportPath([file, effectsFile], output, 'render inputs');
+          checkReportPath([file, effectsFile, output], effectsReport, 'render inputs');
+        }
+        const suffixes=[...(diagnostics?.suffixes??[]),...(beat?['-beat.json']:[]),...(effectsReport?['-effects.json']:[])];
+        const beatReport=beat&&output.replace(/\.(?:a?png)$/i,'')+'-beat.json';
+        if(beat){
+          ensure(/\.png$/i.test(output),'Beat render needs a PNG output');
+          checkReportPath([file],output,'render inputs');
+          checkReportPath([file,output],beatReport,'render inputs');
+        }
         const atmospherePose=advanceVisual(run,tick);
+        const event=beat&&run.committedEvents().find(row=>W.inspectionLinks.identify(row)===opt.beat);
+        if(beat)ensure(event,'Beat is absent from the recorded world, branch or tick');
         if (recording) ensure(W.data.equal(run.checkpoint(),recording.end),
           'Shot simulation checkpoint diverged at tick '+recording.end.tick);
         if (shot) {
           shot.seed(run.view().world.seed);
           shot.runtime(run.recording());
         }
-        const world=W.visual(kit,run.view(),run.query(),{controls:opt.params===undefined?undefined:parse(opt.params)});
+        const eventEffects = effectsReport && require('./story-effects.js').readSheet(effectsFile);
+        const world=W.visual(kit,run.view(),run.query(),{controls:opt.params===undefined?undefined:parse(opt.params),
+          eventEffects,visualConsequences:opt.consequences!=='off'});
+        const consequenceSuffix = '-consequences.json';
+        const consequenceReport = world.visualConsequences && output.replace(/\.png$/i, '') + consequenceSuffix;
+        if (consequenceReport) {
+          ensure(/\.png$/i.test(output),'Consequence render needs a PNG output');
+          const sources = [file,effectsFile,opt.actions];
+          checkReportPath(sources,output,'render inputs');
+          checkReportPath([...sources,output],consequenceReport,'render inputs');
+          suffixes.push(consequenceSuffix);
+        }
+        shot?.destination(output,suffixes);
         if (atmospherePose) world.atmospherePose=atmospherePose;
         const studio=require('../index.js');
         const image=studio.render(world,{w:Number(opt.w??720),h:Number(opt.h??475),colored:!!opt.colored,
-          ink:inkOption?.(),
+          ink:inkOption?.(), inkShot:inkShotOption?.(),
           colorCurves:opt['color-curves']==='off'?false:undefined,
           colorLut:require('./lut.js').override(opt.lut),
           paletteConstraints:require('./palette-constraints.js').override(opt['palette-constraints']),
@@ -620,10 +1227,15 @@ module.exports = function createCLI({kit,build,pose,dataScene,opt,renderOptions,
         require('./png.js').write(output,image.w,image.h,image.rgb);
         diagnostics?.capture(image,1);
         diagnostics?.write(output,{times:[run.view().time]});
+        if(event)write(beatReport,{format:'ink-studio/beat-render',version:1,beatId:opt.beat,
+          tick,time:run.view().time,event,file:path.basename(output),width:image.w,height:image.h});
+        if (effectsReport) write(effectsReport, { format: 'ink-studio/event-visual-effects-frame', version: 1,
+          world: run.view().world.id, tick, file: path.basename(output), ...world.eventEffects });
+        if (consequenceReport) write(consequenceReport,{...world.visualConsequences,file:path.basename(output)});
         shot?.finish(output,{suffixes});
         break;
       }
-      default: throw Error('Use sim run|resume|fork|reset|replay|verify|scrub|take|diff|sweep|render|plan|dependencies|regions|regions-apply');
+      default: throw Error('Use sim model|run|resume|fork|reset|replay|verify|fixture|scrub|take|diff|sweep|render|plan|dependencies|regions|regions-apply');
     }
   }
   function applyEdits(input, edits, { dryRun = false } = {}) {
@@ -782,7 +1394,9 @@ module.exports = function createCLI({kit,build,pose,dataScene,opt,renderOptions,
       }
       case 'trace':
         ensure(typeof name==='string','Supply a named trace');
-        respond(view(file).trace(name,target(opt),args()));
+        if(opt.beat!==undefined)ensure(name==='world/cause'&&typeof opt.beat==='string'&&opt.args===undefined,
+          'Use --beat ID with world/cause by itself');
+        respond(view(file).trace(name,target(opt),opt.beat===undefined?args():{beatId:opt.beat}));
         break;
       case 'field': {
         ensure(typeof name==='string'&&typeof opt.spec==='string','Provide a field and --spec file.json');
@@ -841,7 +1455,7 @@ module.exports = function createCLI({kit,build,pose,dataScene,opt,renderOptions,
       respond({valid:true,format:raw.format});
       return true;
     }
-    if (raw.format!==W.format && raw.format!==R.checkpointFormat && raw.format!==R.runFormat) return false;
+    if (raw.format!==W.format && raw.format!==W.models.format && raw.format!==R.checkpointFormat && raw.format!==R.runFormat) return false;
     const run = raw.format===R.runFormat ? R.replay(raw) :
       raw.format===R.checkpointFormat ? R.create(raw.world,{checkpoint:raw}) : undefined;
     const world = run?.view().world ?? R.validate(document(raw,file).world);

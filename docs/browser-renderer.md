@@ -21,6 +21,28 @@ the canvas context and can rebuild GPU resources after context restoration.
 Call `renderer.dispose()` when the canvas is removed. For device actions,
 attach [remappable viewer input](viewer-input.md) to the canvas.
 
+## Resolve compatibility
+
+The default `resolve: 'auto'` builds the resolve shader for the first frame
+that needs it. If your WebGL driver stalls or fails while linking the full
+resolve shader, select the simpler shader when creating the renderer:
+
+```js
+const renderer = createRenderer(canvas, {
+  toolkit: { KIT, PixelLook },
+  resolve: 'simple'
+});
+```
+
+Simple mode uses only the small resolve shader, including after context
+restoration. It supports baked colors and basic scene palette resolve. A
+frame that needs per-pixel materials, glass beams, screen-space ambient
+occlusion, tone mapping, resolve-time palette grading or constraints,
+coverage-aware resolve, or water reports the incompatible feature. Use
+`resolve: 'auto'` for these features, or disable them to render in simple mode.
+For example, pass `tone: false` to bypass an authored tone, `water: false` to
+render without water optics, or `raw: true` to draw the baked RGB.
+
 ## Frames
 
 Pass the world returned by `builder.finish()`. The drawing buffer is the art
@@ -41,8 +63,8 @@ The browser defaults reuse depth order when the caller marks the rows
 unchanged and the view, depth-dependent time, and ordering inputs match.
 Scenes with bone buffers sort again. The canvas also uses a smaller palette
 resolve shader when per-pixel materials, ambient occlusion, glass beams,
-tone mapping, and grading are inactive. Pass `reuseOrder: false` or
-`specialize: false` to the factory to compare the corresponding full path.
+tone mapping, and grading are inactive. Pass `reuseOrder: false` to compare
+sorting or `specialize: false` in auto mode to compare the full resolve.
 
 | Frame control | Effect |
 | --- | --- |
@@ -61,6 +83,7 @@ tone mapping, and grading are inactive. Pass `reuseOrder: false` or
 | `scale`, `stepAnimation` | Change the splat size or explicitly enable the legacy 10 fps step for pixel looks. |
 | `afterimages` | Draw historical splat poses with scene depth. See [motion-aware afterimages](motion-afterimages.md). |
 | `reconstruction` | Animate selected splats through fragmentation, withdrawal, and reassembly. See [world-space reveal and reconstruction](world-reconstruction.md). |
+| `splatOrder`, `surfaceOrder` | Enable bounded [local surface ordering](surface-order.md) for a transparent crossing. |
 | `stableTransparency` | Hold the order of nearby translucent splats during motion. See [stable transparency](scene-optics.md#stable-transparency-during-motion). |
 | `water: false` | Compare the scene with water optics disabled. |
 | `reflections: false` | Disable live scene captures bound to water optics. |
@@ -286,6 +309,7 @@ The comparison renders the same seven camera checkpoints in each projection. An 
 | Selective ink, diagnostic buffers, stable art resolves, and frame-history effects | Host integration | Supported |
 | Directional environment sky, parallax horizon bands, and baked cloud cards | Supported | Supported |
 | Constant-density height, box, sphere, and shaft fog | Supported | Supported |
+| Stepped facing colors and signed directional swatches on native splats | Supported | Supported |
 | View-dependent surface finishes, projected layers, reflection captures, and marched density fields | Host integration | Supported |
 | Water-column extinction, surface highlights, foam, caustics, and refraction | Supported | Water data and queries |
 | Text rendering, PNG/APNG, scene reviews, and sprite atlases | Host integration | Supported |

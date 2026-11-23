@@ -1,0 +1,22 @@
+{
+  "format": "ink-studio/subject-reframe",
+  "version": 1,
+  "title": "Lantern crossing",
+  "scene": "../courier-shot-lighting.js",
+  "controls": { "lanternWalk": true },
+  "width": 232,
+  "height": 144,
+  "fps": 12,
+  "frames": 40,
+  "smoothing": 12,
+  "subjects": [
+    { "id": "face", "label": "Face", "select": { "object": "courier", "material": "skin" }, "weight": 2 },
+    { "id": "hand", "label": "Active hand", "select": { "object": "active-glove" } },
+    { "id": "lantern", "label": "Lantern", "select": { "object": "lantern" } }
+  ],
+  "formats": [
+    { "id": "widescreen", "label": "Widescreen", "width": 320, "height": 180, "scale": 0.67, "safeArea": [0.08, 0.10, 0.92, 0.9] },
+    { "id": "portrait", "label": "Portrait", "width": 180, "height": 320, "scale": 0.88, "safeArea": [0.10, 0.13, 0.90, 0.82] },
+    { "id": "handheld", "label": "Handheld", "width": 256, "height": 192, "scale": 0.71, "safeArea": [0.08, 0.15, 0.92, 0.80] }
+  ]
+}

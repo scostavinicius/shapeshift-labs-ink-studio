@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Emberlock · Ink Studio</title>
+<style>
+:root{color-scheme:dark;--page:#111f28;--panel:#1a2b34;--edge:#364d51;--text:#f5e8ca;--muted:#afc3bd;--mint:#a5e3c4;--copper:#e7a872}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--text);font:14px system-ui,sans-serif}
+main{max-width:1070px;margin:auto;padding:24px 25px}
+header{display:flex;justify-content:space-between;align-items:end;gap:16px;margin-bottom:16px}
+h1,h2,p{margin:0}
+h1{font:normal 42px/1 Georgia,serif;letter-spacing:-.02em;margin-bottom:6px}
+header p{color:var(--muted)}
+button{font:inherit;color:inherit;cursor:pointer}
+button:focus-visible{outline:2px solid var(--copper);outline-offset:2px}
+.control{border:1px solid #556d68;border-radius:5px;background:#263f44;padding:8px 11px}
+.control:hover{background:#345451}
+.columns{display:grid;grid-template-columns:minmax(0,720px) minmax(245px,1fr);gap:15px;align-items:start}
+figure{margin:0;min-width:0}
+.art{position:relative;line-height:0}
+canvas{display:block;width:100%;height:auto;image-rendering:pixelated}
+.art svg{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
+.socket{position:absolute;padding:0;border:1px solid transparent;background:transparent;border-radius:3px}
+.socket:hover,.socket[aria-pressed=true]{border-color:#e8c18d;background:#de976126}
+#irisHandle{cursor:grab}
+figcaption{display:flex;gap:8px;justify-content:center;flex-wrap:wrap;margin-top:9px}
+aside{background:var(--panel);border:1px solid var(--edge);border-radius:7px;padding:14px;margin-top:5px}
+h2{font-size:11px;letter-spacing:.12em;color:var(--muted);text-transform:uppercase;margin-bottom:9px}
+#lamps{display:grid;grid-template-columns:1fr 1fr;gap:7px;margin:0 0 13px}
+.lamp{border:1px solid #43585a;border-radius:4px;padding:7px;background:#22343d}
+.lamp dt{font-size:12px}.lamp dd{margin:4px 0 0;color:#a7b4b3;font:11px ui-monospace,monospace}
+.lamp[data-live=true]{border-color:#669d89;background:#224039}.lamp[data-live=true] dd{color:#c8f9d9}
+#action{border-top:1px solid var(--edge);padding-top:11px;color:var(--muted);font-size:12px;min-height:30px}
+#routes{display:grid;gap:5px;margin:7px 0 11px;min-height:54px}
+.route{display:flex;align-items:center;gap:6px;text-align:left;border:1px solid #425b5d;border-radius:4px;background:#22383f;padding:6px 7px;font:12px ui-monospace,monospace}
+.route[aria-pressed=true],.route:hover{border-color:#aacfc0;background:#2f4c4b}
+.route .prefix{font-size:13px}.route[data-kind=added] .prefix{color:var(--mint)}.route[data-kind=removed] .prefix{color:var(--copper)}
+.route .suffix{font-size:10px;color:#aac1bc;margin-left:auto}
+#hint{font-size:12px;color:var(--muted);min-height:33px;line-height:1.45}
+[hidden]{display:none!important}
+@media(max-width:790px){main{padding:17px}.columns{grid-template-columns:1fr}h1{font-size:33px}aside{margin-top:0}}
+</style>
+</head>
+<body>
+<main>
+<header><div><h1>Emberlock</h1><p>Turn the copper inlay or move the iris glyph to rewire the lamps.</p></div><button type="button" id="reset" class="control">Reset</button></header>
+<p id="loading" role="status">Loading the inlay…</p>
+<div class="columns" id="demo" hidden>
+  <figure>
+    <div class="art">
+      <canvas id="board" width="144" height="106" aria-label="Copper signal paths in a slate board"></canvas>
+      <svg id="wire" viewBox="0 0 144 106" aria-hidden="true"></svg>
+      <button class="socket" id="rotor" type="button" aria-label="Turn the center inlay clockwise"></button>
+      <button class="socket" id="irisHandle" type="button" draggable="true" aria-label="Select or drag the iris glyph" aria-pressed="false"></button>
+    </div>
+    <figcaption><button id="turn" class="control" type="button">Turn copper inlay</button><button id="move" class="control" type="button">Move iris glyph</button></figcaption>
+  </figure>
+  <aside>
+    <h2>Lamp states</h2>
+    <dl id="lamps"></dl>
+    <h2>Connections</h2>
+    <p id="action" aria-live="polite"></p>
+    <div id="routes"></div>
+    <p id="hint">Select a connection to trace its sockets.</p>
+  </aside>
+</div>
+</main>
+<script>
+(async()=>{
+  /* STUDIO */
+  const {initial,rotor,alternate,settle,render,same,frameWidth,frameHeight,left,top,size,width,height}=demo;
+  const el=id=>document.getElementById(id);
+  const art=el('board').parentNode, drawing=el('board').getContext('2d'), svg=el('wire');
+  const labels={iris:'Iris',bell:'Bell',ember:'Ember',moon:'Moon'};
+  let board=initial,graph=settle(board),adjustment=null,action='Initial wiring',selected=false,route;
+  const iris=()=>board.graph.nodes.find(node=>node.id==='iris').data.at;
+  const coordinate=([x,y])=>String.fromCharCode(65+x)+(y+1);
+  const otherSeat=()=>same(iris(),alternate)?[3,0]:alternate;
+
+  function buttonAt(button,[x,y]){
+    Object.assign(button.style,{left:(left+x*size)/frameWidth*100+'%',top:(top+y*size)/frameHeight*100+'%',
+      width:size/frameWidth*100+'%',height:size/frameHeight*100+'%'});
+  }
+  function paint(){
+    const {w,h,rgba}=render(board,graph,{selected:selected?iris():rotor,target:otherSeat(),energy:phase});
+    drawing.putImageData(new ImageData(new Uint8ClampedArray(rgba),w,h),0,0);
+  }
+
+  function socketPoint({at:[x,y],side}){
+    return [left+x*size+8+.5*({'W':-15,E:15}[side]??0), top+y*size+8+.5*({N:-15,S:15}[side]??0)];
+  }
+  function paintRoute(){
+    svg.replaceChildren();
+    const rows=el('routes').querySelectorAll('button');
+    for(const row of rows)row.setAttribute('aria-pressed',String(row.dataset.route===route?.key));
+    if(!route) return;
+    const points=route.edge.data.path.map(socketPoint), color=route.kind==='removed'?'#ffc697':'#fbffdf';
+    for (const stroke of [
+      {color:'#142a30',width:2.6,dash:''},{color,width:.95,dash:route.kind==='removed'?'2.2 1.5':''}
+    ]){
+      const line=document.createElementNS('http://www.w3.org/2000/svg','polyline');
+      line.setAttribute('points',points.map(point=>point.join(',')).join(' '));
+      line.setAttribute('fill','none'); line.setAttribute('stroke',stroke.color);
+      line.setAttribute('stroke-width',stroke.width);
+      line.setAttribute('stroke-dasharray',stroke.dash);
+      svg.append(line);
+    }
+  }
+
+  function routeRows(){
+    const rows=adjustment?[
+      ...adjustment.added.map(edge=>({kind:'added',edge})),
+      ...adjustment.removed.map(edge=>({kind:'removed',edge})),
+      ...adjustment.rerouted.map(({after})=>({kind:'rerouted',edge:after}))
+    ]:board.graph.edges.map(edge=>({kind:'current',edge}));
+    el('routes').replaceChildren();
+    for (const row of rows){
+      const {kind,edge}=row,key=kind+edge.id;
+      const button=document.createElement('button');
+      button.type='button'; button.className='route'; button.dataset.kind=kind; button.dataset.route=key;
+      const prefix=document.createElement('span'), text=document.createElement('span'), suffix=document.createElement('span');
+      prefix.className='prefix'; prefix.textContent=({added:'+',removed:'−',rerouted:'↬',current:'·'})[kind];
+      text.textContent=labels[edge.from]+' → '+labels[edge.to];
+      suffix.className='suffix'; suffix.textContent=kind==='current'?(graph.get(edge.from)?'ON':'OFF'):kind.toUpperCase();
+      button.append(prefix,text,suffix);
+      button.onclick=()=>{route=route?.key===key?null:{kind,edge,key};paintRoute()};
+      el('routes').append(button);
+    }
+    if (!rows.length) {
+      const empty=document.createElement('p'); empty.textContent='No connections changed.';
+      el('routes').append(empty);
+    }
+    paintRoute();
+  }
+  function update(){
+    el('action').textContent=action;
+    el('lamps').replaceChildren();
+    for(const id of ['iris','bell']){
+      const lamp=document.createElement('div'),name=document.createElement('dt'),value=document.createElement('dd');
+      const lit=graph.get(id)!==0;
+      lamp.className='lamp'; lamp.dataset.live=String(lit);
+      name.textContent=labels[id]; value.textContent=lit?'LIT':'DARK';
+      lamp.append(name,value); el('lamps').append(lamp);
+    }
+    el('irisHandle').setAttribute('aria-pressed',String(selected));
+    el('hint').textContent=selected?'Choose an empty tile for the iris.':'Select a connection to trace its sockets.';
+    buttonAt(el('irisHandle'),iris());
+    routeRows(); paint();
+  }
+  function changed(next,text){
+    adjustment=board.diff(next); board=next; graph=settle(next); action=text;
+    route=null; selected=false; update();
+  }
+  function rotate(){
+    changed(board.edit([{op:'turn',at:rotor}]),'Turned inlay at '+coordinate(rotor)+' clockwise.');
+  }
+  function move(to){
+    const from=iris(), [x,y]=to;
+    if(x<0||x>=width||y<0||y>=height||board.cells[y*width+x])return;
+    changed(board.edit([{op:'move',from,to}]),'Moved Iris from '+coordinate(from)+' to '+coordinate(to)+'.');
+  }
+  function grid(event){
+    const box=art.getBoundingClientRect(), x=(event.clientX-box.left)*frameWidth/box.width,
+      y=(event.clientY-box.top)*frameHeight/box.height;
+    return [Math.floor((x-left)/size),Math.floor((y-top)/size)];
+  }
+  el('turn').onclick=el('rotor').onclick=rotate;
+  el('move').onclick=()=>move(otherSeat());
+  el('reset').onclick=()=>{
+    board=initial; graph=settle(board); adjustment=null; action='Initial wiring'; selected=false; route=null; update();
+  };
+  el('irisHandle').onclick=()=>{selected=!selected;update()};
+  el('irisHandle').ondragstart=event=>{
+    event.dataTransfer.setData('text/plain','iris');
+    event.dataTransfer.effectAllowed='move';
+  };
+  art.ondragover=event=>{event.preventDefault();event.dataTransfer.dropEffect='move'};
+  art.ondrop=event=>{
+    event.preventDefault();
+    if(event.dataTransfer.getData('text/plain')==='iris')move(grid(event));
+  };
+  el('board').onclick=event=>{if(selected)move(grid(event))};
+  let phase=0;
+  if(!matchMedia('(prefers-reduced-motion: reduce)').matches)setInterval(()=>{phase=(phase+1)%3;paint()},420);
+  buttonAt(el('rotor'),rotor); update();
+  el('loading').hidden=true; el('demo').hidden=false;
+})().catch(error=>{
+  document.getElementById('loading').textContent=error.message;
+});
+</script>
+</body>
+</html>

@@ -1,7 +1,8 @@
 /* A JSON diorama and its local dependencies, mounted without a host filesystem. */
 (function(K) {
   const A = K.authoring, DIO = K.diorama;
-  const format = 'ink-studio/project-bundle', version = 1, takeVersion = 2;
+  const format = 'ink-studio/project-bundle', version = 1, takeVersion = 2, experimentVersion = 3, storyVersion = 4;
+  const experimentFormat = 'ink-studio/simulation-experiment';
   const maxBytes = 128 * 1024 * 1024, maxFiles = 4096;
   const object = value => value !== null && typeof value === 'object' && !Array.isArray(value);
   const meshExtension = /\.(obj|gltf|glb)$/i;
@@ -78,12 +79,12 @@
     }
     if (atlas) {
       Object.values(doc.files).forEach(relative);
-      if (typeof doc.cels === 'string') {
-        const sidecar = resolvePath(file, doc.cels);
-        const cels = contents(io.text(sidecar));
-        for (const edit of cels.replacements ?? []) for (const ref of Object.values(edit.files ?? {}))
-          visitAttachment(resolvePath(sidecar, ref), io, visited);
-      } else for (const edit of doc.cels?.replacements ?? []) Object.values(edit.files ?? {}).forEach(relative);
+      const celsFile = typeof doc.cels === 'string' ? resolvePath(file, doc.cels) : file;
+      const cels = celsFile === file ? doc.cels : contents(io.text(celsFile));
+      const tracks = [...(cels?.transitions ?? []), ...(cels?.silhouettes ?? [])];
+      for (const edit of [...(cels?.replacements ?? []), ...tracks.flatMap(clip => clip.frames ?? [])])
+        for (const ref of Object.values(edit.files ?? {})) if (typeof ref === 'string')
+          visitAttachment(resolvePath(celsFile, ref), io, visited);
     } else if (object(doc?.layers) && Number.isSafeInteger(doc.width) && Number.isSafeInteger(doc.height)) {
       for (const layer of Object.values(doc.layers))
         for (const frame of layer?.frames ?? []) relative(typeof frame === 'string' ? frame : frame?.file);
@@ -112,11 +113,24 @@
     const map = imageMap => Object.fromEntries(Object.entries(imageMap).map(([name, data]) => [name, transform(data)]));
     if (next.cels?.replacements) next.cels.replacements = next.cels.replacements.map(({ images, ...edit }) =>
       ({ ...edit, images: map(images) }));
+    for (const track of ['transitions','silhouettes']) if (next.cels?.[track]) next.cels[track] = next.cels[track].map(clip => ({
+      ...clip, frames: clip.frames.map(cel => cel.images ? { ...cel, images: map(cel.images) } : cel)
+    }));
     return { metadata: next, images: map(images) };
   }
 
-  function loadScene(entry, io, source, cache = new Map(), readAtlas, validate = true) {
-    const spec = structuredClone(contents(source ?? io.text(entry)));
+  function loadScene(entry, io, source, cache = new Map(), readAtlas, validate = true, digest) {
+    const authored = structuredClone(contents(source ?? io.text(entry)));
+    const { assetRegistry, ...document } = authored, references = A.assetReferences;
+    const registryFile = assetRegistry === undefined ? undefined : resolvePath(entry, assetRegistry);
+    const registry = registryFile === undefined ? undefined : references.compile(contents(io.text(registryFile)));
+    const spec = references.visual(assetRegistry === undefined ? authored : document, 'scene', (ref, kind) => {
+      if (!registry) throw new TypeError('Scene asset references need an assetRegistry file');
+      const asset = registry.bind(ref, kind), file = resolvePath(registryFile, asset.file);
+      if (digest && digest(io.bytes(file)) !== asset.sha256)
+        throw new Error('Asset SHA-256 mismatch for ' + references.key(ref) + ' (' + file + ')');
+      return JSON.parse(io.text(file));
+    });
     const assets = Object.create(null);
     function mesh(solid, owner, scoped = false) {
       if (solid.kind !== 'mesh' || typeof solid.asset !== 'string') return;
@@ -169,30 +183,42 @@
     return { spec, env, problems, atlasPaths };
   }
 
-  function open(input) {
+  function open(input, { digest } = {}) {
     const document = contents(input), { entry, project, toolkit, files, attachments = {}, atlases = {} } = document;
-    if (document.format !== format || ![version, takeVersion].includes(document.version))
+    const experiment = document.version === experimentVersion, story = document.version === storyVersion;
+    const checked = experiment || story;
+    if (document.format !== format || ![version, takeVersion, experimentVersion, storyVersion].includes(document.version))
       throw new TypeError('Unsupported Ink Studio project bundle version');
     if (!object(project) || typeof project.id !== 'string' || !Number.isSafeInteger(project.revision) ||
         project.revision < 1 || !object(toolkit) || typeof toolkit.version !== 'string' ||
-        !/^[a-f0-9]{64}$/.test(toolkit.sourceHash ?? '') || !object(files) || !object(attachments) || !object(atlases))
+        !/^[a-f0-9]{64}$/.test(toolkit.sourceHash ?? '') ||
+        experiment && !/^[a-f0-9]{64}$/.test(toolkit.runnerHash ?? '') ||
+        !object(files) || !object(attachments) || !object(atlases))
       throw new TypeError('Invalid project version information or file table');
     const rows = Object.entries(files);
     if (!rows.length || rows.length > maxFiles || !/\.json$/i.test(entry ?? '') || !Object.hasOwn(files, entry))
       throw new RangeError('A project needs a JSON scene entry and a bounded file table');
     let size = 0;
-    const table = new Map();
+    const table = new Map(), paths = checked ? new Set() : null;
     for (const [name, record] of rows) {
       if (resolvePath('', name) !== name || !object(record) || typeof record.data !== 'string' ||
           !['utf8', 'base64'].includes(record.encoding))
         throw new TypeError('Invalid project file record: ' + name);
       if (record.encoding === 'base64' && !base64(record.data))
         throw new TypeError('Invalid base64 project file: ' + name);
+      if (checked) {
+        const path = name.toLowerCase();
+        if (paths.has(path) || !/^[a-f0-9]{64}$/.test(record.sha256 ?? ''))
+          throw new TypeError('Invalid '+(experiment?'experiment':'story')+' file path or digest: ' + name);
+        paths.add(path);
+      }
       size += record.encoding === 'base64' ? record.data.length * 3 / 4 : encodeText(record.data).length;
       if (size > maxBytes) throw new RangeError('Project exceeds the file size budget');
-      table.set(name, { encoding: record.encoding, data: record.data });
+      table.set(name, { encoding: record.encoding, data: record.data, ...(checked && { sha256: record.sha256 }) });
     }
     const io = reader(name => table.get(name)), lookup = new Map(Object.entries(attachments));
+    if(story&&digest)for(const [name,{sha256}] of table)
+      if(digest(io.bytes(name))!==sha256)throw new Error('Corrupt story bundle file: '+name);
     const visited = new Set();
     for (const [id, name] of lookup) {
       if (!id.trim() || id.length > 256 || resolvePath('', name) !== name) throw new TypeError('Invalid project attachment: ' + id);
@@ -216,19 +242,24 @@
       return compiledAtlases.get(file);
     }
     const authored = contents(io.text(entry));
-    if (document.version === takeVersion) {
-      if (authored.format !== 'ink-studio/take' || authored.version !== 1 ||
-          authored.id !== undefined && authored.id !== project.id)
-        throw new TypeError('Version 2 project bundles need a matching take entry');
-      const metadata = Object.freeze({ id: project.id, revision: project.revision, entry, kind: 'take',
-        toolkit: Object.freeze({ version: toolkit.version, sourceHash: toolkit.sourceHash }) });
+    if (document.version === takeVersion || checked) {
+      const kind = story ? A.storyExchange.kindOf(authored.format) : experiment ? 'experiment' : 'take';
+      const authoredFormat = story ? authored.format : experiment ? experimentFormat : 'ink-studio/take';
+      if(!kind)throw new TypeError('Story project needs a story pack or run entry');
+      if (authored.format !== authoredFormat || authored.version !== 1 ||
+          (checked ? authored.id !== project.id || project.revision !== (authored.revision ?? 1) :
+            authored.id !== undefined && authored.id !== project.id))
+        throw new TypeError('Version ' + document.version + ' project bundles need a matching ' + kind + ' entry');
+      const metadata = Object.freeze({ id: project.id, revision: project.revision, entry, kind,
+        toolkit: Object.freeze({ version: toolkit.version, sourceHash: toolkit.sourceHash,
+          ...(experiment && { runnerHash: toolkit.runnerHash }) }) });
       return Object.freeze({
         metadata,
-        snapshot: () => ({ format, version: takeVersion, project: { ...project }, toolkit: { ...metadata.toolkit },
+        snapshot: () => ({ format, version: document.version, project: { ...project }, toolkit: { ...metadata.toolkit },
           entry, files: Object.fromEntries([...table].map(([name, record]) => [name, { ...record }])),
           attachments: Object.fromEntries(lookup),
           ...(atlasSources.size && { atlases: structuredClone(Object.fromEntries(atlasSources)) }) }),
-        takeDocument: () => structuredClone(authored),
+        ...(story?A.storyExchange.open(entry,resolvePath,io):{[kind + 'Document']:()=>structuredClone(authored)}),
         files: () => [...table.keys()],
         readFile: name => io.bytes(resolvePath('', name)),
         attachment(id) {
@@ -238,7 +269,7 @@
         }
       });
     }
-    const cached = new Map(), resolve = (source = authored) => loadScene(entry, io, source, cached, readAtlas);
+    const cached = new Map(), resolve = (source = authored) => loadScene(entry, io, source, cached, readAtlas, true, digest);
     const initial = resolve();
     if (initial.spec.id !== project.id) throw new TypeError('Project ID must match the scene entry');
     const metadata = Object.freeze({ id: project.id, revision: project.revision, entry,
@@ -249,14 +280,19 @@
         ...(atlasSources.size && { atlases: structuredClone(Object.fromEntries(atlasSources)) }) };
     }
     function withScene(source, { revision = metadata.revision + 1 } = {}) {
-      const next = structuredClone(contents(source)), data = snapshot();
+      let next = structuredClone(contents(source));
+      const data = snapshot();
+      if (authored.assetRegistry !== undefined && next.assetRegistry === undefined) {
+        next = A.assetReferences.restoreScene(next, authored, initial.spec, K.world.data.equal);
+        next.assetRegistry = authored.assetRegistry;
+      }
       for (const [name, definition] of Object.entries(authored.dataInputs ?? {}))
         if (definition.file !== undefined && Object.hasOwn(next.dataInputs ?? {}, name) &&
             K.world.data.equal(next.dataInputs[name], initial.spec.dataInputs[name]))
           next.dataInputs[name] = definition;
       data.project = { id: next.id, revision };
       data.files[entry] = { encoding: 'utf8', data: JSON.stringify(next, null, 2) + '\n' };
-      return open(data);
+      return open(data, { digest });
     }
     return Object.freeze({ metadata, snapshot, withScene, resolve,
       scene: () => structuredClone(initial.spec),
@@ -278,7 +314,8 @@
     });
   }
 
-  A.projectBundles = Object.freeze({ format, version, takeVersion, maxBytes, maxFiles, resolvePath, open, mapAtlasImages,
+  A.projectBundles = Object.freeze({ format, version, takeVersion, experimentVersion, experimentFormat, storyVersion,
+    maxBytes, maxFiles, resolvePath, open, mapAtlasImages,
     collectAttachment(file, get) {
       visitAttachment(file, reader(get), new Set());
     },

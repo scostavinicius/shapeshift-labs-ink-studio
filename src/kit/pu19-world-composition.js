@@ -61,10 +61,14 @@
         reads:{state:contract?.reads ?? {},inputs:descriptors('inputs'),fields:fields?.reads ?? []},
         writes:{state:name,outputs:descriptors('outputs'),fields:fields?.writes ?? []},
         emits:contract?.emits ?? null,
-        after:contract?.after ?? []
+        after:contract?.after ?? [],
+        ...(system.module && {module:system.module}),
+        ...(system.kernel && {kernel:system.kernel})
       }];
     }));
-    const connections = [...incoming.values()].sort((a,b) => a.to < b.to ? -1 : a.to > b.to ? 1 : 0);
+    const connections = [...incoming.values()].map(({crossing,...edge}) => ({
+      ...edge,...(crossing && {crossing:K.world.signalCrossings.describe({crossing})})
+    })).sort((a,b) => a.to < b.to ? -1 : a.to > b.to ? 1 : 0);
     return freeze({order:order.slice(),systems:systemsInfo,dependencies:phaseEdges.slice(),connections});
   }
 

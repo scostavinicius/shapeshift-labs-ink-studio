@@ -1,0 +1,59 @@
+{
+  "format": "ink-studio/world",
+  "version": 1,
+  "id": "poppet-valve-bench",
+  "dt": 0.016666666666666666,
+  "entities": {
+    "plug": {
+      "position": [0, 0.14, 0],
+      "sockets": {
+        "a": [-0.30, 0, -0.20],
+        "b": [0.30, 0, -0.20],
+        "c": [0.30, 0, 0.20],
+        "d": [-0.30, 0, 0.20]
+      }
+    }
+  },
+  "systems": {
+    "actuator": {
+      "kind": "mechanics",
+      "config": {
+        "gravity": [0, 0, 0],
+        "bodies": { "plug": { "position": [0, 0.14, 0], "half": [0.30, 0.015, 0.20] } },
+        "joints": { "lift": { "kind": "slider", "mode": "position", "child": "plug",
+          "anchor": [0, 0, 0], "axis": [0, 1, 0], "range": [0, 0.14], "at": 0.14, "speed": 0.29 } }
+      }
+    },
+    "gauge": {
+      "kind": "moving-boundaries",
+      "config": { "boundaries": { "seat": {
+        "seat": {
+          "points": [[-0.30, 0, -0.20], [0.30, 0, -0.20], [0.30, 0, 0.20], [-0.30, 0, 0.20]],
+          "triangles": [[0, 2, 1], [0, 3, 2]],
+          "normal": [0, 1, 0]
+        },
+        "moving": [
+          { "entity": "plug", "socket": "a" }, { "entity": "plug", "socket": "b" },
+          { "entity": "plug", "socket": "c" }, { "entity": "plug", "socket": "d" }
+        ],
+        "maxSlip": 0.002
+      } } }
+    },
+    "pipes": {
+      "kind": "pipe-network",
+      "config": {
+        "nodes": {
+          "inlet": { "capacity": 30, "initial": 18, "area": 3 },
+          "outlet": { "capacity": 28, "initial": 1, "area": 3 }
+        },
+        "pipes": { "seat": { "from": "inlet", "to": "outlet", "conductance": 0.08 } }
+      }
+    }
+  },
+  "connections": [{ "from": "gauge/opening.seat", "to": "pipes/valve.seat" }],
+  "commands": [
+    { "tick": 20, "action": "world/input", "args": { "port": "actuator/drive.lift", "value": 0.00025 } },
+    { "tick": 76, "action": "world/input", "args": { "port": "actuator/drive.lift", "value": 0 } },
+    { "tick": 121, "action": "world/input", "args": { "port": "actuator/drive.lift", "value": 0.11 } }
+  ]
+}

@@ -279,6 +279,6 @@ const ViewAnnotations = (() => {
     return { labels, legends, skipped, distance, budget:band.maxLabels, draw:[...leaderDraw,...labelDraw,...legendDraw] };
   }
 
-  return Object.freeze({ prepare, layout });
+  return Object.freeze({ anchor, prepare, layout });
 })();
 if (typeof module !== 'undefined') module.exports = ViewAnnotations;

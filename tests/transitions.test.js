@@ -2,10 +2,10 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const entry = import('../webgl.mjs');
 
-test('the browser entry exposes all 49 usable defaults in their five groups', async () => {
+test('the browser entry exposes all 50 usable defaults in their five groups', async () => {
   const { createTransition, transitionPresets, transitionShaders } = await entry;
   const ids = new Set(transitionPresets.map(({ id }) => id));
-  assert.equal(ids.size, 49);
+  assert.equal(ids.size, 50);
   const groups = {};
   const seen = new Set();
   for (const { id, group, duration } of transitionPresets) {
@@ -23,7 +23,7 @@ test('the browser entry exposes all 49 usable defaults in their five groups', as
       assert(frame.uniforms.u_color.length === 4);
     }
   }
-  assert.deepEqual(Object.values(groups), [8, 9, 12, 12, 8]);
+  assert.deepEqual(Object.values(groups), [8, 9, 12, 13, 8]);
   assert.deepEqual([...seen].sort(), [...transitionShaders].sort());
 });
 

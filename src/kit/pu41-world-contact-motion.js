@@ -1,7 +1,7 @@
 /* Deterministic translation in impact order, with iterative overlap cleanup. */
 (function(K) {
   const W=K.world, C=W.colliders, {V}=K, eps=1e-8, zero=[0,0,0], down=[0,-1,0];
-  function prepare(bodies,roots,masses,{ground,onGround,fabric,onFabric,onContact}={}) {
+  function prepare(bodies,roots,masses,{ground,onGround,fabric,onFabric,onContact,measure=false}={}) {
     const keys=Object.keys(bodies).sort(), groups=new Map();
     for(const key of keys){
       const root=roots[key];
@@ -95,6 +95,21 @@
       if(duration<=0)return;
       for(const root of groups.keys())shift(root,V.mul(velocity(root),duration));
     }
+    function measureContact(a,b,contact){
+      const ra=roots[a], rb=b===null?null:roots[b];
+      const left=C.geometry(bodies[a]).parts[contact.parts[0]];
+      const right=b===null?null:C.geometry(bodies[b]).parts[contact.parts[1]];
+      const point=contact.surface?.point??(right?
+        left.min.map((n,i)=>(Math.max(n,right.min[i])+Math.min(left.max[i],right.max[i]))*.5):
+        [(left.min[0]+left.max[0])*.5,ground,(left.min[2]+left.max[2])*.5]);
+      const surfaceVelocity=root=>groups.has(root)?V.add(velocity(root),
+        V.cross(bodies[root].angular,V.sub(point,bodies[root].position))):zero;
+      const relative=V.sub(surfaceVelocity(ra),surfaceVelocity(rb));
+      const slip=V.mad(relative,contact.normal,-V.dot(relative,contact.normal));
+      const moved=groups.has(ra)?ra:rb, sign=moved===ra?1:-1, before=velocity(moved);
+      return ()=>({point,slip,pointBasis:contact.surface?'surface':right?'overlap':'ground',
+        impulse:V.mul(V.sub(before,velocity(moved)),sign*masses[moved])});
+    }
     function sweep(dt,iterations) {
       let remaining=dt;
       const impacts=[];
@@ -113,10 +128,11 @@
         const {a,b,contact}=first, travel=contact.time*remaining;
         move(travel);
         remaining-=travel;
+        const measurement=measure?measureContact(a,b,contact):null;
         const speed=adjust(a,b,contact);
         const {system,shape,face}=contact.surface??{};
         impacts.push({a,b,parts:contact.parts,normal:contact.normal,at:1-remaining/dt,speed,
-          ...(system&&{surface:{system,shape,face}})});
+          ...(system&&{surface:{system,shape,face}}),...(measurement&&{measurement:measurement()})});
         if(contact.limited)return {impacts,limited:true};
         settle(iterations);
       }

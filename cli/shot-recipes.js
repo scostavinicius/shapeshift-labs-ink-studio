@@ -9,12 +9,12 @@ const format = 'ink-studio/shot-recipe';
 const commands = new Map([
   ['render', ['render']], ['clip', ['clip']], ['transition-review', ['transition-review']], ['sim render', ['sim','render']]
 ]);
-const validSidecar = suffix => /^(?:\.(?:json|txt)|-(?:passes|join)\.json|-[a-zA-Z][a-zA-Z0-9]*\.png)$/.test(suffix);
+const validSidecar = suffix => /^(?:\.(?:json|txt)|-(?:passes|join|beat|effects|consequences)\.json|-[a-zA-Z][a-zA-Z0-9]*\.png)$/.test(suffix);
 const fileOptions = new Set([
-  'actions','adaptive-sampling','afterimages','area-lights','art-direction','asset-pack','atmosphere-depth-bands','atmosphere-emitters','authoring','bounce-probes','camera-staging','celestial-tracks','cloud-field',
-  'color-clusters','color-stack','composite','contact-shadows','cutaway','edge-filter','effect-palettes','horizon-bands','ink','inspection','lightning','look','lut','palette-constraints','pass-quality','plan','precipitation',
+  'actions','adaptive-sampling','afterimages','area-lights','art-direction','asset-pack','asset-registry','atmosphere-depth-bands','atmosphere-emitters','authoring','bounce-probes','camera-staging','celestial-tracks','cloud-field',
+  'color-clusters','color-stack','composite','contact-shadows','curve-width','cutaway','edge-filter','effect-palettes','event-effects','horizon-bands','ink','inspection','lightning','look','lut','output-grade','output-palette','palette-constraints','pass-quality','plan','precipitation',
   'rain-impacts','reconstruction','relighting','render-graph','scene-exposure','sdf-assist','shadow-art','shot-lighting','shaped-atmosphere','silhouette-protection','sky-environment','sky-transitions',
-  'splat-fields','sprite-atlas','sprite-cels','stable','stable-detail','translucent-silhouettes','volume-cutouts','weather-binding','wind-field'
+  'motional-coverage','splat-fields','sprite-atlas','sprite-cels','stable','stable-detail','translucent-silhouettes','volume-cutouts','weather-binding','wind-field'
 ]);
 const omitted = new Set(['recipe','out','fail-on-flags']);
 const fileDigest = file => createHash('sha256').update(fs.readFileSync(file)).digest('hex');
@@ -168,10 +168,11 @@ function replay(filename,{out,root,entry,portable = false,protect = []}) {
         'Shot replay diverged from the saved '+(suffix || 'image')+' hash');
     for (const suffix of Object.keys(outputs)) atomicWrite(sidecar(output,suffix),temp=>{
       const source = sidecar(staged,suffix);
-      if (suffix !== '-passes.json' || path.basename(output) === recipe.output.name)
+      if (!['-passes.json','-beat.json'].includes(suffix) || path.basename(output) === recipe.output.name)
         return fs.copyFileSync(source,temp);
       const manifest = read(source);
-      manifest.files = Object.fromEntries(Object.keys(manifest.files).map(channel=>
+      if(suffix==='-beat.json')manifest.file=path.basename(output);
+      else manifest.files = Object.fromEntries(Object.keys(manifest.files).map(channel=>
         [channel,path.basename(sidecar(output,'-'+channel+'.png'))]));
       fs.writeFileSync(temp,JSON.stringify(manifest,null,2)+'\n');
     });

@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Lantern Sluice · Column Melt</title>
+<style>
+  :root { color-scheme: dark; font: 15px/1.5 system-ui, sans-serif; background: #10141a; color: #e4ece9; }
+  body { margin: 32px auto; width: min(696px, calc(100% - 28px)); }
+  h1 { margin: 0 0 14px; font: 400 clamp(31px, 6vw, 46px)/1.06 Georgia, serif; }
+  h2 { margin: 23px 0 6px; font-size: 16px; }
+  .view { width: 100%; display: block; image-rendering: pixelated; }
+  .transport, .actions { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; margin: 11px 0; }
+  button { font: inherit; background: #232d35; border: 1px solid #3c4851; color: inherit; border-radius: 4px; padding: 5px 12px; cursor: pointer; }
+  button:hover { background: #35434a; }
+  input { accent-color: #9cdbbb; }
+  .scrub { flex: 1; }
+  output { min-width: 4ch; text-align: right; font-variant-numeric: tabular-nums; }
+  .brush { width: clamp(75px, 16vw, 115px); vertical-align: middle; }
+  .hints { display: flex; gap: 15px; flex-wrap: wrap; font-size: 13px; margin: 6px 0; color: #bec9cc; }
+  .hints span::before { content: ''; display: inline-block; width: 7px; height: 7px; margin-right: 6px; background: var(--swatch); }
+  #paint { touch-action: none; cursor: crosshair; background: #1a2029; }
+  #hint { color: #a6b4b9; margin: 7px 0; font-size: 13px; }
+  em { color: #9cb0b5; font-size: 13px; font-style: normal; display: block; margin-bottom: 7px; }
+</style>
+</head>
+<body>
+<em>Ink Studio · Column melt</em>
+<h1>Lantern Sluice</h1>
+<canvas class="view" id="view" aria-label="Transition from the sunset overlook to the flooded undercroft"></canvas>
+<div class="transport">
+  <button id="play" type="button">Pause</button>
+  <input class="scrub" id="time" type="range" min="0" max="1000" value="0" aria-label="Transition progress">
+  <output id="readout" for="time">0%</output>
+</div>
+<h2>Paint the strips</h2>
+<div class="hints" id="legend">
+  <span style="--swatch:#ff7969">Red starts the slip</span>
+  <span style="--swatch:#8dd886">Green slows the spread</span>
+  <span style="--swatch:#7eabff">Blue holds the strip</span>
+</div>
+<canvas class="view" id="paint" tabindex="0" aria-label="Control paint" aria-describedby="legend hint"></canvas>
+<p id="hint">Drag across a row to paint. Shift-drag to erase. With the keyboard, use the arrow keys to choose a strip and Space to paint.</p>
+<div class="actions">
+  <label>Brush <input class="brush" id="brush" type="range" min="0" max="255" value="255"></label>
+  <label>Travel time <input class="brush" id="travel" type="range" min="0" max="100" value="58"></label>
+  <button id="reset" type="button">Reset paint</button>
+  <button id="save" type="button">Save paint PNG</button>
+</div>
+<script type="application/json" id="study">/* STUDY */</script>
+<script type="module">
+/* LIBRARY */
+const $ = (id) => document.getElementById(id);
+const study = JSON.parse($('study').textContent);
+for (const name of ['from', 'to', 'paint']) {
+  study[name].data = Uint8Array.from(atob(study[name].data), (char) => char.charCodeAt(0));
+}
+const { from, to, paint } = study;
+const initialPaint = paint.data.slice();
+const view = $('view'), board = $('paint'), time = $('time'), play = $('play'), travel = $('travel');
+view.width = board.width = from.width;
+view.height = from.height;
+board.height = 24;
+travel.value = Math.round(study.spread * 100);
+const ctx = view.getContext('2d'), draw = board.getContext('2d');
+const accents = [[255,121,105],[141,216,134],[126,171,255]];
+const tile = board.width / paint.width;
+let map, now = performance.now(), playing = true;
+let previous = null, keyboard = [0, 0];
+
+function showPaint() {
+  draw.clearRect(0, 0, board.width, board.height);
+  const lane = board.height / paint.height;
+  for (let y = 0; y < paint.height; y++) {
+    for (let x = 0; x < paint.width; x++) {
+      const value = paint.data[(y * paint.width + x) * 4 + y] / 255;
+      const color = accents[y].map((n) => Math.round(38 + (n - 38) * value));
+      draw.fillStyle = 'rgb(' + color.join(',') + ')';
+      draw.fillRect(x * tile, y * lane, tile - 1, lane - 1);
+    }
+  }
+  if (board.matches(':focus-visible')) {
+    draw.strokeStyle = '#fff';
+    draw.strokeRect(keyboard[0] * tile + .5, keyboard[1] * lane + .5, tile - 1, lane - 1);
+  }
+}
+
+function showFrame(progress) {
+  const frame = renderColumnMelt(from, to, { map, progress });
+  ctx.putImageData(new ImageData(new Uint8ClampedArray(frame.data.buffer), from.width, from.height), 0, 0);
+  time.value = Math.round(progress * 1000);
+  $('readout').value = Math.round(progress * 100) + '%';
+}
+
+function updatePaint() {
+  map = createColumnMeltMap(paint, { spread: Number(travel.value) / 100 });
+  showPaint();
+  showFrame(Number(time.value) / 1000);
+}
+
+function setPlaying(value) {
+  playing = value;
+  play.textContent = value ? 'Pause' : 'Play';
+  if (value) {
+    const progress = Number(time.value) / 1000;
+    now = performance.now() - (progress < 1 ? progress * 1650 : 0);
+  }
+}
+
+function tick(timestamp) {
+  if (playing) {
+    const elapsed = (timestamp - now) % 2920;
+    showFrame(Math.max(0, Math.min(1, elapsed / 1650)));
+  }
+  requestAnimationFrame(tick);
+}
+
+function changePaint(x, y, erase) {
+  paint.data[(y * paint.width + x) * 4 + y] = erase ? 0 : Number($('brush').value);
+}
+
+function stroke(event) {
+  const bounds = board.getBoundingClientRect();
+  const x = Math.max(0, Math.min(paint.width - 1, Math.floor((event.clientX - bounds.left) / bounds.width * paint.width)));
+  const y = Math.max(0, Math.min(paint.height - 1, Math.floor((event.clientY - bounds.top) / bounds.height * paint.height)));
+  const [lastX, lastY] = previous ?? [x, y];
+  const steps = Math.max(1, Math.abs(x - lastX), Math.abs(y - lastY));
+  for (let step = 0; step <= steps; step++) {
+    changePaint(Math.round(lastX + (x - lastX) * step / steps),
+      Math.round(lastY + (y - lastY) * step / steps), event.shiftKey);
+  }
+  previous = keyboard = [x, y];
+  updatePaint();
+}
+
+play.addEventListener('click', () => setPlaying(!playing));
+time.addEventListener('input', () => {
+  setPlaying(false);
+  showFrame(Number(time.value) / 1000);
+});
+travel.addEventListener('input', updatePaint);
+board.addEventListener('pointerdown', (event) => {
+  board.setPointerCapture(event.pointerId);
+  stroke(event);
+});
+board.addEventListener('pointermove', (event) => {
+  if (board.hasPointerCapture(event.pointerId)) stroke(event);
+});
+board.addEventListener('lostpointercapture', () => { previous = null; });
+board.addEventListener('focus', showPaint);
+board.addEventListener('blur', showPaint);
+board.addEventListener('keydown', (event) => {
+  const [x, y] = keyboard;
+  switch (event.key) {
+    case 'ArrowLeft': keyboard = [Math.max(0, x - 1), y]; break;
+    case 'ArrowRight': keyboard = [Math.min(paint.width - 1, x + 1), y]; break;
+    case 'ArrowUp': keyboard = [x, Math.max(0, y - 1)]; break;
+    case 'ArrowDown': keyboard = [x, Math.min(paint.height - 1, y + 1)]; break;
+    case ' ':
+    case 'Delete':
+      changePaint(x, y, event.shiftKey || event.key === 'Delete');
+      updatePaint();
+      break;
+    default: return;
+  }
+  event.preventDefault();
+  showPaint();
+});
+$('reset').addEventListener('click', () => {
+  paint.data.set(initialPaint);
+  travel.value = Math.round(study.spread * 100);
+  updatePaint();
+});
+$('save').addEventListener('click', () => {
+  const canvas = document.createElement('canvas');
+  canvas.width = paint.width;
+  canvas.height = paint.height;
+  canvas.getContext('2d').putImageData(new ImageData(new Uint8ClampedArray(paint.data), paint.width, paint.height), 0, 0);
+  const link = document.createElement('a');
+  link.download = 'lantern-sluice-paint.png';
+  link.href = canvas.toDataURL('image/png');
+  link.click();
+});
+updatePaint();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

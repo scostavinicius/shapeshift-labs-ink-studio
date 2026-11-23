@@ -4,10 +4,29 @@ const os = require('node:os');
 const { createHash } = require('node:crypto');
 const { write } = require('./asset-files.js');
 const { collectDependencies } = require('./project-dependencies.js');
+const Experiment = require('./experiment-schema.js');
 
 const textFile = /\.(?:json|geojson|gltf|obj|mtl|csv|tsv|txt|cube|svg)$/i;
 const studio = () => require('../index.js');
 const api = () => studio().load().KIT.authoring.projectBundles;
+const digest = data => createHash('sha256').update(data).digest('hex');
+
+function experimentToolkit() {
+  const root = path.resolve(__dirname, '..'), hash = createHash('sha256');
+  const hosts = ['index.js', 'src/simulation-checkpoint-store.js',
+    ...fs.readdirSync(__dirname).filter(file => file.endsWith('.js')).sort().map(file => 'cli/' + file)];
+  for (const file of hosts) {
+    const bytes = fs.readFileSync(path.join(root,file));
+    hash.update(file + '\0' + bytes.length + '\0').update(bytes);
+  }
+  return { version: studio().version, sourceHash: studio().nodeToolkitHash(), runnerHash: hash.digest('hex') };
+}
+
+function verifyExperimentFiles(snapshot) {
+  for (const [name, record] of Object.entries(snapshot.files))
+    if (digest(Buffer.from(record.data, record.encoding)) !== record.sha256)
+      throw new Error('Corrupt experiment asset: ' + name);
+}
 const inside = (root, file) => {
   const relative = path.relative(root, file);
   if (!relative || path.isAbsolute(relative) || relative === '..' || relative.startsWith('..' + path.sep))
@@ -15,10 +34,10 @@ const inside = (root, file) => {
   return relative.split(path.sep).join('/');
 };
 
-function packProject(scene, { out, root, revision = 1, assetPack, paint, attachments } = {}) {
+function packProject(scene, { out, root, revision, assetPack, paint, attachments } = {}) {
   if (typeof scene !== 'string' || !/\.json$/i.test(scene) || typeof out !== 'string' || !/\.json$/i.test(out))
-    throw new TypeError('Project packing needs a JSON scene or take and a .json output file');
-  if (!Number.isSafeInteger(revision) || revision < 1) throw new RangeError('Choose a positive project revision');
+    throw new TypeError('Project packing needs a JSON scene, take, experiment or story recipe and a .json output file');
+  if (revision !== undefined && (!Number.isSafeInteger(revision) || revision < 1)) throw new RangeError('Choose a positive project revision');
   const input = path.resolve(scene), projectRoot = path.resolve(root ?? path.dirname(input));
   const actualRoot = fs.realpathSync(projectRoot), entry = inside(projectRoot, input);
   const kit = studio().load().KIT, bundles = kit.authoring.projectBundles, records = new Map(), sources = new Set();
@@ -58,6 +77,20 @@ function packProject(scene, { out, root, revision = 1, assetPack, paint, attachm
   let spec = jsonFile(input);
   if (spec?.format === bundles.format) throw new TypeError('Pack a source JSON diorama or save edits with withScene()');
   const take = spec?.format === 'ink-studio/take';
+  const experiment = spec?.format === Experiment.format;
+  const story = kit.authoring.storyExchange.kindOf(spec?.format);
+  if(story){
+    kit.authoring.storyExchange.validate(spec);
+    if(assetPack!==undefined||paint!==undefined)throw new TypeError('Author story assets in the story pack recipe');
+    if(revision!==undefined&&revision!==(spec.revision??1))throw new TypeError('Project revision must match the story recipe');
+  }
+  if (experiment) {
+    Experiment.validate(spec);
+    if (assetPack !== undefined || paint !== undefined)
+      throw new TypeError('Author experiment assets in the recipe before packing');
+    if (revision !== undefined && revision !== (spec.revision ?? 1))
+      throw new TypeError('Project revision must match the experiment recipe');
+  }
   if (take && paint !== undefined) throw new TypeError('Apply paint to its scene before packing a native take');
   const refs = {};
   if (attachments !== undefined) {
@@ -89,25 +122,36 @@ function packProject(scene, { out, root, revision = 1, assetPack, paint, attachm
     const stat = fs.statSync(source);
     return stat.dev === prior.dev && stat.ino === prior.ino;
   })) throw new Error('Choose a project output separate from its inputs');
-  const project = bundles.open({ format: bundles.format, version: take ? bundles.takeVersion : bundles.version,
+  const project = bundles.open({ format: bundles.format,
+    version: experiment ? bundles.experimentVersion : story ? bundles.storyVersion : take ? bundles.takeVersion : bundles.version,
     project: { id: spec.id ?? (take && spec.world ? jsonFile(path.resolve(path.dirname(input), spec.world)).id : undefined) ??
-      path.basename(entry, path.extname(entry)), revision }, toolkit: { version: studio().version,
-      sourceHash: createHash('sha256').update(studio().bundle()).digest('hex') },
-    entry, files: Object.fromEntries([...records].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)),
-    attachments: refs, atlases });
+      path.basename(entry, path.extname(entry)), revision: revision ?? (experiment || story ? spec.revision ?? 1 : 1) },
+    toolkit: experiment ? experimentToolkit() : { version: studio().version, sourceHash: digest(studio().bundle()) },
+    entry, files: Object.fromEntries([...records].sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0)
+      .map(([name,record])=>[name,experiment||story?{...record,sha256:digest(Buffer.from(record.data,record.encoding))}:record])),
+    attachments: refs, atlases }, { digest });
   return writeProjectBundle(project, { out: file });
 }
 
 function readProjectBundle(file) {
   const bundles = api();
   if (fs.statSync(file).size > bundles.maxBytes * 2) throw new RangeError('Project bundle exceeds the JSON size budget');
-  return bundles.open(fs.readFileSync(file, 'utf8'));
+  const project = bundles.open(fs.readFileSync(file, 'utf8'), { digest });
+  if (project.metadata.kind === 'experiment') verifyExperimentFiles(project.snapshot());
+  if (project.storyManifest) validateDependencies(bundles,project.snapshot());
+  return project;
+}
+
+function validateDependencies(bundles,snapshot) {
+  return collectDependencies(bundles,snapshot.entry,file=>Object.hasOwn(snapshot.files,file)?snapshot.files[file]:undefined,
+    snapshot.attachments);
 }
 
 function materialize(project, directory) {
   const snapshot = project.snapshot();
-  collectDependencies(api(), snapshot.entry, file => Object.hasOwn(snapshot.files, file) ? snapshot.files[file] : undefined,
-    snapshot.attachments);
+  if (project.metadata.kind === 'experiment') verifyExperimentFiles(snapshot);
+  if (snapshot.version === api().storyVersion) api().open(snapshot, { digest });
+  validateDependencies(api(),snapshot);
   for (const name of project.files()) {
     const file = path.resolve(directory, name);
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -157,11 +201,18 @@ function unpackProject(input, { out } = {}) {
 
 function writeProjectBundle(source, { out } = {}) {
   if (typeof out !== 'string' || !/\.json$/i.test(out)) throw new TypeError('Choose a project .json output filename');
-  const bundles = api(), project = typeof source?.snapshot === 'function' ? source : bundles.open(source);
-  const data = JSON.stringify(project.snapshot(), null, 2) + '\n', file = path.resolve(out);
+  const bundles = api(), project = typeof source?.snapshot === 'function' ? source : bundles.open(source, { digest });
+  const snapshot = project.snapshot();
+  if (project.metadata.kind === 'experiment') verifyExperimentFiles(snapshot);
+  if(snapshot.version===bundles.storyVersion){
+    bundles.open(snapshot,{digest});
+    validateDependencies(bundles,snapshot);
+  }
+  const data = JSON.stringify(snapshot, null, 2) + '\n', file = path.resolve(out);
   if (Buffer.byteLength(data) > bundles.maxBytes * 2) throw new RangeError('Project bundle exceeds the JSON size budget');
   write(file, data);
   return { file, project };
 }
 
-module.exports = { packProject, readProjectBundle, writeProjectBundle, mountProject, unpackProject, withTakeSource, replayProjectShot };
+module.exports = { packProject, readProjectBundle, writeProjectBundle, mountProject, unpackProject, withTakeSource, replayProjectShot,
+  experimentToolkit };

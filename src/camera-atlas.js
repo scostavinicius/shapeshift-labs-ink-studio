@@ -1,7 +1,9 @@
 /* Named camera captures with a shared clock, resolution budget, and composition adapters. */
 const CameraAtlas = (() => {
   const composite = typeof FrameComposite === 'undefined' ? require('./frame-composite.js') : FrameComposite;
+  const video = typeof CompositeVideo === 'undefined' ? require('./composite-video.js') : CompositeVideo;
   const surfaces = typeof SpriteSurface === 'undefined' ? require('./sprite-surface.js') : SpriteSurface;
+  const outputs = typeof RenderOutputs === 'undefined' ? require('./render-outputs.js') : RenderOutputs;
   const integer = (value, low, high) => Number.isSafeInteger(value) && value >= low && value <= high;
   const frameOptions = value => value && [Object.prototype, null].includes(Object.getPrototypeOf(value));
   const maxPixels = 4096 * 4096;
@@ -12,16 +14,23 @@ const CameraAtlas = (() => {
       !Array.isArray(views) || !integer(views.length, 1, 64))
       throw new RangeError('A camera atlas needs bounded dimensions, views and budgets');
     const used = new Set(), tiles = [];
+    let retained = 0;
     const definitions = Array.from(views, (view, index) => {
-      const { id, rect, fps = 12, frame } = view ?? {};
+      const { id, rect, fps = 12, frame, source, compositeVideo = false } = view ?? {};
       if (typeof id !== 'string' || !/^[\w-]{1,64}$/.test(id) || used.has(id) ||
         !Array.isArray(rect) || rect.length !== 4 || !Array.from(rect).every(n => integer(n, 0, 4096)) ||
-        !Number.isFinite(fps) || fps <= 0 || fps > 240 || frame !== undefined &&
-        typeof frame !== 'function' && !frameOptions(frame))
+        !Number.isFinite(fps) || fps <= 0 || fps > 240 ||
+        (frame !== undefined && typeof frame !== 'function' && !frameOptions(frame)) ||
+        (source !== undefined && typeof source !== 'function'))
         throw new TypeError('Invalid camera atlas view at index ' + index);
       const [x, y, w, h] = rect;
       if (!w || !h || x + w > width || y + h > height || w * h > maxPixelsPerFrame)
         throw new RangeError('Camera atlas tile cannot fit its atlas or frame budget: ' + id);
+      if (source) {
+        retained += w*h;
+        if (w*h>outputs.maxPixels || retained>4*outputs.maxPixels)
+          throw new RangeError('Camera atlas render outputs exceed the retained pixel budget');
+      }
       if (tiles.some(other => x < other.x + other.width && x + w > other.x &&
         y < other.y + other.height && y + h > other.y))
         throw new RangeError('Camera atlas tiles must not overlap: ' + id);
@@ -29,7 +38,7 @@ const CameraAtlas = (() => {
         uv: Object.freeze([x / width, y / height, (x + w) / width, (y + h) / height]) });
       used.add(id);
       tiles.push(tile);
-      return Object.freeze({ tile, frame, index });
+      return Object.freeze({ tile, frame, source, index, signal: video.prepare(compositeVideo) });
     });
     return Object.freeze({ width, height, maxViewsPerFrame, maxPixelsPerFrame,
       tiles: Object.freeze(tiles), definitions: Object.freeze(definitions) });
@@ -39,6 +48,7 @@ const CameraAtlas = (() => {
     const { width, height, definitions, tiles, maxViewsPerFrame, maxPixelsPerFrame } = plan;
     const byId = new Map(definitions.map(({ tile, index }) => [tile.id, index]));
     const times = new Array(tiles.length), versions = tiles.map(() => 0), cache = new Map();
+    const captured = new Map();
     let currentTime, next = 0, disposed = false, busy = false;
 
     function alive() {
@@ -59,6 +69,7 @@ const CameraAtlas = (() => {
       next = 0;
       times.fill(undefined);
       cache.clear();
+      captured.clear();
       for (let i = 0; i < versions.length; i++) versions[i]++;
     }
 
@@ -76,7 +87,7 @@ const CameraAtlas = (() => {
       try {
         for (let offset = 0; offset < definitions.length; offset++) {
           const index = (start + offset) % definitions.length;
-          const { tile, frame: settings } = definitions[index];
+          const { tile, frame: settings, source, signal } = definitions[index];
           if (times[index] !== undefined && time - times[index] + 1e-10 < 1 / tile.fps) continue;
           const area = tile.width * tile.height;
           if (deferred.length || updated.length >= maxViewsPerFrame || pixels + area > maxPixelsPerFrame) {
@@ -87,12 +98,21 @@ const CameraAtlas = (() => {
           next = index;
           const view = typeof settings === 'function' ? settings({ world, time, tile }) : settings;
           if (view !== undefined && !frameOptions(view)) throw new TypeError('Camera view options must be an object');
-          backend.capture(world, {
+          const options = {
             composite: false, renderGraph: false, inspection: false, afterimages: false, ...frame, ...view,
             damp: false, resetTransparency: true, resetRenderHistory: true, changedRows: undefined,
             ...((frame.camera || view?.camera) && { camera: { ...frame.camera, ...view?.camera } }),
             width: tile.width, height: tile.height, time
-          }, tile);
+          };
+          let packet;
+          if (source) {
+            const output = source({world,time,tile,frame:options});
+            if (!outputs.is(output) || output.width!==tile.width || output.height!==tile.height)
+              throw new TypeError('Camera atlas source must return shared render outputs sized to its tile: ' + tile.id);
+            packet = outputs.snapshot(output);
+          }
+          backend.capture(world, options, tile, signal, packet);
+          if (packet) captured.set(index,packet);
           times[index] = time;
           versions[index]++;
           cache.delete(tile);
@@ -145,12 +165,23 @@ const CameraAtlas = (() => {
     }
 
     return Object.freeze({ width, height, tiles, capture, read, layer, bindSurface, reset,
+      outputs(id) {
+        alive();
+        const packet = captured.get(indexOf(id));
+        return packet ? outputs.snapshot(packet) : null;
+      },
+      pick(id,u,v,settings) {
+        alive();
+        const packet = captured.get(indexOf(id));
+        return packet ? outputs.pickUV(packet,u,v,settings) : null;
+      },
       lastCapture(id) { alive(); return times[indexOf(id)]; },
       dispose() {
         if (disposed) return;
         if (busy) throw new Error('Cannot dispose a camera atlas during capture');
         disposed = true;
         cache.clear();
+        captured.clear();
         backend.dispose?.();
       }
     });
@@ -161,9 +192,11 @@ const CameraAtlas = (() => {
     const pixels = new Uint8Array(width * height * 4);
     return create(plan, {
       clear() { pixels.fill(0); },
-      capture(world, frame, tile) {
-        const { w, h, rgb, rgba, alpha } = composite.image(render(world, frame));
+      capture(world, frame, tile, signal, packet) {
+        const image = packet ? outputs.image(packet) : composite.image(render(world, frame));
+        const { w, h } = image;
         if (w !== tile.width || h !== tile.height) throw new RangeError('Camera capture dimensions must match the tile');
+        const { rgb, rgba, alpha } = signal ? video.filter(image, signal, frame.time) : image;
         for (let y = 0; y < h; y++) {
           const start = ((tile.y + y) * width + tile.x) * 4;
           if (rgba) pixels.set(rgba.subarray(y * w * 4, (y + 1) * w * 4), start);
@@ -187,6 +220,6 @@ const CameraAtlas = (() => {
     });
   }
 
-  return Object.freeze({ prepare, create, raster });
+  return Object.freeze({ prepare, create, raster, video });
 })();
 if (typeof module !== 'undefined') module.exports = CameraAtlas;

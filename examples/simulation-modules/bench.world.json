@@ -1,0 +1,23 @@
+{
+  "format": "ink-studio/world",
+  "version": 1,
+  "id": "reservoir-bench",
+  "dt": 0.05,
+  "modules": { "reservoir": { "file": "reservoir.json", "revision": 1 } },
+  "instances": {
+    "slow": { "module": "reservoir", "parameters": { "valveGain": 0.25 } },
+    "fast": { "module": "reservoir", "parameters": { "valveGain": 0.85 }, "drive": ["opening"] }
+  },
+  "systems": {
+    "meter": {
+      "kind": "control",
+      "config": { "op": "pass" },
+      "portQuantities": { "inputs": { "value": { "unit": "world^3", "kind": "volume" } } }
+    }
+  },
+  "connections": [{ "from": "slow/receiver", "to": "meter/value" }],
+  "commands": [
+    { "tick": 1, "action": "world/input", "args": { "port": "fast/opening", "value": 1 } },
+    { "tick": 16, "action": "world/input", "args": { "port": "fast/opening", "value": 0 } }
+  ]
+}

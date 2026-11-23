@@ -148,3 +148,109 @@ test('WebGL transports signed float vectors in top-down coordinates with CPU par
   }, times);
   assert.deepEqual(actual.frames, headless());
 });
+
+test('block memory holds exact stale pixels and refreshes complete feed-local blocks and groups', () => {
+  const settings = { halfLife: .25, blockSize: [2, 1], blockMemory: {
+    rect: [1, 0, 7, 1], recovery: { fps: 4, every: 4, groupSize: [2, 1] }
+  } };
+  const session = P.datamosh.create(settings);
+  const before = image([9, 25, 35, 45, 55, 65, 75, 85, 99]);
+  const solid = n => image(Array(9).fill(n));
+  const hold = mask(0, 0, 255, 0, 255, 0, 255, 255, 0);
+  const refresh = mask(0, 255, 0, 0, 255, 0, 0, 0, 0);
+  assert.deepEqual(session.sample(before, null, 0, { hold }).value, before);
+  const frozen = session.sample(solid(200), null, .125, { hold, refresh });
+  assert.deepEqual(red(frozen.value), [200, 25, 35, 200, 200, 65, 75, 85, 200]);
+  assert.deepEqual([...frozen.carry.data], [0, 1, 1, 0, 0, 1, 1, 1, 0]);
+  const group = session.sample(solid(210), null, .25, { hold });
+  assert.deepEqual(red(group.value), [210, 25, 35, 200, 200, 210, 210, 210, 210]);
+  assert.deepEqual(session.sample(solid(90), null, .25), group);
+  const skipped = session.sample(solid(220), null, 1, { hold });
+  assert.deepEqual(red(skipped.value), [220, 220, 220, 220, 220, 210, 210, 210, 220]);
+  assert.deepEqual(session.sample(solid(230), null, 1, { hold, reset: true }).value, solid(230));
+  assert.deepEqual(session.sample(before, null, .5, { hold }).value, before);
+
+  assert.throws(() => P.datamosh.create().sample(before, null, 0, { hold }), /blockMemory/);
+  assert.throws(() => P.datamosh.create({ blockMemory: { recovery: { groupSize: [0, 1] } } }), /groupSize/);
+  assert.throws(() => P.datamosh.create({ blockMemory: { rect: [0, 0, 0, 2] } }), /rectangle/);
+});
+
+test('feed-local prediction shares the center vector and keeps linear taps inside the feed', () => {
+  const session = P.datamosh.create({ halfLife: .25, blockSize: [2, 1], filter: 'linear',
+    blockMemory: { rect: [1, 0, 4, 1] } });
+  const start = image([250, 20, 60, 100, 140, 250]);
+  const current = image([200, 200, 200, 200, 200, 200]);
+  const motion = { width: 6, height: 1, channels: 2, data: [0,0,3,0,.25,0,5,0,-.25,0,0,0] };
+  session.sample(start, null, 0);
+  const { value, carry } = session.sample(current, motion, .25);
+  assert.deepEqual(red(value), [200, 110, 125, 155, 170, 200]);
+  assert.deepEqual([...carry.data], [0,.5,.5,.5,.5,0]);
+});
+
+function blockFixture({ makeBuilder }) {
+  const w = 12, h = 8, rect = [2, 1, 9, 6];
+  const world = makeBuilder(13, [0x122032]).finish({ cam: { target: [0, 0, 0], dist: 4, yaw: 0, pitch: 0 } });
+  const graph = { passes: [
+    { id: 'feed', type: 'composite', isolated: true, layer: { source: { slot: 'image' } } },
+    { id: 'freeze', type: 'mask', raster: { slot: 'hold' } },
+    { id: 'fresh', type: 'mask', raster: { slot: 'refresh' } },
+    { id: 'decoder', type: 'motionSmear', input: 'feed', hold: 'freeze', refresh: 'fresh',
+      motion: { slot: 'vectors' }, blockSize: [3, 2], halfLife: .25, cameraMotion: 'keep',
+      budget: { scale: .75, filter: 'linear' },
+      blockMemory: { rect, recovery: { groupSize: [2, 2], fps: 4, every: 4 } } }
+  ] };
+  function slots(index) {
+    const raster = (channels, value, Type) => ({ width: w, height: h, channels,
+      data: Type.from({ length: w * h * channels }, (_, i) => value(Math.floor(i / channels), i % channels)) });
+    return {
+      image: raster(4, (p, channel) => [p % w * 9 + index * 12, (p / w | 0) * 10 + index * 14, 90, 255][channel], Uint8Array),
+      vectors: index === 1 || index === 2 ? null :
+        raster(2, (p, channel) => channel ? (p % w > 6 ? -.625 : 0) : .625, Float32Array),
+      hold: raster(1, p => p % w < 7 ? 255 : 0, Uint8Array),
+      refresh: raster(1, p => index === 1 && p % w === 3 && (p / w | 0) === 2 ? 255 : 0, Uint8Array)
+    };
+  }
+  return { world, graph, w, h, rect, slots };
+}
+const blockTimes = [0, .125, .25, .625, 1, 1, .125];
+
+function blockHeadless() {
+  const { world, graph, w, h, slots } = blockFixture(kit), history = kit.KIT.renderGraph.history();
+  return blockTimes.map((t, index) => {
+    const planes = slots(index === 5 ? 4 : index);
+    return [...ink.render(world, { w, h, t, px: 1, raw: true, renderGraph: graph,
+      renderGraphInputs: planes, renderGraphCapture: ['decoder'], renderHistory: history
+    }).renderGraphPasses.decoder.data];
+  });
+}
+
+test('the screen pass isolates a single feed during holds, group recovery and a rewind', () => {
+  const { rect: [x0,y0,width,height], w, h, slots } = blockFixture(kit);
+  const actual = blockHeadless();
+  for (const [index, frame] of actual.entries()) {
+    const clean = [...slots(index === 5 ? 4 : index).image.data];
+    for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+      const p = (y * w + x) * 4;
+      if (x < x0 || x >= x0 + width || y < y0 || y >= y0 + height)
+        assert.deepEqual(frame.slice(p,p+4), clean.slice(p,p+4));
+    }
+  }
+  assert.deepEqual(actual[0], [...slots(0).image.data]);
+  assert.notDeepEqual(actual[1], [...slots(1).image.data]);
+  const refreshed = (1 * w + 2) * 4;
+  assert.deepEqual(actual[1].slice(refreshed,refreshed+4), [...slots(1).image.data.slice(refreshed,refreshed+4)]);
+  assert.deepEqual(actual[4], actual[5]);
+  assert.deepEqual(actual[6], [...slots(6).image.data]);
+});
+
+test('WebGL block history matches the CPU for grouped recovery and cropped linear sampling', { skip: !chrome }, () => {
+  const actual = runWebGL({ chrome }, blockFixture, (toolkit, build, backend, frames) => {
+    const { world, graph, w, h, slots } = build(toolkit);
+    const draw = backend(w, h, { raw: true, offscreen: true });
+    try {
+      return { frames: frames.map((time, index) => Array.from(draw.draw(world, { renderGraph: graph, time,
+        renderGraphInputs: slots(index === 5 ? 4 : index), renderGraphCapture: ['decoder'] }).decoder.data)) };
+    } finally { draw.close(); }
+  }, blockTimes);
+  assert.deepEqual(actual.frames, blockHeadless());
+});

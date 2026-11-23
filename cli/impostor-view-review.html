@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Impostor view review · Ink Studio</title>
+<style>
+:root {color-scheme:dark;--bg:#161b22;--panel:#212a32;--line:#3d4b52;--ink:#f4e7d0;--muted:#b9c4c5;--gold:#f1be86;--jade:#a3dbc6;--cyan:#46dbec;--rose:#f86da4}
+* {box-sizing:border-box}
+body {margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,sans-serif}
+main {max-width:1155px;margin:auto;padding:clamp(18px,4vw,54px)}
+header {display:flex;align-items:end;justify-content:space-between;flex-wrap:wrap;gap:15px;margin-bottom:24px}
+header p {margin:0;color:var(--jade);font:600 .78rem/1.4 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase}
+h1 {font:500 clamp(2.4rem,6vw,4.3rem)/.97 Georgia,serif;margin:10px 0 0;letter-spacing:-.04em}
+a {color:var(--jade);text-underline-offset:4px}
+.controls {display:flex;flex-wrap:wrap;align-items:center;gap:9px 14px;margin-bottom:15px}
+button {font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:7px 12px;cursor:pointer}
+button[aria-pressed="true"] {color:#202a24;background:var(--jade);border-color:var(--jade)}
+:focus-visible {outline:2px solid var(--gold);outline-offset:3px}
+input {accent-color:var(--jade)}
+input[type="range"] {width:clamp(118px,25vw,320px);margin:0}
+output {min-width:7ch;font:600 .88rem/1.4 ui-monospace,monospace}
+.check {display:flex;align-items:center;gap:6px;color:var(--muted)}
+#displays {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+figure {background:var(--panel);margin:0;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+figure:last-child {border-color:#6a9b90}
+figcaption,.stats {padding:8px 11px;color:var(--muted)}
+figure:last-child figcaption {color:var(--jade)}
+picture {display:block;position:relative;background:radial-gradient(ellipse at 48% 40%,#384757,#202933 76%)}
+img {display:block;width:100%;height:auto;image-rendering:pixelated}
+.overlay {position:absolute;inset:0}
+.stats {display:flex;justify-content:space-between;flex-wrap:wrap;gap:5px 8px;font:600 .77rem/1.35 ui-monospace,monospace}
+.track {display:grid;grid-template-columns:100px minmax(0,1fr);align-items:center;gap:10px;color:var(--muted);font-size:.81rem;margin:4px 0}
+.rail {position:relative;height:18px;border-bottom:1px solid var(--line);background:linear-gradient(90deg,#28343e,#27383c)}
+.rail i {position:absolute;bottom:0;width:3px;height:9px;background:#adbfc4}
+.track:last-child i {background:var(--jade)}
+.rail .cursor {position:absolute;bottom:0;width:2px;height:17px;background:var(--gold)}
+#tracks {margin:14px 0}
+#legend {display:flex;gap:14px;flex-wrap:wrap;margin:12px 0 0;color:var(--muted);font-size:.82rem}
+#legend span:before {content:"";display:inline-block;width:8px;height:8px;background:var(--chip);margin-right:6px}
+#summary {color:var(--muted);margin:13px 0 0}
+[hidden] {display:none!important}
+@media(max-width:630px) {#displays {grid-template-columns:1fr} #tracks {font-size:.75rem}}
+</style>
+</head>
+<body>
+<main>
+<header><div><p>Ink Studio / Impostor bake</p><h1 id="title"></h1></div>
+<a id="download" download="review.json">Download angle and error report</a></header>
+<div class="controls">
+  <button type="button" id="play" aria-label="Play orbit">Play</button>
+  <input id="seek" type="range" min="0" value="0" step="1" aria-label="Orbit view">
+  <output id="angle" for="seek"></output>
+  <label class="check"><input id="mark" type="checkbox">Show error overlays</label>
+</div>
+<section id="displays" aria-label="Synchronized impostor orbit"></section>
+<section id="tracks" aria-label="Angle allocation"></section>
+<p id="legend" hidden><span style="--chip:var(--cyan)">Silhouette</span><span style="--chip:var(--rose)">Gaps</span><span style="--chip:var(--gold)">Protected detail</span></p>
+<p id="summary"></p>
+</main>
+<script>
+const {report,pictures}=/*IMPOSTOR_VIEW_DATA*/;
+const at=id=>document.getElementById(id);
+const seek=at('seek'),play=at('play'),mark=at('mark');
+const headings={source:'Direct render',uniform:'Evenly spaced',adaptive:'Visible error'};
+const views={};
+const angle=yaw=>(yaw-report.baseYaw)*180/Math.PI;
+const percent=value=>(value*100).toFixed(1)+'%';
+const protectedMax=Math.max(1,...report.frames.map(frame=>frame.protectedPixels));
+const benefit=frame=>(frame.uniform.score-frame.adaptive.score)*(1+2*frame.protectedPixels/protectedMax);
+const best=report.frames.reduce((selected,frame,i,list)=>
+  benefit(frame)>benefit(list[selected])?i:selected,0);
+let frame=best,timer=null;
+for (const [id,label] of Object.entries(headings)) {
+  const figure=document.createElement('figure'),caption=document.createElement('figcaption'),picture=document.createElement('picture');
+  const image=document.createElement('img'),overlay=document.createElement('img'),stats=document.createElement('div');
+  caption.textContent=label+(id==='source'?'':' · '+report.directions+' views');
+  image.alt=label;image.width=report.width;image.height=report.height;
+  overlay.width=report.width;overlay.height=report.height;overlay.alt='';overlay.className='overlay';overlay.hidden=true;
+  picture.append(image,overlay);stats.className='stats';figure.append(caption,picture,stats);
+  at('displays').append(figure);views[id]={image,overlay,stats};
+}
+const cursors=[];
+for (const id of ['uniform','adaptive']) {
+  const track=document.createElement('div'), label=document.createElement('span'),rail=document.createElement('div');
+  label.textContent=headings[id];track.className='track';rail.className='rail';
+  for (const heading of report.angles[id]) {
+    const pin=document.createElement('i');
+    pin.style.left=angle(heading)/3.6+'%';pin.title=angle(heading).toFixed(1)+'°';rail.append(pin);
+  }
+  const cursor=document.createElement('b'); cursor.className='cursor';rail.append(cursor);cursors.push(cursor);
+  track.append(label,rail);at('tracks').append(track);
+}
+at('title').textContent=report.title;
+document.title=report.title+' · Ink Studio impostors';
+at('download').href=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)+'\n'],{type:'application/json'}));
+const averages=report.heldOut;
+at('summary').textContent='Mean visible error across '+averages.count+' independent angles · '+
+  percent(averages.uniform.score)+' evenly spaced · '+percent(averages.adaptive.score)+' visible-error bake';
+seek.max=String(pictures.length-1);
+function update() {
+  const current=report.frames[frame],pic=pictures[frame],degrees=angle(current.yaw);
+  seek.value=String(frame); at('angle').value=degrees.toFixed(1)+'°';
+  at('legend').hidden=!mark.checked;
+  for (const cursor of cursors) cursor.style.left=degrees/3.6+'%';
+  for (const [id,view] of Object.entries(views)) {
+    view.image.src=pic[id];
+    view.overlay.hidden=id==='source'||!mark.checked;
+    if (!view.overlay.hidden) view.overlay.src=pic[id+'Error'];
+    view.stats.textContent=id==='source' ? report.width+' × '+report.height+' art pixels' :
+      angle(current[id].yaw).toFixed(1)+'° baked tile · '+percent(current[id].score)+' visible error';
+  }
+}
+function stop() {
+  if(timer!==null)clearInterval(timer);
+  timer=null;play.textContent='Play';play.setAttribute('aria-label','Play orbit');
+}
+seek.addEventListener('input',()=>{stop();frame=Number(seek.value);update();});
+mark.addEventListener('change',update);
+play.addEventListener('click',()=>{
+  if(timer!==null){stop();return;}
+  play.textContent='Pause';play.setAttribute('aria-label','Pause orbit');
+  timer=setInterval(()=>{frame=(frame+1)%pictures.length;update();},1000/report.fps);
+});
+update();
+</script>
+</body>
+</html>

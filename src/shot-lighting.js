@@ -21,10 +21,13 @@ const ShotLighting = (() => {
   function prepare(definition, { time = 0 } = {}) {
     if (definition === false || definition === undefined) return null;
     if (!Number.isFinite(time) || !record(definition) ||
-        !fields(definition, ['format', 'version', ...roles, 'negativeFill']) ||
+        !fields(definition, ['format', 'version', ...roles, 'negativeFill', 'exposureEV']) ||
         (definition.format !== undefined || definition.version !== undefined) &&
         (definition.format !== format || definition.version !== 1))
       throw new TypeError('Expected version 1 shot lighting settings with key, fill, rim or negativeFill');
+    const { exposureEV = 0 } = definition;
+    if (!Number.isFinite(exposureEV) || Math.abs(exposureEV) > 4)
+      throw new RangeError('Shot surface exposure needs a value from -4 to 4 EV');
     const positive = [];
     for (const role of roles) {
       const value = definition[role];
@@ -52,7 +55,7 @@ const ShotLighting = (() => {
       const masks = Shadow.prepare({ receive });
       if (strength) negative = { at: point.slice(), radius, strength, receive: masks?.receive };
     }
-    return positive.length || negative ? { positive, negative } : null;
+    return positive.length || negative || exposureEV ? { positive, negative, exposure: 2 ** exposureEV } : null;
   }
 
   function frame(authored, override, time) {
@@ -67,7 +70,7 @@ const ShotLighting = (() => {
 
   function bind(rig, world, data, alpha) {
     if (!rig) return null;
-    const { positive, negative } = rig;
+    const { positive, negative, exposure } = rig;
     const targets = positive.some(entry => entry.receive || entry.cast) || negative?.receive ? Target.index(world) : null;
     const casters = positive.some(entry => entry.light.shadows) ? Area.staticSources(world, data, alpha) : [];
     const byLight = new Map();
@@ -91,9 +94,10 @@ const ShotLighting = (() => {
       return masks.get(target);
     }
     return {
+      exposure,
       receives(row) {
         const layer = receiver(row);
-        return layer.lights.length > 0 || !!layer.negative;
+        return exposure !== 1 || layer.lights.length > 0 || !!layer.negative;
       },
       sample(row, point, normal, out) {
         const layer = receiver(row);
@@ -129,8 +133,8 @@ const ShotLighting = (() => {
       const surface = sampleFrame(i);
       if (!surface.normal) continue;
       const retention = light.sample(i, surface.position(), surface.normal, gain);
-      if (retention === 1 && !gain.some(Boolean)) continue;
-      for (let c = 0; c < 3; c++) gain[c] += retention;
+      if (retention === 1 && light.exposure === 1 && !gain.some(Boolean)) continue;
+      for (let c = 0; c < 3; c++) gain[c] = (gain[c] + retention) * light.exposure;
       const rgb = [0, 1, 2].map(c => (Math.round(data[q + 7]) >> (c * 8) & 255) / 255 || .5);
       const prior = base?.[at + 3] ? rgb.map((value, c) => clamp(value * base[at + c])) : rgb;
       const edited = shade(prior, gain);

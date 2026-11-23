@@ -156,6 +156,8 @@ between neighboring art pixels and eases where translucent layers meet. Give
 each pane its own object ID to keep its splats together for refraction. The blend
 is deterministic at a given time and camera and needs no frame history.
 
+[Hybrid depth captures](hybrid-view-depth.md) compare meshes, depth proxies, fog, and transparent crossings in camera, portal, and reflected views.
+
 Use [translucent silhouette policies](translucent-silhouettes.md) to preserve thin glass edges and fabric, keep leaf gaps open, and soften steam on the native art grid before those layers are sorted.
 
 `depthTolerance` is the slice spacing in world units along the camera axis.
@@ -178,7 +180,7 @@ pane that moves through bounded mist, world-space rain, and a reflective basin.
 
 ## Local bounce probes
 
-[Add local bounce probes](bounce-probes.md) for baked surface color transfer and directional sky fill that follows the active environment profile.
+[Add local bounce probes](bounce-probes.md) for diffuse surface color, moving colored sources, and directional sky fill.
 
 ## Shaped area lights
 
@@ -426,9 +428,22 @@ Put `volume` in `finish.atmosphere`, and pass `volumeLighting` and optional `vol
 
 `D.bounded({ bounds, sample, skip })` accepts a custom density. A skip callback returns a conservative distance to the next possible nonzero sample. `D.sparse(field, { resolution, brick, time })` caches occupied bricks at one time and includes conservative interpolation-aware skipping. `D.toMesh(field, { iso, resolution })` extracts a threshold surface. `D.scatter(field, { minDensity, radius, seed })` places deterministic points inside density.
 
-Use `--atmosphere off` to disable the pass. `volumeQuality` controls `scale` (1–4), `depthTolerance`, `steps`, `stepScale`, `skip`, `samples`, `seed`, and `jitter`. The coarser pass only reuses nearby samples with compatible depth. Set `stats: true` to inspect `frame.volumeStats` ray and fallback counts. Set `jitter: 'blue-noise'` for stable spatial offsets, or `jitter: 'spatiotemporal'` with an explicit `volumeHistory: K.atmosphere.history()` for frame-varying offsets and filtered accumulation. The history resets across a changed camera, a time discontinuity, or incompatible opaque depth. CLI options include `--volume-scale`, `--volume-steps`, and `--volume-jitter`.
+Use `--atmosphere off` to disable the pass. `volumeQuality` controls `scale` (1–4), `depthTolerance`, `steps`, `stepScale`, `skip`, `samples`, `seed`, and `jitter`. Set `jitter: 'blue-noise'` for stable spatial offsets, or `jitter: 'spatiotemporal'` with an explicit `volumeHistory: K.atmosphere.history()` for frame-varying offsets and filtered accumulation. The history resets across a changed camera or a time discontinuity. CLI options include `--volume-scale`, `--volume-steps`, and `--volume-jitter`.
 
 Render `examples/art-pipeline.js` to see sculpted pool mist, a local light, and emission coloring at art resolution. For aimable beams and multiple lamps, see [Local lights in fog](fog-lighting.md).
+
+### Reconstruct coarse fog on the art grid
+
+Use `volumeQuality: { scale: 4, reconstruction: 'object' }` for bounded fog on the headless renderer's opaque depth pass. Object-guided reconstruction is the default when the scale exceeds one. It reuses coarse rays across pixels with compatible depth, visible object ownership, and fog overrides. A native ray supplies each side of an ownership or depth break. A tap also checks for an intervening silhouette before reusing a sample on the far side. Give a character's sculpt pieces a shared `objectId` so the guide treats them as one object.
+
+Use `--volume-reconstruction depth` for the previous depth-only interpolation and `--volume-scale 1` for full-resolution rays. Per-fragment media compositing, including water, volumetric clouds and aerial perspective, continues to integrate at fragment depth. With `stats: true`, `frame.volumeStats` reports the active mode, coarse and fallback ray counts, and native boundary work. Temporal accumulation rejects pixels whose visible object changed or that touch a current or previous boundary.
+
+```sh
+node cli/ink-studio.js fog-reconstruction review examples/depth-aware-fog/sluice-courier.js \
+  --out floodgate-review --subject courier --w 192 --h 112 --fps 10 --from 0 --to 2.4 --raw
+```
+
+Open `index.html` to play or scrub the same shot in depth-only, object-guided, and full-resolution modes. **Close-up** follows the selected character. **Mark corrected edge pixels** highlights where the object-guided opacity moves closer to the reference by at least three percentage points, from an initial error of at least four. The review includes three animated PNGs and the per-frame measurements.
 
 ## Pixel budgets and upload profiling
 

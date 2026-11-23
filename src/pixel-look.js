@@ -500,7 +500,7 @@ const PixelLook = (() => {
           gain *= detail.weight(tuning.fade, pixels);
         }
         if (gain <= 0) return best;
-        [x, y] = stability.coordinates(rule, point, ...pixel, scale);
+        [x, y] = stability.coordinates(rule, point, ...pixel, scale, sample?.ditherView);
       }
       const rank = ranks[mod(y, height) * width + mod(x, width)] / gain;
       if (rank >= .5 && !trace) return best;

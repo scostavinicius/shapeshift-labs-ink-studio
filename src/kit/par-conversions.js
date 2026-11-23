@@ -127,7 +127,27 @@
   const fps = slot('frameRate', 'frames/second', 'Positive rate or integer numerator/denominator, for example 30000/1001.');
   const unary = (inputs, output, run) => ({ inputs, outputs: { value: output }, run: args => ({ value: run(args) }) });
 
+  function quantityConversion(spec) {
+    const given = {...spec.params,...spec.inputs};
+    const literal = key => given[key] && Object.hasOwn(given[key],'value') ? given[key].value : given[key];
+    const from = P.quantities.normalize(literal('from'),'Conversion from');
+    const to = P.quantities.normalize(literal('to'),'Conversion to');
+    const type = literal('shape') ?? 'number', convert = P.quantities.converter(from,to);
+    if (!['number','vec2','vec3'].includes(type) ||
+        type !== 'number' && [from,to].some(q => P.quantities.unit(q.unit).offset))
+      throw new TypeError('Quantity conversion needs number, vec2 or vec3; offset units need a scalar');
+    return {
+      inputs:{value:{type,quantity:from},from:'record',to:'record',shape:setting('string','number')},
+      outputs:{value:{type,quantity:to}},
+      run({value}) { return {value:convert(value)}; }
+    };
+  }
+
   const operations = Object.freeze({
+    'quantity.convert': {
+      description:'Convert between units of the same physical dimension using fixed source and target declarations.',
+      specialize:quantityConversion
+    },
     'coord.pixelToUV': unary({ point: pixels, ...size }, uv, ({ point, ...size }) => pixelToUV(point, size)),
     'coord.uvToPixel': unary({ point: uv, ...size }, pixels, ({ point, ...size }) => uvToPixel(point, size)),
     'coord.cameraGrid': unary({ camera: setting('record', {}), ...size, radius: setting('number', 14) },

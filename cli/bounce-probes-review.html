@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Dynamic bounce · Ink Studio</title>
+<style>
+:root { color-scheme:dark;color:#f0ece7;background:#14191e;font:15px/1.45 system-ui,sans-serif;--line:#394652;--muted:#b8c4cf;--mint:#a7f2d8;--warm:#ffd397 }
+* {box-sizing:border-box}
+body {margin:0}
+main {width:min(1190px,100% - 48px);margin:38px auto}
+header {display:flex;justify-content:space-between;align-items:end;flex-wrap:wrap;gap:9px 15px;margin-bottom:19px}
+h1,h2,p {margin:0}
+h1 {font-size:clamp(42px,6vw,76px);line-height:1;letter-spacing:-.069em;font-weight:685;margin:4px 0 10px}
+h2 {font-size:.94rem}
+.product {color:var(--warm);font-size:.76rem;text-transform:uppercase;letter-spacing:.15em;font-weight:760}
+.sub,.meta,label {color:var(--muted)}
+button {font:inherit;border:1px solid #4c5c68;border-radius:7px;padding:7px 11px;background:#27333b;color:inherit;cursor:pointer}
+button:hover {border-color:var(--warm)}
+:focus-visible {outline:2px solid var(--mint);outline-offset:2px}
+.layout {display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.panel {background:#1d2832;border:1px solid var(--line);border-radius:11px;overflow:hidden;min-width:0}
+.caption {display:flex;justify-content:space-between;align-items:baseline;flex-wrap:wrap;gap:4px 9px;padding:9px 12px}
+.meta {font:.77rem ui-monospace,monospace}
+.frame {position:relative;background:#10171d}
+.frame img {display:block;width:100%;height:100%;image-rendering:pixelated}
+#overlay {position:absolute;inset:0;pointer-events:none}
+.transport {display:grid;grid-template-columns:auto minmax(52px,1fr) auto;align-items:center;gap:10px;margin:13px 0 9px}
+#play {min-width:76px;background:var(--warm);border-color:var(--warm);color:#241e16;font-weight:740}
+input {accent-color:var(--warm)}
+#seek {width:100%;min-width:0;margin:0}
+footer {border-top:1px solid var(--line);padding-top:12px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:9px 18px}
+.probes {display:flex;align-items:center;gap:5px 13px;flex-wrap:wrap;color:var(--muted);font-size:.82rem}
+.probe {white-space:nowrap}
+.probe i {display:inline-block;width:8px;height:8px;border:1px solid #91a1b1;border-radius:50%;margin-right:5px}
+.probe[data-live=true] {color:var(--mint)}
+.probe[data-live=true] i {background:var(--mint);border-color:var(--mint)}
+[hidden] {display:none!important}
+@media(max-width:740px) {
+  main {width:calc(100% - 28px);margin:23px auto}
+  .layout {grid-template-columns:minmax(0,1fr);gap:8px}
+}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div>
+    <p class="product">Ink Studio · Dynamic colored bounce</p>
+    <h1 id="title"></h1>
+    <p class="sub">Compare baked diffuse fill with probes that follow the moving light and color.</p>
+  </div>
+  <button type="button" id="download">Download probe trace</button>
+</header>
+<div class="layout">
+  <section class="panel" aria-labelledby="baked-title">
+    <div class="caption"><h2 id="baked-title">Baked probes</h2><span class="meta" id="grid"></span></div>
+    <div class="frame"><img id="baked" alt="Shot with the baked bounce probes"></div>
+  </section>
+  <section class="panel" aria-labelledby="live-title">
+    <div class="caption"><h2 id="live-title">Dynamic bounce</h2><span class="meta" id="counts"></span></div>
+    <div class="frame"><img id="live" alt="Shot with moving colored bounce"><img id="overlay" alt="" hidden></div>
+  </section>
+</div>
+<div class="transport">
+  <button type="button" id="play">Play</button>
+  <input id="seek" type="range" min="0" step="1" aria-label="Shot frame">
+  <output class="meta" id="time" for="seek"></output>
+</div>
+<footer>
+  <label><input id="changes" type="checkbox"> Highlight pixels changed by bounce</label>
+  <div class="probes" id="probes" aria-label="Probe update status"></div>
+</footer>
+</main>
+<script type="application/json" id="bounce-data">/*BOUNCE_DATA*/</script>
+<script>
+const get = id => document.getElementById(id);
+const {report,pictures} = JSON.parse(get('bounce-data').textContent);
+const {width,height,fps,sites,samples} = report;
+const seek = get('seek'), play = get('play'), changes = get('changes');
+let current = samples.reduce((best,row,i) => row.changedPixels > samples[best].changedPixels ? i : best, 0), timer = 0;
+get('title').textContent = report.title;
+document.title = report.title + ' · Ink Studio';
+get('grid').textContent = width + ' × ' + height + ' · ' + fps + ' fps';
+document.querySelectorAll('.frame').forEach(node => node.style.aspectRatio = width + ' / ' + height);
+seek.max = samples.length - 1;
+const picturesByFrame = pictures.map(row => Object.fromEntries(Object.entries(row).map(([key,url]) => {
+  const image = new Image();
+  image.src = url;
+  return [key,image];
+})));
+const labels = sites.map(site => {
+  const node = document.createElement('span'), dot = document.createElement('i');
+  const text = document.createTextNode('');
+  node.className = 'probe';
+  node.append(dot,text);
+  get('probes').append(node);
+  return {site,node,text};
+});
+function draw() {
+  const sample = samples[current], images = picturesByFrame[current];
+  get('baked').src = images.baked.src;
+  get('live').src = images.live.src;
+  get('overlay').hidden = !changes.checked;
+  if (changes.checked) get('overlay').src = images.changes.src;
+  get('counts').textContent = sample.updated.length + '/' + sites.length + ' probes updated · ' + sample.rays + ' rays';
+  get('time').value = 'Frame ' + current + ' · ' + sample.time.toFixed(2) + ' s';
+  labels.forEach(({site,node,text}) => {
+    const live = sample.updated.includes(site);
+    node.dataset.live = live;
+    text.data = site + ' · ' + (live ? 'updated' : 'baked');
+  });
+  seek.value = current;
+}
+function pause() {
+  clearInterval(timer);
+  timer = 0;
+  play.textContent = 'Play';
+}
+play.addEventListener('click', () => {
+  if (timer) return pause();
+  play.textContent = 'Pause';
+  const at = performance.now(), frame = current;
+  timer = setInterval(() => {
+    const next = (frame + Math.floor((performance.now() - at) * fps / 1000)) % samples.length;
+    if (next !== current) { current = next; draw(); }
+  }, 1000 / (fps * 2));
+});
+seek.addEventListener('input', () => { pause(); current = Number(seek.value); draw(); });
+changes.addEventListener('change',draw);
+get('download').addEventListener('click', () => {
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([JSON.stringify(report,null,2) + '\n'],{type:'application/json'}));
+  link.download = 'review.json';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href),1000);
+});
+draw();
+</script>
+</body>
+</html>

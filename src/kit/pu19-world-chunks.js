@@ -216,7 +216,7 @@
           'Invalid saved simulation clock '+name);
       }
     }
-    return {managed:owner,actions,checkAction,action,blank,select,validate,
+    return {managed:owner,levelIds:detail.map(level=>level.id),actions,checkAction,action,blank,select,validate,
       rates:name=>owner.get(name)?.rates};
   }
 

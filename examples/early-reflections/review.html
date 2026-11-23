@@ -1,0 +1,147 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Loading Bay · Ink Studio</title>
+<style>
+  :root {color-scheme:dark;--bg:#14212b;--panel:#1b2b36;--line:#435964;--ink:#f5ead9;--mute:#b5c7cc;--mint:#a0e4d1;--amber:#ffc584}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,sans-serif}
+  main{max-width:1160px;margin:auto;padding:clamp(15px,4vw,46px)}
+  header{margin-bottom:18px}
+  h1{margin:0 0 9px;font:500 clamp(2.7rem,7vw,4.6rem)/.9 Georgia,serif;letter-spacing:-.052em}
+  p{margin:0;color:var(--mute)}
+  nav{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:13px}
+  button,a{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:6px 11px;cursor:pointer}
+  a{text-decoration:none}
+  :is(button,a):hover,[aria-pressed=true]{border-color:var(--mint);color:var(--mint)}
+  :focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+  #panels{display:grid;grid-template-columns:1.04fr 1fr;gap:12px}
+  figure,.listen{margin:0;min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:7px;overflow:hidden}
+  figcaption,.listen{padding:10px 12px}
+  canvas{display:block;width:100%;height:auto}
+  #map{background:#182833}
+  #audio{width:100%;height:45px;margin:6px 0 12px}
+  #wave{background:#15242f;border-radius:4px}
+  .tone{display:flex;justify-content:space-between;gap:6px;flex-wrap:wrap;margin:8px 0}
+  .dry{color:#b8c5c7}.echo{color:var(--mint)}
+  table{width:100%;border-collapse:collapse;margin-top:13px;font:600 .81rem/1.4 ui-monospace,monospace}
+  th,td{text-align:left;padding:6px 7px;border-bottom:1px solid var(--line)}
+  th{color:var(--mute)}
+  .footer{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px}
+  @media(max-width:680px){#panels{grid-template-columns:1fr}.listen{padding:9px}}
+</style>
+</head>
+<body><main>
+<header><h1>The Loading Bay</h1><p>Same metal strike, source, and listener. Hear what changes when a wall or ceiling is added.</p></header>
+<nav id="cases" aria-label="Acoustic geometry"></nav>
+<section id="panels" aria-label="Reflection paths and audio">
+  <figure><figcaption>Paths from strike to listener</figcaption><canvas id="map" width="520" height="400" role="img" aria-label="Geometric reflection paths"></canvas></figure>
+  <div class="listen">
+    <label for="audio" id="playing-label">Beside a wall</label>
+    <audio controls id="audio" preload="metadata"></audio>
+    <canvas id="wave" width="488" height="123" role="img" aria-label="Dry transient and summed reflection waveform"></canvas>
+    <div class="tone"><span class="dry">Dry transient</span><span class="echo">Reflected signal</span><span>First 65 ms</span></div>
+    <table>
+      <thead><tr><th scope="col">Bounce path</th><th scope="col">After direct</th><th scope="col">Relative level</th></tr></thead>
+      <tbody id="taps"></tbody>
+    </table>
+  </div>
+</section>
+<div class="footer"><button id="compare">Play A/B sequence</button><a id="download" download="reflection-paths.json">Download path data</a></div>
+</main>
+<script>
+const {report,clips}=/*EARLY_REFLECTION_DATA*/;
+const get=id=>document.getElementById(id),audio=get('audio'),buttons=new Map();
+const palette=['#a0e4d1','#ffc584','#eb9db3','#adbae8','#e8d594','#b7d8f0'];
+const ctx=get('map').getContext('2d'),wave=get('wave').getContext('2d');
+const {bounds,source,listener,labels}=report;
+function map(row) {
+  const project=([x,y,z])=>[144+x*39+z*17,245-x*10+z*10-y*38];
+  const stroke=(points,color,width=2,dash=[])=>{
+    ctx.strokeStyle=color;ctx.lineWidth=width;ctx.setLineDash(dash);ctx.beginPath();
+    points.forEach((point,i)=>ctx[i?'lineTo':'moveTo'](...project(point)));ctx.stroke();ctx.setLineDash([]);
+  };
+  const i=bounds.min,a=bounds.max;
+  function panel(points,fill,line) {
+    ctx.fillStyle=fill;ctx.beginPath();
+    points.forEach((point,i)=>ctx[i?'lineTo':'moveTo'](...project(point)));
+    ctx.closePath();ctx.fill();stroke([...points,points[0]],line,1);
+  }
+  ctx.clearRect(0,0,520,400);
+  panel([[i[0],0,i[2]],[a[0],0,i[2]],[a[0],0,a[2]],[i[0],0,a[2]]],'#223945','#46616a');
+  for(let x=0;x<=7;x++)stroke([[x,0,i[2]],[x,0,a[2]]],'#36515c',1);
+  for(let z=-4;z<=4;z++)stroke([[i[0],0,z],[a[0],0,z]],'#36515c',1);
+  if(row.faces.west)panel([[0,0,i[2]],[0,0,a[2]],[0,a[1],a[2]],[0,a[1],i[2]]],'#92664155','#ae8056');
+  if(row.faces.ceiling)panel([[i[0],a[1],i[2]],[a[0],a[1],i[2]],[a[0],a[1],a[2]],[i[0],a[1],a[2]]],'#58727b20','#57727c');
+  stroke([source,listener.at],'#e6e3d3',2);
+  row.taps.forEach((tap,n)=>{
+    const color=palette[n%palette.length];
+    stroke([source,...tap.points,listener.at],color,2,[5,3]);
+    ctx.fillStyle=color;
+    for(const point of tap.points){const [x,y]=project(point);ctx.fillRect(x-3,y-3,6,6);}
+  });
+  for(const [point,label,offset] of [[source,'Strike',-18],[listener.at,'Listener',19]]){
+    const [x,y]=project(point);
+    ctx.fillStyle='#f5ead9';ctx.beginPath();ctx.arc(x,y,5,0,2*Math.PI);ctx.fill();
+    ctx.font='650 14px system-ui';ctx.fillText(label,x+8,y+offset);
+  }
+}
+function waveform(row){
+  const {width:w,height:h}=wave.canvas, middle=h/2, scale=(middle-8)/.55;
+  wave.clearRect(0,0,w,h);
+  wave.strokeStyle='#405660';wave.beginPath();wave.moveTo(0,middle);wave.lineTo(w,middle);wave.stroke();
+  for(let lane=0;lane<2;lane++){
+    wave.strokeStyle=lane?'#a0e4d1':'#a8b8bb';wave.beginPath();
+    row.peaks.forEach((value,i)=>{
+      const x=i*w/(row.peaks.length-1), level=Math.min(middle-6,value[lane]*scale);
+      wave.moveTo(x,middle-level);wave.lineTo(x,middle+level);
+    });
+    wave.stroke();
+  }
+}
+function show(id,play=false,comparison=false){
+  const row=report.cases.find(item=>item.id===id);
+  for(const [key,button] of buttons)button.setAttribute('aria-pressed',String(id===key));
+  if(!comparison){
+    if(audio.dataset.mode!==id){audio.src=clips[id];audio.dataset.mode=id;}
+    else if(play)audio.currentTime=0;
+  }
+  get('playing-label').textContent=comparison?'A/B · '+row.label:row.label;
+  map(row);waveform(row);
+  if(!row.taps.length){
+    const tr=document.createElement('tr'),td=document.createElement('td');
+    td.colSpan=3;td.textContent='Dry signal';tr.append(td);get('taps').replaceChildren(tr);
+  } else get('taps').replaceChildren(...row.taps.map((tap,i)=>{
+    const tr=document.createElement('tr');
+    const values=[tap.surfaces.map(id=>labels[id]??id).join(' → '),
+      (tap.delay*1000).toFixed(2)+' ms',(20*Math.log10(tap.gain/row.directGain)).toFixed(1)+' dB'];
+    for(const [j,value] of values.entries()){
+      const cell=document.createElement('td');cell.textContent=value;if(j===0)cell.style.color=palette[i%palette.length];tr.append(cell);
+    }
+    return tr;
+  }));
+}
+for(const row of report.cases){
+  const button=document.createElement('button');
+  button.textContent=row.label;button.addEventListener('click',()=>{show(row.id,true);audio.play();});
+  buttons.set(row.id,button);get('cases').append(button);
+}
+let comparisonIndex;
+get('compare').addEventListener('click',()=>{
+  audio.src=clips.compare;audio.dataset.mode='compare';
+  comparisonIndex=0;
+  show(report.sequence[0],false,true);
+  audio.play();
+});
+audio.addEventListener('timeupdate',()=>{
+  if(audio.dataset.mode!=='compare')return;
+  const index=Math.min(report.sequence.length-1,Math.floor(audio.currentTime/report.sequenceStep));
+  if(index!==comparisonIndex){comparisonIndex=index;show(report.sequence[index],false,true);}
+});
+get('download').href=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)+'\n'],{type:'application/json'}));
+show('wall');
+</script>
+</body>
+</html>

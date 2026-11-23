@@ -42,6 +42,8 @@ test('the optional entry imports in Node without touching the software renderer'
   assert.match(phased,/if \(!sampleCoverageVisible\(kraw, u_sampleWithdrawal\)\)/);
   assert.throws(() => createRenderer({}, { toolkit: core.load() }), /canvas/);
   assert.throws(() => createRenderer({ getContext: () => null }, { toolkit: core.load() }), /requires WebGL 2/);
+  assert.throws(() => createRenderer({ getContext: () => null }, { toolkit: core.load(), resolve: 'invalid' }),
+    /resolve must be 'auto' or 'simple'/);
 });
 
 test('the GPU pipeline chooses the full shader as soon as a visual feature turns on', async () => {

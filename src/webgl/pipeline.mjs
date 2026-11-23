@@ -8,7 +8,7 @@ function plainVertex(source) {
     .replace('if (i >= u_azn) break;', 'break;');
 }
 
-export function createSplatPipeline(gl, { ascii, specialize = true, sampleCoverage, coverageRules, stableDetail, cutaway, airflow, footprintGLSL, screenPrintGLSL } = {}) {
+export function createSplatPipeline(gl, { ascii, specialize = true, sampleCoverage, coverageRules, stableDetail, cutaway, airflow, footprintGLSL, screenPrintGLSL, spriteReconstructionGLSL } = {}) {
   const resources = createResources(gl);
   try {
     const { vertex, fragment } = splatShaderSources(ascii, sampleCoverage, { coverageRules, stableDetail, airflow });
@@ -42,7 +42,7 @@ export function createSplatPipeline(gl, { ascii, specialize = true, sampleCovera
       programFor(features) {
         check();
         if (features?.water || features?.portal || features?.instances || features?.contributions ||
-            features?.engraving || features?.footprints || features?.masked || features?.layeredGlass || features?.materialStyles || features?.environment || features?.relighting || features?.optical || features?.cutaway) {
+            features?.marks || features?.engraving || features?.footprints || features?.masked || features?.layeredGlass || features?.materialStyles || features?.environment || features?.relighting || features?.optical || features?.cutaway || features?.spriteReconstruction || features?.facingColors || features?.splatPaint || features?.depthMeshProxy || features?.gaussianProxy || features?.coverageVote || features?.coverageFilter || features?.gaussianMaterials || features?.surfaceOrder || features?.gaussianDegree !== undefined) {
           const footprints = Boolean(features.footprints),engraving=Boolean(features.engraving);
           const water = Boolean(features.water), portal = Boolean(features.portal);
           const airPockets = Boolean(features.airPockets), layered = Boolean(features.layered), atlas = Boolean(features.atlas);
@@ -53,10 +53,11 @@ export function createSplatPipeline(gl, { ascii, specialize = true, sampleCovera
           const relighting = Boolean(features.relighting), optical = Boolean(features.optical);
           const key = +airPockets + 2 * layered + 4 * atlas + 8 * water + 16 * portal + 32 * instances +
             64 * contributions + 128 * masked + 256 * textured + 512 * layeredGlass + 1024 * materialStyles +
-            2048 * environment + 4096 * relighting + 8192 * optical + 16384 * Boolean(features.cutaway)+32768*emitterFog+65536*footprints+131072*engraving;
+            2048 * environment + 4096 * relighting + 8192 * optical + 16384 * Boolean(features.cutaway)+32768*emitterFog+65536*footprints+131072*engraving + 262144*Boolean(features.spriteReconstruction) + 524288*Boolean(features.facingColors) +
+            1048576 * ((features.gaussianDegree ?? -1) + 1) + 8388608 * Boolean(features.splatPaint) + 16777216 * Boolean(features.gaussianProxy) + 33554432 * Boolean(features.coverageVote) + 67108864 * Boolean(features.gaussianMaterials) + 134217728 * Boolean(features.surfaceOrder) + 268435456 * Boolean(features.depthMeshProxy) + 536870912 * Boolean(features.marks) + 1073741824 * Boolean(features.coverageFilter);
           if (!variants.has(key)) {
             const shader = splatShaderSources(ascii, sampleCoverage, { water, airPockets, layered, atlas, portal, instances,
-              contributions, masked, textured, layeredGlass, coverageRules, materialStyles, environment,emitterFog, relighting, optical, stableDetail, airflow, footprints, footprintGLSL, screenPrintGLSL, engraving, cutaway:features.cutaway ? cutaway : undefined });
+              contributions, masked, textured, layeredGlass, coverageRules, materialStyles, environment,emitterFog, relighting, optical, stableDetail, airflow, footprints, footprintGLSL, screenPrintGLSL, engraving, marks:features.marks, facingColors:features.facingColors, gaussianDegree: features.gaussianDegree, splatPaint: features.splatPaint, gaussianProxy:features.gaussianProxy, depthMeshProxy:features.depthMeshProxy, gaussianMaterials:features.gaussianMaterials, surfaceOrder:features.surfaceOrder, coverageVote: features.coverageVote, coverageFilter:features.coverageFilter, spriteReconstruction:features.spriteReconstruction ? spriteReconstructionGLSL : undefined, cutaway:features.cutaway ? cutaway : undefined });
             variants.set(key, resources.program(shader.vertex, shader.fragment));
           }
           return variants.get(key);
@@ -105,6 +106,7 @@ export function createSplatPipeline(gl, { ascii, specialize = true, sampleCovera
         gl.bindVertexArray(geometry);
         gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, count);
       },
+      get count() { return orderCount; },
       drawSubset(indices) {
         check();
         if (!(indices instanceof Int32Array)) throw new TypeError('Subset order must be an Int32Array');

@@ -22,6 +22,7 @@ const RenderGraph = (() => {
     schedules = require('./raster-schedule.js');
     addressing = require('./texture-address.js');
   }
+  const tracked = typeof TrackedWindow === 'undefined' ? require('./tracked-window.js') : TrackedWindow;
   const operations = Object.freeze({
     mask: 1,
     grade: 2,
@@ -40,7 +41,8 @@ const RenderGraph = (() => {
     motionSmear: 15,
     frameBank: 16,
     rasterSchedule: 17,
-    textureAddress: 18
+    textureAddress: 18,
+    trackedWindow: 19
   });
   const fields = {
     mask: ['rect', 'feather', 'invert', 'volume', 'raster'],
@@ -50,10 +52,11 @@ const RenderGraph = (() => {
     composite: ['source', 'layer', 'blend', 'isolated'],
     rasterSchedule: ['source', 'indices', 'schedule', 'palette', 'cycles', 'blend', 'wrap'],
     textureAddress: ['source', 'field', 'filter', 'edge', 'edgeU', 'edgeV', 'blend'],
+    trackedWindow: ['source', 'switches', 'at', 'crop', 'place', 'sourceMask', 'filter', 'chrome'],
     history: ['mode', 'halfLife', 'cameraMotion'],
     frameAge: ['fps', 'regions', 'source', 'cameraMotion'],
     frameBank: ['fps', 'tiles', 'regions', 'refresh', 'source', 'cameraMotion'],
-    motionSmear: ['field', 'motion', 'fieldScale', 'velocity', 'blockSize', 'halfLife', 'refresh', 'cameraMotion'],
+    motionSmear: ['field', 'motion', 'fieldScale', 'velocity', 'blockSize', 'halfLife', 'refresh', 'hold', 'blockMemory', 'cameraMotion'],
     ...Object.fromEntries(
       effects.types.map(type => [type, [...effects.fields[type], 'maskMode', 'depthThreshold', 'protectObjects']])
     ),
@@ -104,7 +107,9 @@ const RenderGraph = (() => {
 
   function attachLayer(node, value) {
     const layout = node.slot ? { ...value, source() {} } : value;
-    node.needsCamera = compositor.settings({ layers: [layout] }).needsCamera || node.needsCamera;
+    const settings = compositor.settings({ layers: [layout] });
+    node.needsCamera = settings.needsCamera || node.needsCamera;
+    node.layerDepth = settings.needsDepth;
     node.layer = value;
   }
 
@@ -396,6 +401,11 @@ const RenderGraph = (() => {
             address: addressing.settings({ filter, edge, edgeU, edgeV }), blend });
           break;
         }
+        case 'trackedWindow': {
+          node.window = tracked.prepare(pass, reference);
+          node.needsCamera = node.window.needsCamera;
+          break;
+        }
         case 'history': {
           const { mode = 'persistence', halfLife = 0.45, cameraMotion = 'reset' } = pass;
           if (
@@ -447,11 +457,14 @@ const RenderGraph = (() => {
           const field = pass.field === undefined ? undefined : reference(pass.field, 'image');
           const refresh = pass.refresh === undefined ? undefined : reference(pass.refresh, 'mask');
           const controls = smear.settings({ ...pass, fieldScale: pass.fieldScale === undefined ? (raw ? [1, 1] : [120, 120]) : pass.fieldScale });
+          const blockMemory = smear.prepareBlocks(pass.blockMemory, controls.blockSize);
+          if (!blockMemory && pass.hold !== undefined) throw new TypeError('Motion smear hold needs blockMemory');
+          const hold = pass.hold === undefined ? undefined : reference(pass.hold, 'mask');
           Object.assign(node, {
             ...controls, ...(binding && { motion: binding, direction: binding.direction, units: binding.units }),
-            field, refresh, cameraMotion, needsCamera: cameraMotion === 'reset',
+            field, refresh, hold, blockMemory, cameraMotion, needsCamera: cameraMotion === 'reset',
             budget: effects.budget({ filter: 'nearest', ...pass.budget }),
-            historyKey: JSON.stringify([type, input, field, binding, cameraMotion])
+            historyKey: JSON.stringify([type, input, field, binding, cameraMotion, blockMemory, blockMemory && controls.blockSize, hold])
           });
           break;
         }
@@ -528,7 +541,8 @@ const RenderGraph = (() => {
       node.dependencies = [
         ...new Set(
           node.enabled
-            ? [node.isolated ? undefined : input, mask, node.source, node.field, node.refresh,
+            ? [node.isolated ? undefined : input, mask, node.source, node.field, node.refresh, node.hold,
+                node.window?.source, node.window?.sourceMask, ...(node.window?.cues.map(([, source]) => source) ?? []),
                 ...(node.regions?.map(region => region.mask) ?? []), ...(node.bank?.masks ?? [])].filter(Boolean)
             : [input].filter(Boolean)
         )
@@ -559,8 +573,8 @@ const RenderGraph = (() => {
       lastUse,
       historyPasses,
       budget: graphBudget(value.budget),
-      needsDepth: passes.some(node => node.enabled && (node.volume || node.depth || node.depthThreshold !== undefined)),
-      needsOwner: passes.some(node => node.enabled && (node.select || node.effect || node.depth)),
+      needsDepth: passes.some(node => node.enabled && (node.volume || node.depth || node.layerDepth || node.depthThreshold !== undefined)),
+      needsOwner: passes.some(node => node.enabled && (node.select || node.effect || node.depth || node.layerDepth)),
       needsCamera: passes.some(node => node.enabled && node.needsCamera)
     };
     if (readSnapshot && !capture.length) compiled.set(value, plan);
@@ -607,6 +621,7 @@ const RenderGraph = (() => {
             ? Math.min(node.span, budget.maxSamples)
             : (budget?.maxSamples ?? 1);
       const age = node.type === 'frameAge';
+      const pane = node.window;
       const cost =
         !node.enabled && node.type !== 'mask'
           ? 0
@@ -623,7 +638,9 @@ const RenderGraph = (() => {
               : node.bank ? width * height * (1 + Number(Boolean(node.bank.grid)) + node.bank.rules.length +
                 Number(Boolean(node.bank.refresh))) + full
               : node.type === 'motionSmear' ? width * height * 4 + full * 4 :
-                node.address ? full * (node.address.filter === 'linear' ? 5 : 2) : full;
+                node.address ? full * (node.address.filter === 'linear' ? 5 : 2) :
+                  pane ? full + Math.min(w, pane.place.size[0]) * Math.min(h, pane.place.size[1]) *
+                    (pane.linear ? 4 : 1) * (pane.sourceMask ? 2 : 1) : full;
       work += cost;
       if (node.enabled || node.type === 'mask') {
         const buffer = free.length ? free.pop() : allocated++;
@@ -818,21 +835,21 @@ const RenderGraph = (() => {
     const source = sources[name];
     if (!range) {
       const { width, height, data } = raster.rgba(source);
-      return { w: width, h: height, rgba: data };
+      return { w: width, h: height, rgba: data, depth:source?.depth };
     }
     const channels = source?.channels ?? source?.data?.length / (source?.width * source?.height);
     const { width, height, data } = raster.channel(source, { channel: channel ?? (channels % 2 === 0 ? 'alpha' : 'luma') });
     const rgba = new Uint8Array(width * height * 4);
     for (let p = 0; p < data.length; p++)
       rgba[p * 4 + 3] = match === undefined ? byte(clamp((data[p] - range[0]) / (range[1] - range[0]))) : data[p] === match ? 255 : 0;
-    return { w: width, h: height, rgba };
+    return { w: width, h: height, rgba, depth:source?.depth };
   }
 
-  function layer(node, w, h, world, time, text, camera, resolve, gl, sources, raster) {
+  function layer(node, w, h, world, time, text, camera, resolve, gl, sources, raster, extractDirections, sceneTime) {
     if (node.slot && node.layer.opacity === 0) return;
     const input = node.slot ? { ...node.layer, source: slotPixels(node, sources, raster) } : node.layer;
     const plan = compositor.prepare({ layers: [input] }, w, h);
-    return compositor.layers(plan, world, time, text, camera, resolve, gl)[0];
+    return compositor.layers(plan, world, time, text, camera, resolve, gl, extractDirections, sceneTime)[0];
   }
 
   function frameAgeClock(state, node, time, release) {
@@ -924,9 +941,11 @@ const RenderGraph = (() => {
           return frameAgeClock(age, node, time, releaseAge);
         }
         const elapsed = prior ? time - prior.time : 0;
+        const capture = !prior || prior.time < time;
+        const blocks = capture ? smear.blockFrame(node.blockMemory, w, h, time, prior?.blocks?.clock) : prior?.blocks;
         return {
           value: prior?.value,
-          capture: !prior || prior.time < time,
+          capture, blocks,
           elapsed,
           sampleElapsed: elapsed || prior?.elapsed || 0,
           decay: prior ? 2 ** (-elapsed / node.halfLife) : 0,
@@ -936,6 +955,7 @@ const RenderGraph = (() => {
               key: keys.get(node.id),
               time,
               elapsed,
+              blocks,
               value
             });
           }
@@ -1078,6 +1098,8 @@ const RenderGraph = (() => {
     layer,
     motionRaster,
     addressRaster,
+    windowFrame: tracked.frame,
+    paintWindow: tracked.paint,
     scheduleTable: schedules.table,
     indexedSchedule,
     history,

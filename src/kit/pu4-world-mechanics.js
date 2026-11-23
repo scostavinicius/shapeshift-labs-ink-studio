@@ -94,8 +94,8 @@
     check(config.contactEvents===undefined || typeof config.contactEvents==='boolean'||materialContacts,
       'contactEvents must be boolean or material');
     const start=config.bodies??{}, jointSpecs=config.joints??{}, forceSpecs=config.forces??{};
-    const impactEvents=config.impactEvents??false, fractureOn=config.fractureOn??{};
-    check(typeof impactEvents==='boolean'&&record(fractureOn)&&Object.entries(fractureOn).every(([key,rule])=>
+    const impactEvents=config.impactEvents??false, contactSamples=config.contactSamples??false, fractureOn=config.fractureOn??{};
+    check(typeof contactSamples==='boolean'&&(typeof impactEvents==='boolean'||impactEvents==='timed')&&record(fractureOn)&&Object.entries(fractureOn).every(([key,rule])=>
       own(start,key)&&!start[key]?.collider&&record(rule)&&[0,1,2].includes(rule.axis??0)&&
       (rule.parts===undefined||Number.isSafeInteger(rule.parts)&&rule.parts>=2&&rule.parts<=32)&&
       (rule.omit===undefined||rule.parts!==undefined&&Array.isArray(rule.omit)&&
@@ -120,10 +120,10 @@
     const richer=fabricFields.length>0||Object.values(start).some(item=>item?.collider!==undefined||item?.structure!==undefined);
     const local=config.gravityField!==undefined;
     check(!local||typeof config.gravityField==='string','Invalid mechanics gravity field');
-    const continuous=config.continuous??(richer||local||impactEvents), advanced=richer||continuous||local, baseIterations=config.contactIterations??10;
+    const continuous=config.continuous??(richer||local||impactEvents||contactSamples), advanced=richer||continuous||local, baseIterations=config.contactIterations??10;
     const validIterations=n=>Number.isSafeInteger(n)&&n>=1&&n<=32;
     check((config.continuous===undefined||typeof config.continuous==='boolean')&&validIterations(baseIterations)&&
-      (!impactEvents||continuous),
+      (!(impactEvents||contactSamples)||continuous),
       'Invalid mechanical contact controls');
     const initialBodies={}, initials={}, inputs={}, outputs={}, claimed=new Map(), driveOrder=[], mountOrder=[];
     const surface=W.surfaceState, surfaceChannels=K.procedural.surfaceState.channels(config.surfaceChannels);
@@ -131,6 +131,7 @@
     const initialCharts={};
     if (config.contactEvents) outputs.contacts='event';
     if(impactEvents)outputs.impacts='event';
+    if(contactSamples)outputs['contact-samples']='event';
     if(canFracture)inputs['fracture-contacts']='event';
     if(fabricFields.length)outputs['deformable-loads']='event';
     const index = W.spatial.create(), indexed = new Map(), poseCache = new WeakMap();
@@ -610,7 +611,7 @@
           observe(a,point,V.mul(force,-1));
           if(b!==null)observe(b,point,force);
         }:undefined;
-        motion=W.contactMotion.prepare(bodies,roots,masses,{ground:plane,fabric,onContact,onFabric(seat,key,magnitude){
+        motion=W.contactMotion.prepare(bodies,roots,masses,{ground:plane,fabric,onContact,measure:contactSamples,onFabric(seat,key,magnitude){
           const {system,shape,face,nodes,weights,point,normal}=seat, body=bodies[key],
             token=JSON.stringify([key,system,shape,face]), previous=fabricLoads.get(token);
           const impulse=V.mad(previous?.impulse??zero,normal,magnitude);
@@ -980,16 +981,20 @@
       check(record(args)&&Object.keys(args).length===1&&(own(structures,args.body)||own(wearSpecs,args.joint)),
         'A repair effect needs a structural body or wear-tracked joint');
     }
+    function repairBlocker(state,{body,joint}){
+      return joint!==undefined ? state.joints[joint]?.active?null:'joint-detached' :
+        own(state.bodies,body)?null:'repair-body-missing';
+    }
     function repair(state,{body,joint},batch,ctx){
+      const reason=repairBlocker(state,{body,joint});
+      if(reason)return {reason};
       if(joint!==undefined){
         const prior=state.joints[joint];
-        if(!prior.active)return {reason:'joint-detached'};
         const next={...prior,durability:durability.jointInitial(prior.value)};
         ctx.emit('joint-repaired',{joint,body:jointSpecs[joint].child});
         return {state:{...state,joints:{...state.joints,[joint]:next}}};
       }
       const prior=state.bodies[body];
-      if(!prior)return {reason:'repair-body-missing'};
       const {bend,...straight}=prior;
       const bodies=bend?{...state.bodies,[body]:straight}:state.bodies;
       if(bend){
@@ -1000,7 +1005,7 @@
       ctx.emit('body-repaired',{body,entity:prior.entity,at:prior.position});
       return {state:{...state,bodies,beams:{...state.beams,[body]:durability.beamInitial(structures[body])}}};
     }
-    return {...(serviceable&&{workEffects:{repair:{check:checkRepair,run:repair}}}),navigationSource(field,state,query){
+    return {...(serviceable&&{workEffects:{repair:{check:checkRepair,run:repair,blocker:repairBlocker}}}),navigationSource(field,state,query){
       if(!state||!['clearance','support','ground-clearance'].includes(field))return;
       if(field==='clearance'||field==='support'&&!config.terrain){
         const key=state.bodies;
@@ -1078,7 +1083,9 @@
       'Invalid saved deformable reactions');
       if(continuous)check(Array.isArray(state.impacts)&&state.impacts.length<=64&&typeof state.impactLimited==='boolean'&&
         state.impacts.every(hit=>record(hit)&&own(state.bodies,hit.a)&&(hit.b===null||own(state.bodies,hit.b))&&vector(hit.normal)&&
-          vector(hit.parts,2)&&Number.isFinite(hit.speed)&&Number.isFinite(hit.at)&&hit.at>=0&&hit.at<=1),
+          vector(hit.parts,2)&&Number.isFinite(hit.speed)&&Number.isFinite(hit.at)&&hit.at>=0&&hit.at<=1&&
+          (!contactSamples||record(hit.measurement)&&vector(hit.measurement.point)&&vector(hit.measurement.slip)&&
+            vector(hit.measurement.impulse)&&['ground','surface','overlap'].includes(hit.measurement.pointBasis))),
       'Invalid saved continuous contacts');
       surface.validate(state,surfaceChannels);
     },checkAction(type,args){
@@ -1119,7 +1126,7 @@
         poseCache.set(state.bodies,poses);
       }
       return poses.get(entity)??(entityNames.has(entity)?false:null);
-    },output(state){
+    },output(state,ctx){
       const out={};
       for(const [key,joint] of Object.entries(state.joints)){
         out['speed.'+key]=joint.speed;
@@ -1136,7 +1143,15 @@
         const source=state.bodies[hit.a]?.entity, target=hit.b===null?'ground':state.bodies[hit.b]?.entity;
         if(!source||!target||source===target)return [];
         const row={kind:'impact',source,target,at:hit.at,speed:Math.max(0,hit.speed),normal:hit.normal};
-        return hit.b===null?[row]:[row,{...row,source:target,target:source,normal:V.mul(hit.normal,-1)}];
+        const contact=impactEvents==='timed'?ctx.eventAt(hit.at,row):row;
+        return hit.b===null?[contact]:[contact,{...contact,source:target,target:source,normal:V.mul(hit.normal,-1)}];
+      });
+      if(contactSamples)out['contact-samples']=(state.impacts??[]).flatMap(hit=>{
+        const source=state.bodies[hit.a]?.entity, target=hit.b===null?(hit.surface?.shape??'ground'):state.bodies[hit.b]?.entity;
+        if(!source||!target||source===target||!hit.measurement.impulse.some(value=>value!==0))return [];
+        const time=W.timedEvents.timeOf(ctx.eventAt(hit.at,{}));
+        return [W.contactSamples.sample({kind:'impact',source,target,...hit.measurement,
+          normal:hit.normal,interval:ctx.dt,forceBasis:'step-average'},{time})];
       });
       if(fabricFields.length)out['deformable-loads']=state.fabricLoads;
       return out;
@@ -1188,5 +1203,5 @@
     }};
   }
   W.runtime.register('mechanics',mechanics);
-  W.mechanics=Object.freeze({distance,column,changedBounds,raycast});
+  W.mechanics=Object.freeze({create:mechanics,distance,column,changedBounds,raycast});
 })(KIT);

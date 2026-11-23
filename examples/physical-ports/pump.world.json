@@ -1,0 +1,46 @@
+{
+  "format": "ink-studio/world",
+  "id": "metered-pump",
+  "dt": 0.05,
+  "systems": {
+    "pump": {
+      "kind": "pipe-network",
+      "config": {
+        "nodes": {
+          "supply": { "capacity": 1, "initial": 0.6, "area": 1, "precharge": 3 },
+          "return": { "capacity": 1, "initial": 0.1, "area": 1 }
+        },
+        "pipes": {
+          "branch": { "from": "supply", "to": "return", "conductance": 0.012, "maxFlow": 0.1 }
+        }
+      },
+      "portQuantities": {
+        "outputs": {
+          "pressure.supply": { "unit": "Pa", "kind": "gauge-pressure" },
+          "flow.branch": { "unit": "m^3/s", "kind": "volume-flow", "frame": "pump-branch", "positive": "supply-to-return" }
+        }
+      }
+    },
+    "gauge": {
+      "kind": "control",
+      "config": { "op": "pass" },
+      "portQuantities": {
+        "inputs": { "value": { "unit": "N/m^2", "kind": "gauge-pressure" } }
+      }
+    },
+    "meter": {
+      "kind": "control",
+      "config": { "op": "pass" },
+      "schedule": { "every": 2 },
+      "portQuantities": {
+        "inputs": {
+          "value": { "unit": "m^3/s", "kind": "volume-flow", "frame": "pump-branch", "positive": "supply-to-return" }
+        }
+      }
+    }
+  },
+  "connections": [
+    { "from": "pump/pressure.supply", "to": "gauge/value" },
+    { "from": "pump/flow.branch", "to": "meter/value", "sample": "average" }
+  ]
+}

@@ -216,11 +216,77 @@
     }
   }
 
-  const modes={ drips, scuffs, lichen };
+  const imprints = {
+    'tide-line': {length:2, width:.12, heading:[1,0,0], normal:[0,0,1]},
+    scuff: {length:.36, width:.16, heading:[0,0,1], normal:up},
+    soot: {length:.8, width:.48, heading:up, normal:[0,0,1]},
+    repair: {length:.72, width:.42, heading:[1,0,0], normal:[0,0,1]}
+  };
+
+  function imprint(layer,cast,select,step,random,write) {
+    const style=imprints[layer.pattern];
+    if (!Object.hasOwn(imprints,layer.pattern)) throw new TypeError('Unknown surface imprint pattern');
+    const {point:at,normal=style.normal,heading=style.heading,length=style.length,width=style.width,reach=.15}=layer;
+    if (!point(at) || ![length,width,reach].every(n=>between(n,.005,50)))
+      throw new RangeError('Surface imprints need an XYZ point and bounded length, width and reach');
+    const n=axis(normal,'Imprint normal'), direction=axis(heading,'Imprint heading');
+    const hit=projected(at,n,reach,cast);
+    if (!targetMatches(select,hit) || V.dot(n,hit.normal)<=.62) return;
+    if (layer.pattern==='scuff' || layer.pattern==='soot') {
+      patch(hit,direction,length,width,1,layer.pattern==='scuff'?.75:.94,step,cast,select,random,write);
+      return;
+    }
+    const u=V.norm(V.mad(direction,hit.normal,-V.dot(direction,hit.normal)),V.perp(hit.normal));
+    const v=V.cross(hit.normal,u), tide=layer.pattern==='tide-line';
+    for (const a of sweep([-length*.5,length*.5],step)) {
+      const ripple=tide ? width*.22*Math.sin(a*27)*Math.cos(a*9) : 0;
+      for (const b of sweep([-width*.5,width*.5],step)) {
+        const edge=Math.max(Math.abs(a)*2/length,Math.abs(b)*2/width);
+        if (edge>.83 && random()<(tide ? .30 : .14)) continue;
+        const sample=projected(V.mad(V.mad(hit.point,u,a),v,b+ripple),hit.normal,reach,cast);
+        if (targetMatches(select,sample) && V.dot(hit.normal,sample.normal)>.62)
+          write(sample,tide ? 1-.29*Math.abs(b)*2/width : .94,random);
+      }
+    }
+  }
+
+  function trail(layer,cast,select,step,random,write) {
+    const {path,width=.38,normal=up,reach=.18}=layer, n=axis(normal,'Trail normal');
+    if (!Array.isArray(path) || path.length<2 || path.length>64 || !Array.from(path).every(point) ||
+        !between(width,.02,5) || !between(reach,.005,3)) throw new RangeError('Invalid surface trail');
+    const steps=path.slice(1).map((end,i)=>{
+      const start=path[i], direction=V.sub(end,start), length=V.len(direction);
+      if (length<.001) throw new RangeError('Surface trail needs distinct consecutive points');
+      return {start,direction,length};
+    });
+    if (steps.reduce((total,segment)=>total+segment.length,0)>120) throw new RangeError('Surface trail exceeds its length budget');
+    const cross=sweep([-width*.5,width*.5],step);
+    let traveled=0;
+    for (const {start,direction,length} of steps) {
+      const side=V.norm(V.cross(n,direction),V.perp(n));
+      // Overlap adjacent segments slightly to keep the paint continuous at bends.
+      for (const along of sweep([-step*.5,length+step*.5],step)) {
+        const center=V.mad(start,direction,along/length);
+        const sway=Math.sin((along+traveled)*5.1)*width*.045;
+        for (const offset of cross) {
+          const weight=K.clamp((1-2*Math.abs(offset)/width)*1.7,0,1);
+          if (random()>(.28+.72*weight)) continue;
+          const hit=projected(V.mad(center,side,offset+sway),n,reach,cast);
+          if (targetMatches(select,hit) && V.dot(n,hit.normal)>.62)
+            write(hit,weight*(.83+random()*.17),random);
+        }
+      }
+      traveled+=length;
+    }
+  }
+
+  const modes={ drips, scuffs, lichen, imprint, trail };
   const fields={
     drips:['bounds','direction','edge','interval','length','width','reach','minDrop','startDrop','density'],
     scuffs:['contacts','length','width','reach','loadReference'],
-    lichen:['bounds','direction','interval','radius','shelterReach','minShelter','density']
+    lichen:['bounds','direction','interval','radius','shelterReach','minShelter','density'],
+    imprint:['pattern','point','normal','heading','length','width','reach'],
+    trail:['path','width','normal','reach']
   };
   function bake(world,recipe) {
     if (!record(recipe) || Object.keys(recipe).some(key=>!['version','seed','maxWork','maxSamples','layers'].includes(key)))
@@ -260,5 +326,65 @@
       return { ...style,decals:[...samples.values()] };
     })};
   }
-  K.surfaceMarks=Object.freeze({bake});
+  function bakeEvents(world,events,recipe) {
+    const W=K.world;
+    const {id,read,selector,equal}=W.data;
+    if (!record(recipe)) throw new TypeError('Expected a surface event mark recipe');
+    const {run,rules,...options}=recipe;
+    if (!PaintCorrections.idOK(run) || run.length>20 || !record(rules) || !between(Object.keys(rules).length,1,32) ||
+        Object.keys(options).some(key=>!['version','seed','maxWork','maxSamples'].includes(key)) ||
+        typeof events?.[Symbol.iterator]!=='function')
+      throw new TypeError('Surface event marks need a run ID, 1–32 rules and committed event records');
+
+    const byKind=new Map();
+    for (const rule of Object.keys(rules).sort()) {
+      const raw=rules[rule];
+      if (!record(raw)) throw new TypeError('Invalid surface event mark rule '+rule);
+      const {on,bindings={},...style}=raw;
+      if (!PaintCorrections.idOK(rule) || rule.length>20 || !record(on) || !id(on.kind) ||
+          (on.system!==undefined && !id(on.system)) || Object.keys(on).some(key=>!['kind','system','where'].includes(key)) ||
+          !record(bindings) || Object.keys(style).some(key=>!['color','spacing','opacity','region','select',...fields.imprint].includes(key)) ||
+          !Object.hasOwn(imprints,style.pattern))
+        throw new TypeError('Invalid surface event mark rule '+rule);
+      W.query.condition(on.where,{});
+      const paths=Object.entries(bindings).map(([into,from])=>{
+        const path=selector(into);
+        if (!fields.imprint.slice(1).includes(path[0]) || read(style,path)===undefined)
+          throw new TypeError('Event binding must address an existing imprint argument: '+into);
+        return {path,from:selector(from)};
+      });
+      if (!byKind.has(on.kind)) byKind.set(on.kind,[]);
+      byKind.get(on.kind).push({rule,on,style,paths});
+    }
+
+    const sources=new Map(), layers=[];
+    for (const event of events) for (const {rule,on,style,paths} of byKind.get(event?.kind) ?? []) {
+      if (on.system!==undefined && on.system!==event.system || !W.query.condition(on.where,event)) continue;
+      const source=PaintCorrections.eventSource({...event,run,rule});
+      const name=run+'-'+rule+'-'+source.id.replace('.','-');
+      const prior=sources.get(name);
+      if (prior) {
+        if (!equal(prior.event,event)) throw new Error('Conflicting records for surface mark event '+source.id);
+        continue;
+      }
+      if (layers.length>=32) throw new RangeError('Surface event marks need at most 32 matching layers per bake');
+      const changes=paths.map(({path,from})=>{
+        const value=read(event,from);
+        if (value===undefined) throw new Error('Surface mark rule '+rule+' needs event value '+from.join('/'));
+        return {op:'set',path,value};
+      });
+      const resolved=changes.length ? W.apply(style,changes,{validate:null}).world : style;
+      sources.set(name,{source,event});
+      layers.push({...resolved,id:name,kind:'imprint'});
+    }
+    if (!layers.length) return {layers:[]};
+    layers.sort((a,b)=>{
+      const left=sources.get(a.id).source, right=sources.get(b.id).source;
+      return left.tick-right.tick || Number(left.id.split('.')[1])-Number(right.id.split('.')[1]);
+    });
+    return {layers:bake(world,{...options,layers}).layers.filter(layer=>layer.decals.length)
+      .map(layer=>({...layer,sourceEvent:sources.get(layer.id).source}))};
+  }
+
+  K.surfaceMarks=Object.freeze({bake,bakeEvents});
 })(KIT);

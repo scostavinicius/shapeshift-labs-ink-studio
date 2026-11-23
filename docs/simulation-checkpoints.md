@@ -12,6 +12,8 @@ Sediment and thermal transport can replace it.
 [Interactive checkpoint branching](#interactive-checkpoint-branching) keeps
 multiple named outcomes and their starting points in one session.
 
+[Shared beat inspection links](inspection-links.md) can point to a causal trace or a still rendered at the beat’s recorded tick.
+
 The default checkpoint and recording are still standalone version 1 JSON.
 For experiments with several saved runs, use a shared block directory.
 
@@ -93,6 +95,70 @@ Use `KIT.world.runtime.verify(log, options)` for a structured report
 or `verifyAsync(log, options)` with browser workers. Custom systems use
 the same implementation factories during capture and verification.
 
+For sample-rate kernels, see [fast state checkpoints and take transport](simulation-fast-checkpoints.md).
+The world and its nested kernel states save together, including pending signal events.
+
+## Committed event envelopes
+
+`run.committedEvents()` returns the envelopes for the last committed tick. Query `world/events` for the same envelopes and add `retained: true` to include history with the latest batch. Filter by `kind`, `branch`, qualified `story`, or a `subject` ID. The latest batch is available with history disabled.
+
+```sh
+ink-studio sim fork decision.json --branch night --ticks 36 --record night.run.json
+ink-studio story events night.run.json --format envelopes --out night.events.json
+ink-studio probe night.run.json --field world/events --args '{"retained":true,"branch":"night"}'
+```
+
+| Envelope field | Meaning |
+| --- | --- |
+| `id`, `tick`, `world`, `branch` | The local `tick.sequence` ID, absolute commit tick, manifest ID, and branch ID. Use `world`, `branch`, and `id` together when comparing events across branches. |
+| `kind`, `system`, `payload` | The event kind, emitting system, and event-specific fields. |
+| `story`, `stage`, `visit` | The qualified story ID, stage ID, and visit number when present. Unavailable fields are null. |
+| `subjects` | Typed references with `role`, `kind`, and `id`. The envelope carries authored subject references, typed fact subjects, known native references, and transfer accounts. |
+| `causes` | Links to earlier `event` IDs, the originating `command` at its tick and index, and `trace` nodes when native causality is enabled. Story evidence and routed actions carry event links even with history disabled. A linked record may have aged out of retention. |
+
+Named branches start emitting under their new ID on the next committed tick. Inherited events and links keep the branch that emitted them. Use `run.fork({ branch: "night" })` or the CLI `--branch` option to name a fork. An unnamed runtime fork inherits the current branch for replay and rollback. Branch sessions and story fork comparisons use their authored branch IDs.
+
+The existing event rows keep their flat payload fields for filters, bindings, and receipts. They persist envelope metadata in `eventContext` so a checkpoint stores the payload once. Older runs and fixtures retain their original replay behavior. When read as envelopes, older rows use the same field layout with available payload information. A legacy checkpoint resumed into a new run starts producing committed metadata.
+
+```sh
+node examples/committed-events/demo.cjs ./studio/out/committed-events
+```
+
+The demo exports sibling branches with the same local event ID and a shared parent cause. A quay fixture shows the story stage and the event that triggered it.
+
+## Portable test fixtures
+
+`sim fixture` packages a simulation interval as one versioned JSON file. It includes the native checkpoint and its embedded scene, queued commands, later submissions at their original ticks, the committed event trace, and a checksum for the final checkpoint. The CLI verifies the fixture after serialization before writing it. Block-backed sources produce standalone fixtures. Reviewers need the same Ink runtime and any registered custom systems or kernels used by the scene.
+
+```sh
+ink-studio sim fixture original.run.json --from 20 --ticks 36 --out review.fixture.json
+ink-studio sim verify review.fixture.json
+ink-studio sim replay review.fixture.json --checkpoint ending.json --record replay.run.json
+ink-studio story events review.fixture.json --format markdown
+```
+
+`--from` is the starting committed tick. It defaults to the source's starting tick. `--ticks` is the absolute last tick to attempt and defaults to the ending tick for a run recording. With a world or checkpoint source, you can supply `--actions` to queue commands before advancing. A source recording keeps its original submissions, including the order between event-routed commands and user submissions at the same boundary. The trace starts after the checkpoint and includes every committed event in the interval, even with world history disabled. Capture and source recording verification can advance up to 100,000 ticks from the source start. The trace can hold up to 100,000 events.
+
+Use `--event KIND` to stop on the first matching committed tick. An optional `--event-where` query condition narrows the match to a particular story, failure reason, or other event detail. Use `--fault` to package the first thrown simulation error and verify its tick, class, message, and last successful checkpoint.
+
+```sh
+ink-studio sim fixture examples/story-documents/quay-candidates.world.json \
+  --actions examples/story-documents/quay-candidates.actions.json \
+  --from 1 --ticks 6 --event story-candidate-rejected \
+  --event-where '{"path":"/reason","value":"candidate-blocked"}' \
+  --minimize --out quay.fixture.json
+```
+
+`--minimize` requires an event or fault. It attempts to remove groups of authored scene entries and commands, then individual entries within its trial budget. Each accepted removal must reproduce the full selected event or fault at the same tick. For checkpoint and run sources, minimization tries removing pending commands and later submissions while preserving the checkpoint's scene and state. Other results can change. The fixture records the reduced run's complete trace and ending checksum along with the number of trials and removals. For an exact interval review, omit `--minimize`.
+
+`sim verify` exits with status 2 on divergence and reports the first event, fault, or checkpoint mismatch. `sim replay` can export the last verified checkpoint and a normal run recording. For timing and scheduler limits, use a separate [simulation performance budget](simulation-performance-budgets.md).
+
+```sh
+node examples/simulation-fixtures/demo.cjs ./studio/out/simulation-fixtures
+```
+
+The demo reproduces a blocked story dispatch, checks late command ordering from a block-backed recording, and captures a fault on an attempted metadata edit.
+
 ## Interactive checkpoint branching
 
 `KIT.world.branches.create(source, options)` accepts a world manifest,
@@ -111,6 +177,7 @@ worker pool as `options.runtime` when opening portable data.
 | `queue({inputs, edits, actions}, {branch, tick})` | Queue typed input changes, live entity or metadata patches, and system actions as one validated batch. The default boundary is the selected branch's next tick. |
 | `view(id)`, `query(id)`, `checkpoint(id)`, `recording(id)` | Read any branch without switching or advancing it. Omitting the ID reads the active branch. |
 | `diff(left, right)` | Compare two branch heads at the same tick. |
+| `forecast(options, {branch})`, `forecastAsync(options, {branch})` | Preview pending commands from a branch head with [in-scene forecast overlays](simulation-forecasts.md). |
 | `status()`, `subscribe(callback)` | Read current playback state, branch lineage, ticks, pending command counts, and available marks. |
 | `save()` | Export the whole session as portable JSON. Reopen it with `KIT.world.branches.create(saved)`. Playback opens paused. |
 

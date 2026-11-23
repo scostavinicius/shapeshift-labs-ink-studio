@@ -596,6 +596,15 @@
       return {...(switched?controlled:row),orders,...(switched&&{route:emptyList,cursor:0,retry:0,
         ...(row.routing&&{routing:RQ.idle})})};
     }
+    function releaseStoryClaim(state,{agent,generation,sequence},ctx){
+      const roster=S.get(state), slot=S.find(roster,agent), row=slot&&S.read(roster,slot);
+      if(!row||row.generation!==generation)return {state,status:'skipped',reason:'owner-unavailable'};
+      const book=row.orders??O.blank;
+      const entry=[book.active,...book.paused,...book.queue].find(order=>order?.sequence===sequence);
+      if(!entry?.reservation)return {state,status:'skipped',reason:'claim-not-pending'};
+      const next=replace(state,{agent,generation},current=>changeOrders(current,orders.cancel(book,sequence,current,ctx,'story-ended')));
+      return {state:next,status:'applied',reason:'order-cancelled'};
+    }
     function* pendingTransfers(roster){
       for(const slot of S.order(roster)){
         if(roster.pages[slot.p].details[slot.i].orders?.active?.phase!=='settling')continue;
@@ -640,6 +649,41 @@
           Q.ok(select(row)):Q.missing('unknown live agent or generation','missing');
       }};
     }
+    function routeFeasibility({state,args,query}) {
+      const row=S.select(S.get(state),args.agent);
+      if(!row||args.generation!==undefined&&args.generation!==row.generation)
+        return Q.missing('unknown live agent or generation','missing');
+      check(W.worksites.target(args.to)&&(args.from===undefined||W.worksites.target(args.from)), 'Expected route pins');
+      const to=W.worksites.frame(query,args.to)?.point;
+      const from=args.from===undefined?row.position:W.worksites.frame(query,args.from)?.point;
+      if(!from||!to)return Q.missing('route pin unavailable','missing');
+      const profile=profileFor(row), ctx={query};
+      const start=fit(ctx,profile,from), goal=fit(ctx,profile,to);
+      const spec={agent:row.id,generation:row.generation,from,to};
+      if(!start||!goal)return Q.ok({...spec,status:!start?'origin-unfit':'destination-unfit'});
+      if(!suitable(ctx,row,goal))return Q.ok({...spec,status:'destination-unsuitable'});
+      const route=plan(ctx,profile,start,goal);
+      const {status,reason,blocked,length,points=[]}=route;
+      return Q.ok({...spec,status:status==='ok'&&!points.length?'empty':status,waypoints:points.length,
+        ...(Number.isFinite(length)&&{length}),...(reason&&{reason}),...(blocked&&{blocked})});
+    }
+    function commitmentTerms({state,args,tick,query,system}){
+      const row=S.select(S.get(state),args.agent);
+      if(!row)return Q.missing('unknown live agent','missing');
+      const book=row.orders??O.blank, decision=state.decisions?.[row.id], active=book.active;
+      const actor={system,agent:row.id,generation:row.generation};
+      const available=row.mode==='dormant'?'agent-dormant':O.runnable(book)?'existing-order':
+        row.travelPlan?'shared-travel':row.formationDriven||formations?.active(state.formations,row)?'formation':
+        policy?.committed(decision)?'committed-activity': !decision&&W.storyCasting.availability(row).state==='busy'?'assigned-movement':null;
+      const order=active?{task:active.task,sequence:active.sequence,phase:active.phase,
+        ...(active.id!==undefined&&{id:active.id}),
+        ...(active.reservation&&{reservation:query.probe(active.reservation.board+'/claim',undefined,{...actor,sequence:active.sequence}).value??null})}:null;
+      const orderAvailable=Number.isSafeInteger(book.serial+1)&&
+        (args.orderId===undefined||![active,...book.paused,...book.queue,...book.outcomes].some(entry=>entry?.id===args.orderId));
+      return Q.ok({actor,available,orderAvailable,orders:{active:order,paused:book.paused.length,queued:book.queue.length},
+        needs:decision?.needs??{},activity:decision?.choice?.activity??null,phase:decision?.phase??null,
+        ...(args.activity!==undefined&&{activityTerms:policy?.terms(row.id,args.activity,decision,tick)??null})});
+    }
     function spawnAgent(state,args,ctx){
         const roster=S.get(state), {agent}=args;
         check(!S.find(roster,agent),'Agent already exists '+agent);
@@ -654,7 +698,7 @@
         id(args.prefix)&&args.prefix.length<=80&&W.worksites.target(args.at),'Invalid recruitment effect');
       checkAgent(args.prefix,{...args,position:S.zero});
     }
-    function placedSpawn(state,args,ctx){
+    function spawnPlacement(state,args,ctx){
       const {agent}=args, roster=S.get(state);
       if(S.find(roster,agent))return {reason:'recruit-id-in-use'};
       if(S.count(roster)>=maxAgents)return {reason:'recruit-roster-full'};
@@ -665,7 +709,11 @@
       const center=profile.mode==='walk'?V.add(position,[0,radius+.001,0]):position;
       const {results:[space]}=ctx.query.spatialBatch({queries:[{op:'occupancy',at:center,radius,kinds:['agent','body'],clearance:[]}]});
       if(space.state!=='free')return {reason:'recruit-site-occupied'};
-      return {state:spawnAgent(state,{...args,agent,position},ctx)};
+      return {position};
+    }
+    function placedSpawn(state,args,ctx){
+      const placement=spawnPlacement(state,args,ctx);
+      return placement.reason?placement:{state:spawnAgent(state,{...args,position:placement.position},ctx)};
     }
     function recruit(state,args,batch,ctx){
       return placedSpawn(state,{...args,agent:args.prefix+'.'+batch},ctx);
@@ -729,7 +777,8 @@
     }}),
     ...((crowd||travel?.hasRides)&&{inputs:{...crowd?.inputs,...travel?.inputs}}),
     ...(travel?.hasRides&&{afterStep:syncRiders}),
-    workEffects:{recruit:{check:checkRecruit,run:recruit}},
+    workEffects:{recruit:{check:checkRecruit,run:recruit,blocker:(state,args,batch,ctx)=>
+      spawnPlacement(state,{...args,agent:args.prefix+'.'+batch},ctx).reason}},
     occupancy:{
       kind:'agent',key:S.get,rows:state=>occupants(S.get(state)),
       distance:({x,z,a,b,radius},point)=>Math.hypot(point[0]-x,
@@ -806,7 +855,7 @@
       if(config.surface!==undefined)W.materials.checkSurface(query,config.surface);
       policy?.checkFields(query);
       orders?.checkFields(query);
-    }}),validateState,checkAction(type,args){
+    }}),...(orders&&{storyCleanup:{claim:{run:releaseStoryClaim}}}),validateState,checkAction(type,args){
       if(formations&&W.formations.actions.includes(type))return formations.checkAction(type,args);
       if(type==='spawn'){
         checkAgent(args.agent,args);
@@ -1034,6 +1083,7 @@
     },fields:{
       agents:{type:'record',read:({state})=>Q.ok(S.rows(S.get(state)))},
       agent:agentField('record',row=>row),
+      'route-feasibility':{type:'record',selector:true,qualified:true,read:routeFeasibility},
       position:agentField('vector',row=>row.position,'world'),
       velocity:agentField('vector',row=>row.velocity,'world/s'),
       task:agentField('categorical',row=>row.task),
@@ -1042,6 +1092,7 @@
         Q.ok(travel.report(travelRows(S.get(ctx.state)),ctx))}}),
       ...(orders&&{
         orders:agentField('record',row=>row.orders??O.blank),
+        'commitment-terms':{type:'record',qualified:true,read:commitmentTerms},
         'order-tasks':{type:'record',qualified:true,read:()=>Q.ok(orders.tasks)}
       }),
       ...(formations&&{formations:{type:'record',qualified:true,selector:true,read({state,args}){

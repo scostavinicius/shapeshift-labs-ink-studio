@@ -1,0 +1,4 @@
+{
+  "name": "Cool dailies",
+  "steps": [{ "type": "oklabChroma", "correction": [[-0.036, 0, 0], [-0.068, 0, 0]] }]
+}

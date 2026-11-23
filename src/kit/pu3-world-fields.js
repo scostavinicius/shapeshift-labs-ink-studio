@@ -91,6 +91,7 @@
         }
       }};
   }
+  const hysteresis=(active,value,low,high)=>active?value>low:value>=high;
   function control(config) {
     const kind = config.op ?? 'pass';
     const specs = {
@@ -161,7 +162,7 @@
         }
         case 'hysteresis': {
           const threshold=state.value?config.low??0:config.high??1, comparison=state.value?'>':'>=';
-          value=state.value?input.value>threshold:input.value>=threshold;
+          value=hysteresis(state.value,input.value,config.low??0,config.high??1);
           if (value!==state.value) causal?.record('hysteresis-changed',
             {reading:input.value,threshold,comparison,result:value},{inputs:['value'],outputs:['value']});
           break;
@@ -696,5 +697,5 @@
   W.runtime.register('control',control);
   W.runtime.register('fields',typedFields);
   W.runtime.register('water',water,{worker:true});
-  W.fields = Object.freeze({zone,bounds,regions,patchList,clamp});
+  W.fields = Object.freeze({zone,bounds,regions,patchList,clamp,hysteresis});
 })(KIT);

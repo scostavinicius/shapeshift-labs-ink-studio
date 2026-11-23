@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const test = require('node:test');
 const ink = require('..');
-const { KIT:K, ArtStability, PixelLook, makeBuilder, makeSculpt }=ink.load();
+const { KIT:K, ArtStability, CameraLens, PixelLook, makeBuilder, makeSculpt }=ink.load();
 const { FOV }=require('../cli/render.js');
 const camera={target:[0,0,0],dist:5,yaw:0,pitch:0};
 const view={w:64,h:48,px:1,ortho:true};
@@ -199,8 +199,41 @@ test('palette anchor validation and compatibility use the same policy in native 
   const { palette } = K.authoring.looks.bind('dither/weave', catalog);
   assert.deepEqual(PixelLook.preparePalette(palette).anchor, { ...on, dither: 'object' });
   assert.deepEqual(K.world.lookReport.standalone({ palette }, undefined, 'headless').issues, []);
-  assert.match(K.world.lookReport.standalone({ palette }, undefined, 'webgl').issues[0].message, /screen space/);
+  assert.deepEqual(K.world.lookReport.standalone({ palette }, undefined, 'webgl').issues, []);
   for (const dither of [{ space: 'camera' }, { space: 'world', spacing: 0 }, { space: 'object', origin: [0, 0] }])
     assert.throws(() => PixelLook.preparePalette({ ...candidates, dither }), /Invalid dither space/);
   assert.throws(() => PixelLook.preparePalette({ ...candidates, dither: { spacing: .2 } }), /Set a dither space/);
+});
+
+test('view projection stays fixed within a direction sector and ignores depth along its axis', () => {
+  const viewAt = (yaw, pitch, target = [0,0,0]) =>
+    ArtStability.viewProjection(CameraLens.matrix(CameraLens.orbitPose(yaw,pitch,5,target)));
+  const rule = ArtStability.pattern({dither:'view',spacing:.1,origin:[.025,.025,0]});
+  const point = [.14,-.19,.28], shiftedDepth = [.14,-.19,14];
+  const cell = (at, camera, scale = 1) => ArtStability.coordinates(rule,at,25,40,scale,camera);
+  assert.deepEqual(cell(point,viewAt(-.28,.22)),[1,2]);
+  assert.deepEqual(cell(point,viewAt(.30,.08,[10,2,3])),[1,2]);
+  assert.deepEqual(cell(shiftedDepth,viewAt(0,0)),[1,2]);
+  assert.deepEqual(cell(point,viewAt(0,0),2),[0,1]);
+  assert.notDeepEqual(cell(point,viewAt(.55,0)),[1,2]);
+  assert.deepEqual(cell(point,viewAt(0,1.52)),cell(point,viewAt(2.7,1.52)));
+  assert.deepEqual(cell(null,viewAt(0,0)),[25,40]);
+  assert.deepEqual(cell(point,undefined),[25,40]);
+});
+
+test('view-anchored palette rules hold their phase through a pan in the headless resolve paths', () => {
+  const fixture = space => {
+    const policy = anchorPolicy(space);
+    return plate({paletteConstraints:{targets:[{
+      object:'probe',...policy,dither:{...policy.dither,scale:1,fade:[.25,.60]}
+    }]}});
+  };
+  for (const options of [{}, {coverageAware:true}, {colored:true}, {stable:{resolve:'coverage'}}, {stable:{resolve:'clusters'}}]) {
+    assert(changes(...pan(fixture('view'),options),-1)<4,JSON.stringify(options));
+    assert(changes(...pan(fixture('screen'),options),-1)>30,JSON.stringify(options));
+  }
+  const staged = space => plate({renderStages:[{stage:'palette',select:{object:'probe'},palette:anchorPolicy(space)}]});
+  assert(changes(...pan(staged('view'),{}),-1)<4);
+  assert(changes(...pan(staged('screen'),{}),-1)>30);
+  assert.deepEqual(K.world.lookReport.standalone({palette:anchorPolicy('view')},undefined,'webgl').issues,[]);
 });

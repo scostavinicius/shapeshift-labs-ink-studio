@@ -5,8 +5,11 @@
   const groups = { emotions: 'emotion.', parameters: 'parameter.' };
   const groupNames = Object.keys(groups);
   const quantizations = ['none', 'half-beat', 'beat', 'half-bar', 'bar', 'phrase'];
-  const maxCues = 128, maxTime = 1e7, beatTolerance = 1e-9;
+  const maxCues = 128, maxTime = 1e7, beatTolerance = 1e-9, maxRamp = 60;
   const bounded = (value, low, high) => Number.isFinite(value) && value >= low && value <= high;
+  const layerIntent = row => record(row) && row.kind === 'music-layer' && id(row.part) &&
+    (row.factor === undefined || id(row.factor)) &&
+    bounded(row.gain, 0, 1) && (row.ramp === undefined || bounded(row.ramp, 0, maxRamp));
   const positiveInt = (value, max) => Number.isSafeInteger(value) && value > 0 && value <= max;
   const token = value => typeof value === 'string' && value.length > 0 && value.length <= 256;
 
@@ -26,7 +29,8 @@
   function create(config) {
     check(record(config), 'Expected a music score');
     const { tempo = 120, beatsPerBar = 4, barsPerPhrase = 4, entry,
-      sections: sectionTable, cues: cueTable = {}, transitions: rules = [] } = freeze(copy(config));
+      sections: sectionTable, cues: cueTable = {}, transitions: rules = [],
+      layerControls: authoredLayers } = freeze(copy(config));
     check(bounded(tempo, 1, 1000) && positiveInt(beatsPerBar, 32) && positiveInt(barsPerPhrase, 64),
       'Invalid music tempo or meter');
     const grids = { 'half-beat': .5, beat: 1, 'half-bar': beatsPerBar / 2,
@@ -41,6 +45,27 @@
         return [key, { fallback, attack, release }];
       }));
     }
+    function layerBinding(part,raw,factor) {
+      check(record(raw) && Object.keys(raw).every(key => ['parameter','emotion','range','attack','release'].includes(key)),
+        'Invalid live layer control ' + part);
+      const {parameter,emotion,range=[0,1],attack=.05,release=attack}=raw;
+      const group=parameter!==undefined?'parameters':'emotions', channel=parameter??emotion;
+      check((parameter===undefined)!==(emotion===undefined) && id(channel) && own(channels[group],channel) &&
+        vector(range, 2) && range.every(value=>bounded(value,0,1)) && range[0]!==range[1] &&
+        bounded(attack,0,maxRamp) && bounded(release,0,maxRamp),'Invalid live layer control '+part);
+      return {part,factor,group,channel,range,attack,release};
+    }
+    const layerControls = entries(authoredLayers ?? {}, 'layer controls').flatMap(([part,raw]) => {
+      if (!record(raw) || !own(raw,'factors')) return [layerBinding(part,raw)];
+      const factors = entries(raw.factors, 'layer factors', 8);
+      check(Object.keys(raw).length===1 && factors.length>0, 'Invalid live layer factors ' + part);
+      return factors.map(([factor,binding]) => layerBinding(part,binding,factor));
+    });
+    check(layerControls.length<=64, 'Live score exceeds its 64 layer controls');
+    function layerGain(targets,{group,channel,range:[low,high]}) {
+      return Math.min(1,Math.max(0,(targets[group][channel]-low)/(high-low)));
+    }
+
     const sections = new Map(entries(sectionTable, 'sections').map(([key, raw]) => {
       check(record(raw), 'Invalid music section ' + key);
       const { resource, tempo: bpm = tempo, layers = {} } = raw;
@@ -185,6 +210,14 @@
           own(channels[group], key) && bounded(value, 0, 1)), 'Unknown or invalid music ' + group + ' input');
       }
       state.targets = channelRecord((group, key) => updates[group]?.[key] ?? state.targets[group][key]);
+      for (const row of layerControls) {
+        const before=layerGain(previous.targets,row), gain=layerGain(state.targets,row);
+        if(gain===before)continue;
+        const serial=++state.serial;
+        check(Number.isSafeInteger(serial),'Music intent serial exhausted');
+        intents.push({kind:'music-layer',time,serial,part:row.part,gain,ramp:gain>before?row.attack:row.release,
+          ...(row.factor!==undefined && {factor:row.factor})});
+      }
       state.levels = channelRecord((group, key, spec) => {
         const value = state.levels[group][key], target = state.targets[group][key];
         return (target > value ? spec.attack : spec.release) === 0 ? target : value;
@@ -211,11 +244,22 @@
       validate(state);
       const beat = beatAt(state, state.time), winner = candidate(state)?.name ?? null;
       const due = row => ({ ...row, estimatedTime: timeAt(state, row.beat) });
+      const layerGains={}, layerFactors={};
+      for (const row of layerControls) {
+        const gain=layerGain(state.targets,row);
+        if (row.factor===undefined) layerGains[row.part]=gain;
+        else {
+          if (!own(layerFactors,row.part)) layerFactors[row.part]={};
+          layerFactors[row.part][row.factor]=gain;
+        }
+      }
       return freeze({ time: state.time, beat, beatsPerBar, barsPerPhrase,
         bar: Math.floor((beat + beatTolerance) / beatsPerBar),
         phrase: Math.floor((beat + beatTolerance) / grids.phrase),
         nextBeatTime: timeAt(state, gridAfter(beat, 'beat')), nextBarTime: timeAt(state, gridAfter(beat, 'bar')),
         section: state.section, ...sections.get(state.section), ...state.levels, targets: state.targets, winner,
+        ...(Object.keys(layerGains).length && {layerGains}),
+        ...(Object.keys(layerFactors).length && {layerFactors}),
         transitions: outgoing.get(state.section).map(rule => ({ rule: rule.name, to: rule.to,
           quantize: rule.quantize, matches: W.query.condition(rule.when, state.levels) })),
         pendingTransition: state.transition && due(state.transition), pendingCues: state.cues.map(due) });
@@ -234,6 +278,8 @@
 
   function adaptiveMusic(config) {
     const machine = create(config), inputs = { cues: 'event' }, fields = [];
+    const layerCount=Object.values(config.layerControls ?? {}).reduce((count,row)=>
+      count+(row.factors===undefined ? 1 : Object.keys(row.factors).length),0);
     const outputs = { beat: 'number', intents: 'event' };
     for (const group of groupNames) {
       for (const [name, spec] of Object.entries(config[group] ?? {})) {
@@ -274,7 +320,7 @@
     }
 
     return {
-      inputs, outputs, step, contract: { emits: ['music-transition', 'music-cue'] },
+      inputs, outputs, step, contract: { emits: ['music-transition', 'music-cue', ...(layerCount?['music-layer']:[])] },
       initial: () => ({ clock: machine.initial(), intents: [], requests: [] }),
       checkFields(query) {
         for (const row of fields) {
@@ -293,7 +339,7 @@
       },
       validateState(state) {
         check(record(state) && Array.isArray(state.requests) && state.requests.length <= maxCues &&
-          Array.isArray(state.intents) && state.intents.length <= maxCues * 2 + 4, 'Invalid saved music event buffers');
+          Array.isArray(state.intents) && state.intents.length <= maxCues * 2 + 4 + layerCount, 'Invalid saved music event buffers');
         machine.validate(state.clock);
         for (const row of state.requests) machine.request(row);
       },
@@ -310,7 +356,7 @@
 
   }
 
-  K.music = Object.freeze({create,acoustics,score:K.procedural.musicScore,
+  K.music = Object.freeze({create,acoustics,layerIntent,score:K.procedural.musicScore,
     composer:K.procedural.musicComposer,production:K.procedural.musicProduction});
   W.runtime.register('adaptive-music', adaptiveMusic);
 })(KIT);

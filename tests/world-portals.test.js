@@ -19,6 +19,30 @@ const b = { origin: [8, 1, 4], normal: [1, 0, 0] };
 const aperture = { halfWidth: 1.2, halfHeight: 1.5 };
 const from = { place: 'a', anchor: 'door' }, to = { place: 'b', anchor: 'door' };
 
+test('painted apertures share top-down texel boundaries and clearance with travel sweeps', () => {
+  const pixels = Uint8Array.of(0, 255, 255, 255, 255, 0);
+  const mask = { width: 3, height: 2, channels: 1, data: pixels };
+  const opening = portals.doorway({ from: a, to: b, halfWidth: 1.5, halfHeight: 1, mask });
+  const hit = (x, y, radius) => opening.hit([x, y, 1], [x, y, -1], { radius });
+  assert.equal(hit(-1, .5), null);
+  assert.equal(hit(1, -.5), null);
+  assert.equal(hit(0, .5).fraction, .5);
+  assert.equal(hit(-.35, .5, .2), null);
+  assert.equal(hit(-.35, .5, .14).fraction, .5);
+  assert.equal(hit(-.38, -.12, .14).fraction, .5);
+  assert.equal(hit(-.40, -.10, .15), null);
+  pixels.fill(255);
+  assert.equal(hit(-1, .5), null);
+  assert(Object.isFrozen(opening.mask.data));
+  const rgba = portals.doorway({ from: a, to: b, ...aperture, maskThreshold: 64,
+    mask: { width: 2, height: 1, channels: 4, data: [255, 0, 0, 63, 0, 0, 0, 64] } });
+  assert.deepEqual(rgba.mask.data, [0, 255]);
+  const white = portals.doorway({ from: a, to: b, ...aperture, maskThreshold: 255,
+    mask: { width: 2, height: 1, channels: 3, data: [255, 255, 255, 255, 255, 254] } });
+  assert.deepEqual(white.mask.data, [255, 0]);
+  assert.throws(() => portals.doorway({ from: a, to: b, ...aperture, mask, maskThreshold: 0 }), /threshold/);
+});
+
 test('doorway crossing sweeps a bounded oriented aperture and maps poses and velocity', () => {
   const door = portals.doorway({ from: a, to: b, ...aperture });
   const reverse = portals.doorway({ from: b, to: a, ...aperture });
@@ -498,6 +522,45 @@ function browserProbe(createRenderer, createTransitionComposer, defineTransition
     dominant(foreground, 22, 32, 2, 'source fragment behind the portal leaves the opening visible');
     dominant(foreground, 42, 32, 1, 'source fragment in front of the portal occludes it');
   }
+
+  const painted = (from, to, half, width, height, bits) => KIT.world.portals.doorway({
+    from, to, halfWidth: half, halfHeight: half,
+    mask: { width, height, channels: 1, data: bits.map(bit => bit * 255) }
+  });
+  const outer = painted(from, opposite, 1, 4, 4, [
+    0, 1, 1, 0, 1, 1, 0, 1, 1, 1, 1, 1, 1, 1, 1, 0
+  ]);
+  const inner = painted({ ...from, origin: [0, 0, -2] }, opposite, .86, 3, 3, [
+    0, 1, 1, 1, 1, 1, 0, 0, 1
+  ]);
+  const middle = makeBuilder(3, [0x2040ff, 0xffa028]);
+  middle.disc(0, 0, .6, [0, 0, 1], .26, .02, middle.P[1], 1);
+  middle.disc(-.31, 0, -1, [0, 0, 1], .12, .02, middle.P[1], 1);
+  const garden = middle.finish(), far = makeBuilder(4, [0x20ff40]).finish();
+  const nested = { source: garden, destination: far, opening: inner,
+    destinationFrame: { portal: { source: far, destination: red, opening: apertureAt({ ...from, origin: [0, 0, -1] }, opposite) } } };
+  function nestedFrame(portal, world = red, frame = {}) {
+    renderer.render(world, { width: size, height: size, raw: true, ...frame,
+      portal: { source: world, opening: outer, destination: garden, destinationFrame: { portal } } });
+    return read();
+  }
+  const through = nestedFrame(nested);
+  dominant(through, 32, 32, 1, 'the inner view survives geometry before the arrival and stops at depth two');
+  dominant(through, 31, 41, 1, 'top-down mask rows in the inner view');
+  dominant(through, 31, 23, 2, 'the inner mask retains the garden outside its torn edge');
+  dominant(through, 40, 40, 0, 'the outer mask clips an otherwise open inner view');
+  const orange = through(26, 32);
+  if (orange[0] < 220 || orange[1] < 110 || orange[2] > 90)
+    throw new Error('geometry between the two planes must occlude the inner view: ' + orange.join(','));
+  dominant(nestedFrame({ ...nested, opening: apertureAt({ ...from, origin: [0, 0, .55] }, opposite) }),
+    32, 32, 2, 'a nested opening before the arrival plane is clipped');
+  const spriteAtlas = SpriteSurface.make(8);
+  spriteAtlas.face([-.35, -.22, .4], [.70, 0, 0], [0, .44, 0], 3, 1, x => x === 1 ? undefined : 0xff50d7);
+  const lantern = makeBuilder(5, [0xff2020]).finish({ cam, spriteSurfaces: spriteAtlas.finish() });
+  const spriteFront = nestedFrame(nested, lantern);
+  if (spriteFront(39, 32)[2] < 180 || spriteFront(39, 32)[0] < 200)
+    throw new Error('opaque sprite surface texels must occlude a painted opening');
+  dominant(spriteFront, 32, 32, 1, 'transparent sprite pixels still show both portals');
 
   const rolled = apertureAt({ origin: [0, 0, 0], normal: [0.4, -0.25, 1], up: [-1, 0.35, 0.2] },
     { origin: [12, 8, -9], normal: [0.2, 1, -0.4], up: [0.3, 0.4, 1] }, 0.95, 0.38);

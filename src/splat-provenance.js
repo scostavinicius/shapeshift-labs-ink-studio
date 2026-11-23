@@ -2,12 +2,18 @@
 const SplatProvenance = (() => {
   const tables = [['objectIds', 'objects'], ['materialIds', 'materials'], ['targetIds', 'targets']];
   const channels = [['normals', 3, Float32Array], ['muteEmission', 1, Uint8Array]];
+  const curveLod = (records, indexAt) => records?.length ?
+    (typeof CurveLod === 'undefined' ? require('./curve-lod.js') : CurveLod).remap(records, indexAt) : [];
   const perSplat = [['data', 16, Float32Array], ['attr', 4, Float32Array], ['fine', 12, Float32Array],
     ['pix', 8, Float32Array], ['surfaceData', 8, Float32Array], ['materialAlbedo', 1, Uint32Array],
-    ['opticalSplats', 12, Float32Array], ['materialPixelStyles', 4, Float32Array], ['shadowLod', 6, Float32Array]];
+    ['opticalSplats', 12, Float32Array], ['curveClips', 12, Float32Array], ['curveMaterials', 4, Float32Array],
+    ['curveLighting', 7, Float32Array], ['curveTiming', 8, Float64Array], ['curvePattern', 16, Float64Array], ['curveShadows', 1, Uint8Array],
+    ['curveStations', 7, Float64Array], ['curveRest',16,Float32Array], ['curveShadowOptics', 1, Float32Array], ['materialPixelStyles', 4, Float32Array],
+    ['shadowLod', 6, Float32Array]];
   function targetKey(target) {
     const labels = [target.entity, target.surface, target.prefabs, target.tags, target.medium, target.mediumKind];
-    if (target.mark !== undefined || target.markLayer !== undefined) labels.push(target.mark, target.markLayer);
+    if (target.mark !== undefined || target.markLayer !== undefined || target.part !== undefined) labels.push(target.mark, target.markLayer);
+    if (target.part !== undefined) labels.push(target.part);
     return JSON.stringify(labels);
   }
 
@@ -82,6 +88,7 @@ const SplatProvenance = (() => {
       throw new RangeError('Joined splat chunks must share a palette');
     const count = parts.reduce((n, part) => n + part.count, 0);
     const result = { ...meta, ...(pal && { pal }), count };
+    if (parts.some(part => part.curveSplats)) result.curveSplats = true;
     const footprintAPI = typeof SplatFootprints === 'undefined' ? require('./splat-footprints.js') : SplatFootprints;
     const footprints = footprintAPI.join(parts);
     if (footprints) result.splatFootprints = footprints;
@@ -100,8 +107,26 @@ const SplatProvenance = (() => {
     const moving = [], back = [], splatIds = [], surfaces = [], ramps = [], rampOff = [], pats = [], paintRows = [], paintDecals = [];
     const withIds = parts.some(part => part.splatIds ?? part.ids);
     const rampIds = new Map(), patternIds = new Map();
-    let offset = 0;
+    let offset = 0, curveGroups = 0;
+    const curvePrograms = [
+      ['curveTiming', 'curveTimePrograms', 8, []],
+      ['curvePattern', 'curvePatternPrograms', 16, []],
+      ['curveStations', 'curveStrands', 7, []]
+    ];
+    const curveDetail = [];
+    const curveAPI = result.curveSplats && (typeof CurveSplat === 'undefined' ? require('./curve-splat.js') : CurveSplat);
     for (const part of parts) {
+      if (part.curveLod) curveDetail.push(...curveLod(part.curveLod, i => offset + i));
+      if (curveAPI && part.curveSplats) curveAPI.joinGroups(result.data, offset, part.count, () => ++curveGroups);
+      for (const [rows, name, stride, programs] of curvePrograms) {
+        if (!part[rows]?.length || !part[name]?.length) continue;
+        const first = programs.length;
+        for (const program of part[name]) programs.push(program);
+        for (let i = 0; i < part.count; i++) {
+          const row = (offset + i) * stride;
+          if (result[rows][row]) result[rows][row] += first;
+        }
+      }
       const base = surfaces.length;
       for (const surface of part.surfaces ?? []) surfaces.push(surface);
       const remapRamps = part.ramps?.map((ramp, i) => {
@@ -134,6 +159,8 @@ const SplatProvenance = (() => {
       for (const row of part.paintCorrections?.rows ?? []) paintRows.push({ ...row, index: offset + row.index });
       offset += part.count;
     }
+    for (const [, name, , programs] of curvePrograms) if (programs.length) result[name] = programs;
+    if (curveDetail.length) result.curveLod = curveDetail;
     if (result.surfaceData) result.surfaces = surfaces;
     if (result.pix) Object.assign(result, { ramps, rampOff, pats });
     if (withIds) result.splatIds = Object.freeze(splatIds);
@@ -153,9 +180,12 @@ const SplatProvenance = (() => {
       result.splatFootprints = api.subset(world,indices);
     }
     if(world.engraving){const api=typeof Engraving==='undefined'?require('./engraving.js'):Engraving;result.engraving=api.subset(world,indices);}
-    if (result.renderSdfs && (indices.length !== world.count || indices.some((index,i)=>index !== i)))
+    if ((result.renderSdfs || result.referenceSdfs) && (indices.length !== world.count || indices.some((index,i)=>index !== i))) {
       delete result.renderSdfs;
+      delete result.referenceSdfs;
+    }
     const remap = new Map(indices.map((source, i) => [source, i]));
+    if (world.curveLod) result.curveLod = curveLod(world.curveLod, i => remap.get(i));
     function take(source, stride, Type) {
       const out = new Type(indices.length * stride);
       for (let i = 0; i < indices.length; i++) out.set(source.subarray(indices[i] * stride, (indices[i] + 1) * stride), i * stride);

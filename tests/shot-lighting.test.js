@@ -134,6 +134,7 @@ try {
   if (changes(base, lit, 0) < 20 || changes(base, lit, 1)) throw Error('Key spilled outside face');
   const wall = changes(base, dark, 1), face = changes(base, dark, 0);
   if (wall < 20 || face) throw Error('Negative fill changed ' + wall + ' wall pixels and ' + face + ' face pixels');
+  if (changes(base, draw({ exposureEV: 1 }), 1) < 20) throw Error('Surface exposure failed to reach the wall');
   if (String(draw(false)) !== String(base)) throw Error('Disabling the rig left a light active');
   renderer.dispose();
   result.textContent = 'PASS';
@@ -144,4 +145,72 @@ try {
     '--user-data-dir=' + path.join(dir, 'profile'), '--dump-dom', pathToFileURL(page).href],
   { encoding: 'utf8', timeout: 60000, stdio: ['ignore', 'pipe', 'ignore'] });
   assert.match(html, /<pre id="result">PASS<\/pre>/, html.match(/<pre[^>]*>([\s\S]*?)<\/pre>/)?.[1] || html);
+});
+
+test('surface exposure scales linear light and preserves geometry', () => {
+  const world = plates(makeBuilder, makeSculpt, K);
+  const view = { w: 64, h: 48, px: 1, raw: true, passes: ['objectId', 'depth'] };
+  const before = ink.render(world, view);
+  const exposed = ink.render(world, { ...view, shotLighting: { exposureEV: 1 } });
+  const identity = ink.render(world, { ...view, shotLighting: { exposureEV: 0 } });
+  assert.deepEqual(identity.rgb, before.rgb);
+  assert.deepEqual(exposed.passes.depth, before.passes.depth);
+  assert(scope(before, exposed, 'wall', 0).some(change => change > 12));
+  assert.throws(() => K.shotLighting.prepare({ exposureEV: 5 }), /exposure/);
+});
+
+test('painted targets improve under a bounded fit and the ordinary rig reproduces the fitted render', () => {
+  const world = plates(makeBuilder, makeSculpt, K);
+  const grid = [64, 48], view = { w: grid[0], h: grid[1], px: 1, raw: true, t: 0 };
+  const start = { key, fill };
+  const { image, plan } = require('../cli/shot-light-fit.js').capture(world, { frame: { grid, time: 0 }, rig: start });
+  const targetFrame = ink.render(world, { ...view, shotLighting: {
+    key: { ...key, at: [.35, .9, 1.45], size: [.65, .975] }, fill: { ...fill, intensity: 4 }, exposureEV: .55
+  } });
+  const spansAt = (x, y) => [[y, x, 4], [y + 1, x, 4]];
+  const makeRegion = (id, spans) => {
+    const offsets = spans.flatMap(([y, x, count]) => Array.from({ length: count }, (_, i) => (y * grid[0] + x + i) * 3));
+    const hex = [0, 1, 2].map(c => Math.round(offsets.reduce((sum, i) => sum + targetFrame.rgb[i + c], 0) /
+      offsets.length).toString(16).padStart(2, '0')).join('');
+    return { id, color: '#' + hex, spans };
+  };
+  plan.regions = [makeRegion('edge', spansAt(18, 26)), makeRegion('face', spansAt(24, 19)), makeRegion('wall', spansAt(37, 25))];
+  const result = ink.fitShotLighting(world, { plan, rig: start, evaluations: 28 });
+  const total = field => result.report.regions.reduce((sum, region) => sum + region[field] ** 2, 0);
+  assert(total('afterError') < total('beforeError') / 4, JSON.stringify(result.report.regions));
+  assert(result.report.work.evaluations <= 28);
+  assert.deepEqual(result.before.rgb, image.rgb);
+  assert.deepEqual(result.after.rgb, ink.render(world, { ...view, shotLighting: JSON.parse(JSON.stringify(result.rig)) }).rgb);
+  assert.deepEqual(result.rig.key.receive, key.receive);
+  assert.throws(() => ink.fitShotLighting(world, { plan, rig: start, view: { yaw: .5 }, evaluations: 1 }), /painted frame does not match/);
+  assert.throws(() => ink.fitShotLighting(world, { rig: start, plan: { ...plan, regions: [plan.regions[0],
+    { ...plan.regions[0], id: 'overlap' }] } }), /overlap/);
+});
+
+test('painted lighting CLI writes a source-bound painter and a portable fitted preview', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ink-painted-light-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const spec = { id: 'light-paint', style: 'slate', camera: { target: [0, .25, 0], yaw: 0, pitch: .06, dist: 4 },
+    finish: { shotLighting: { key, fill } },
+    solids: [{ id: 'wall', kind: 'box', at: [0, .25, 0], half: [1, .4, .1], mat: 'stone' }] };
+  fs.writeFileSync(path.join(dir, 'scene.json'), JSON.stringify(spec));
+  const run = (...args) => execFileSync(process.execPath, [cli, ...args], { cwd: dir, encoding: 'utf8' });
+  run('shot', 'light-paint', 'scene.json', '--w', '48', '--h', '36', '--out', 'paint.html');
+  const page = fs.readFileSync(path.join(dir, 'paint.html'), 'utf8');
+  const { plan } = JSON.parse(page.match(/^const data = (.*);$/m)[1]);
+  assert.match(plan.sourceSha256, /^[\da-f]{64}$/);
+  plan.regions = [{ id: 'wall', color: '#656c77', spans: [[18, 18, 5]] }];
+  fs.writeFileSync(path.join(dir, 'targets.json'), JSON.stringify({ ...plan, sourceSha256: undefined }));
+  run('shot', 'light-fit', 'scene.json', '--targets', 'targets.json', '--out', 'fit', '--evaluations', '1', '--interactive');
+  const fit = JSON.parse(fs.readFileSync(path.join(dir, 'fit/fit.json')));
+  assert.equal(fit.sourceSha256, plan.sourceSha256);
+  assert.deepEqual(fit.grid, [48, 36]);
+  const fitted = fs.readFileSync(path.join(dir, 'fit/index.html'), 'utf8');
+  assert.match(fitted, /Download fitted rig/);
+  const fittedData = JSON.parse(fitted.match(/^const data = (.*);$/m)[1]);
+  assert.equal(fittedData.plan.sourceSha256, fit.sourceSha256);
+  const { candidates } = fittedData;
+  assert.equal(candidates.length, 1);
+  assert.match(candidates[0].image, /^data:image\/png;base64,/);
+  assert.deepEqual(candidates[0].rig, JSON.parse(fs.readFileSync(path.join(dir, 'fit/rig.json'))));
 });

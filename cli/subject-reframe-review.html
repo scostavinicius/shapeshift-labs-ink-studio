@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Subject reframing · Ink Studio</title>
+<style>
+:root { color-scheme:dark; font:15px/1.5 system-ui,sans-serif; color:#efedf2; background:#10131b; --muted:#b5bacb; --line:#333949; --accent:#ffd495; }
+* { box-sizing:border-box; }
+body { margin:0; }
+main { width:min(1200px, 100% - 56px); margin:38px auto; }
+h1 { font-size:clamp(36px,5.4vw,72px); letter-spacing:-.06em; line-height:1; margin:6px 0 14px; font-weight:680; }
+h2,p { margin:0; }
+.subhead,.panel-meta,.notice { color:var(--muted); }
+.product { color:var(--accent); font-size:.79rem; font-weight:700; letter-spacing:.13em; text-transform:uppercase; }
+.toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:10px 18px; margin:24px 0 12px; }
+.formats { display:flex; flex-wrap:wrap; gap:6px; margin-right:auto; }
+button { font:inherit; color:inherit; background:#242938; border:1px solid var(--line); border-radius:7px; padding:7px 12px; cursor:pointer; }
+button[aria-pressed=true] { color:#18151b; background:var(--accent); border-color:var(--accent); font-weight:650; }
+button:hover { border-color:var(--accent); }
+input { accent-color:var(--accent); }
+:focus-visible { outline:2px solid #8ce5ec; outline-offset:3px; }
+label { display:inline-flex; align-items:center; gap:6px; color:var(--muted); white-space:nowrap; }
+.stage { display:grid; grid-template-columns:minmax(0,1.38fr) minmax(0,1fr); gap:12px; }
+.panel { min-width:0; display:grid; grid-template:auto 1fr / minmax(0,1fr); border:1px solid var(--line); border-radius:12px; overflow:hidden; background:#1b202d; }
+.panel-heading { display:flex; justify-content:space-between; gap:8px; padding:11px 14px; align-items:baseline; }
+.panel-heading h2 { font-size:.91rem; }
+.panel-meta { font: .76rem ui-monospace,monospace; text-align:right; }
+.well { background:#090c13; display:grid; grid-template-columns:minmax(0,1fr); place-items:center; min-height:360px; padding:12px; }
+.source { position:relative; width:100%; overflow:hidden; }
+.source img { display:block; width:100%; height:100%; object-fit:fill; image-rendering:pixelated; }
+.overlay { position:absolute; inset:0; pointer-events:none; }
+.crop,.safe,.target { position:absolute; width:0; height:0; }
+.crop { border:2px solid #ffdc9e; box-shadow:0 0 0 1200px #080b16a2,inset 0 0 8px #090b16b3; }
+.safe { border:1px dashed #fff5d9; }
+.target { border:1px solid var(--target); box-shadow:0 0 0 1px #0b1019b5; }
+.delivery { position:relative; max-width:100%; }
+.delivery canvas { display:block; width:100%; image-rendering:pixelated; }
+.delivery .safe { border-color:#fff5d9ba; }
+.transport { display:grid; grid-template-columns:auto minmax(80px,1fr) auto; gap:12px; align-items:center; margin:12px 0 6px; }
+.transport button { min-width:80px; }
+.transport input { width:100%; margin:0; min-width:0; }
+.transport output { font: .83rem ui-monospace,monospace; color:var(--muted); min-width:12ch; text-align:right; }
+.legend { display:flex; align-items:center; gap:8px 16px; flex-wrap:wrap; color:var(--muted); margin:8px 0 11px; font-size:.85rem; }
+.legend span { display:inline-flex; gap:6px; align-items:center; }
+.legend i { display:inline-block; width:9px; height:9px; border:1px solid var(--target); }
+.legend .safe-key { border:1px dashed #fff5d9; }
+.result { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:10px; border-top:1px solid var(--line); padding-top:13px; }
+.summary { font-weight:650; }
+.notice { font-size:.88rem; }
+[data-warning=true] { color:#ffb5a2; }
+[hidden] { display:none !important; }
+@media (max-width:740px) {
+  main { width:calc(100% - 28px); margin:24px auto; }
+  .stage { grid-template-columns:minmax(0,1fr); }
+  .toolbar { margin-top:17px; gap:8px 12px; }
+  .well { min-height:0; padding:9px; }
+  .delivery { max-width:100%; }
+  .formats { width:100%; }
+}
+</style>
+</head>
+<body>
+<main>
+  <div class="product">Ink Studio · Shot reframing</div>
+  <h1 id="title"></h1>
+  <p class="subhead">Play the shot, switch formats, or compare against a fixed center crop.</p>
+
+  <div class="toolbar">
+    <div class="formats" id="formats" role="group" aria-label="Delivery format"></div>
+    <label><input type="checkbox" id="center"> Fixed center crop</label>
+    <label><input type="checkbox" id="guides" checked> Show guides</label>
+  </div>
+
+  <div class="stage">
+    <section class="panel" aria-labelledby="source-title">
+      <div class="panel-heading"><h2 id="source-title">Source shot</h2><span id="source-size" class="panel-meta"></span></div>
+      <div class="well">
+        <div class="source" id="source">
+          <img alt="Full source shot with delivery crop and subject bounds">
+          <div class="overlay" aria-hidden="true"><div class="crop"></div><div class="safe"></div></div>
+        </div>
+      </div>
+    </section>
+    <section class="panel" aria-labelledby="output-title">
+      <div class="panel-heading"><h2 id="output-title">Delivery preview</h2><span id="delivery-size" class="panel-meta"></span></div>
+      <div class="well">
+        <div class="delivery" id="delivery">
+          <canvas role="img" aria-label="Reframed delivery preview"></canvas>
+          <div class="safe" aria-hidden="true"></div>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <div class="transport">
+    <button id="play" type="button">Play</button>
+    <input id="seek" aria-label="Shot frame" type="range" min="0" step="1">
+    <output id="time" for="seek"></output>
+  </div>
+  <div class="legend" id="legend"><span><i class="safe-key"></i> Safe area</span></div>
+  <div class="result">
+    <div>
+      <p class="summary" id="summary"></p>
+      <p class="notice" id="notice"></p>
+    </div>
+    <button id="download" type="button">Download crop paths</button>
+  </div>
+</main>
+<script type="application/json" id="reframe-data">/*REFRAME_DATA*/</script>
+<script>
+const get = id => document.getElementById(id);
+const { solution, pictures } = JSON.parse(get('reframe-data').textContent);
+const { width, height, frames, fps } = solution.source;
+const seek = get('seek'), play = get('play'), center = get('center'), guides = get('guides');
+const source = get('source'), sourceImage = source.querySelector('img'), overlay = source.querySelector('.overlay');
+const cropGuide = overlay.querySelector('.crop'), safeGuide = overlay.querySelector('.safe');
+const delivery = get('delivery'), canvas = delivery.querySelector('canvas'), safeOutput = delivery.querySelector('.safe');
+const context = canvas.getContext('2d');
+const colors = ['#89f4d2', '#9cc9ff', '#ffc482', '#f6a9f4', '#c5f19d', '#ffab9f', '#cbc5ff', '#e2e4ec'];
+const names = new Map(solution.subjects.map(subject => [subject.id, subject.label]));
+const boxes = solution.subjects.map((target, i) => {
+  const node = document.createElement('div');
+  node.className = 'target';
+  node.style.setProperty('--target', colors[i]);
+  overlay.append(node);
+  const legend = document.createElement('span'), swatch = document.createElement('i');
+  swatch.style.setProperty('--target', colors[i]);
+  legend.append(swatch, document.createTextNode(target.label));
+  get('legend').append(legend);
+  return node;
+});
+const images = pictures.map(picture => {
+  const image = new Image();
+  image.src = picture;
+  return image;
+});
+let selected = 0, current = 0, timer = 0;
+const buttons = solution.formats.map((item, i) => {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = item.label;
+  button.addEventListener('click', () => { selected = i; draw(); });
+  get('formats').append(button);
+  return button;
+});
+
+function place(node, [x, y, w, h], frameW, frameH) {
+  node.style.left = (100 * x / frameW) + '%';
+  node.style.top = (100 * y / frameH) + '%';
+  node.style.width = (100 * w / frameW) + '%';
+  node.style.height = (100 * h / frameH) + '%';
+}
+
+function draw() {
+  const profile = solution.formats[selected], fixed = center.checked, key = profile.keyframes[current];
+  const sample = solution.samples[current], crop = fixed ? profile.centerCrop : key.crop;
+  const [x, y, w, h] = crop, [left, top, right, bottom] = profile.safeArea;
+  const box = [left, top, right - left, bottom - top];
+  buttons.forEach((button, i) => button.setAttribute('aria-pressed', i === selected));
+  get('delivery-size').textContent = profile.width + ' × ' + profile.height;
+  delivery.style.width = Math.min(620, 336 * profile.width / profile.height) + 'px';
+  if (canvas.width !== profile.width) canvas.width = profile.width;
+  if (canvas.height !== profile.height) canvas.height = profile.height;
+  const image = images[current];
+  function paint() {
+    if (images[current] !== image || !image.naturalWidth) return;
+    sourceImage.src = image.src;
+    context.imageSmoothingEnabled = false;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    context.drawImage(image, x, y, w, h, 0, 0, canvas.width, canvas.height);
+  }
+  if (image.complete) paint();
+  else image.onload = paint;
+  overlay.hidden = safeOutput.hidden = !guides.checked;
+  place(cropGuide, crop, width, height);
+  place(safeGuide, [x + box[0] * w, y + box[1] * h, box[2] * w, box[3] * h], width, height);
+  place(safeOutput, box, 1, 1);
+  sample.targets.forEach(({ box }, i) => {
+    boxes[i].hidden = !box;
+    if (box) place(boxes[i], [box[0], box[1], box[2] - box[0], box[3] - box[1]], width, height);
+  });
+  seek.value = current;
+  get('time').value = sample.time.toFixed(2) + ' s · ' + (current + 1) + '/' + frames;
+  const safeCount = fixed ? profile.centerSafeFrames : profile.safeFrames;
+  const otherCount = fixed ? profile.safeFrames : profile.centerSafeFrames;
+  get('summary').textContent = safeCount + '/' + frames + ' safe frames · ' + otherCount + '/' + frames + ' with ' +
+    (fixed ? 'subject tracking' : 'a fixed center crop');
+  const outside = fixed ? key.centerOutside : key.outside;
+  const warnings = [['Outside safe area', outside], ['Missing from source', key.missing], ['At source edge', key.sourceEdge]]
+    .filter(([, subjects]) => subjects.length).map(([text, subjects]) => text + ' · ' + subjects.map(id => names.get(id)).join(', '));
+  const notice = get('notice');
+  notice.dataset.warning = Boolean(warnings.length);
+  notice.textContent = warnings.length ? warnings.join(' / ') : 'All tracked subjects are inside the safe area.';
+}
+
+function pause() {
+  clearInterval(timer);
+  timer = 0;
+  play.textContent = 'Play';
+}
+play.addEventListener('click', () => {
+  if (timer) return pause();
+  play.textContent = 'Pause';
+  const start = performance.now(), frame = current;
+  timer = setInterval(() => {
+    const next = (frame + Math.floor((performance.now() - start) * fps / 1000)) % frames;
+    if (next !== current) { current = next; draw(); }
+  }, 1000 / (fps * 2));
+});
+seek.addEventListener('input', () => { pause(); current = Number(seek.value); draw(); });
+center.addEventListener('change', draw);
+guides.addEventListener('change', draw);
+get('download').addEventListener('click', () => {
+  const anchor = document.createElement('a');
+  anchor.href = URL.createObjectURL(new Blob([JSON.stringify(solution, null, 2) + '\n'], { type: 'application/json' }));
+  anchor.download = 'paths.json';
+  anchor.click();
+  setTimeout(() => URL.revokeObjectURL(anchor.href), 1000);
+});
+get('title').textContent = solution.title;
+document.title = solution.title + ' · Ink Studio';
+get('source-size').textContent = width + ' × ' + height + ' · ' + fps + ' fps';
+source.style.aspectRatio = width + ' / ' + height;
+seek.max = frames - 1;
+draw();
+</script>
+</body>
+</html>

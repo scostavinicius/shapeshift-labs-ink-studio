@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Breakwater Warden · Ink Studio</title>
+<style>
+  :root{color-scheme:dark;--bg:#12202a;--ink:#f5ebdb;--muted:#b8c9cc;--edge:#3d545c;--panel:#1a2a34;--mint:#9adeca;--amber:#ffc580}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.45 system-ui,sans-serif}
+  main{max-width:1090px;margin:auto;padding:clamp(15px,4vw,43px)}
+  header{margin-bottom:16px;display:flex;justify-content:space-between;align-items:end;gap:10px 17px;flex-wrap:wrap}
+  h1{margin:0 0 8px;font:500 clamp(2.3rem,7vw,4.25rem)/.96 Georgia,serif;letter-spacing:-.047em}
+  p{margin:0;color:var(--muted)}
+  .toolbar,.edit{display:flex;align-items:center;gap:8px 13px;flex-wrap:wrap;margin-bottom:12px}
+  label{display:inline-flex;align-items:center;gap:7px;color:var(--muted)}
+  :is(button,select,a){font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--edge);border-radius:5px;padding:6px 10px}
+  button,a,select{cursor:pointer}
+  a{text-decoration:none}
+  button:hover,a:hover,[aria-pressed=true]{border-color:var(--mint);color:var(--mint)}
+  :focus-visible{outline:2px solid var(--amber);outline-offset:2px}
+  :is(button,input,select):disabled{opacity:.55;cursor:default}
+  input[type=range]{accent-color:var(--mint);width:clamp(104px,19vw,240px);margin:0}
+  output,.measure{color:var(--muted);font:600 .78rem/1.48 ui-monospace,monospace;font-variant-numeric:tabular-nums}
+  output{color:var(--mint);min-width:4ch}
+  #panels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:11px}
+  figure{min-width:0;margin:0;border:1px solid var(--edge);overflow:hidden;border-radius:7px;background:var(--panel)}
+  figure+figure{border-color:#679487}
+  figcaption,.measure{padding:8px 11px}
+  figure+figure figcaption{color:var(--mint)}
+  .stage{position:relative}
+  canvas{display:block;width:100%;height:auto;image-rendering:pixelated}
+  #markers{position:absolute;inset:0;pointer-events:none}
+  .edit{margin-top:14px}
+  .edit input{width:min(137px,31vw)}
+  .measure{min-height:4.2em}
+  #status{margin-top:10px}
+  @media(max-width:650px){#panels{grid-template-columns:1fr}.measure{min-height:0}header{align-items:start}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div><h1>Breakwater Warden</h1><p>Orbit the rig or edit either viewing sector. Guides show the elbows, feet, and staff grips.</p></div>
+  <a id="export" download="breakwater-warden-view-poses.json" hidden>Download corrections</a>
+</header>
+<div class="toolbar">
+  <button id="orbit" disabled>Orbit</button>
+  <label for="yaw">Camera <input id="yaw" type="range" min="-180" max="180" step=".5" value="-42" disabled></label>
+  <output id="angle" for="yaw"></output>
+  <button id="guides" aria-pressed="true" disabled>Contact guides</button>
+</div>
+<section id="panels" aria-label="The same pose from the same camera">
+  <figure>
+    <figcaption>Source pose</figcaption>
+    <div class="stage"><canvas id="source" width="218" height="174" aria-label="Uncorrected Breakwater Warden"></canvas></div>
+    <div class="measure" id="base"></div>
+  </figure>
+  <figure>
+    <figcaption>View-corrected pose</figcaption>
+    <div class="stage"><canvas id="corrected" width="218" height="174" aria-label="View-corrected Breakwater Warden"></canvas>
+      <canvas id="markers" width="218" height="174" aria-hidden="true"></canvas></div>
+    <div class="measure" id="report"></div>
+  </figure>
+</section>
+<div class="edit">
+  <label for="sector">Edit sector <select id="sector" disabled></select></label>
+  <label for="elbow">Left elbow turn <input id="elbow" type="range" min="-100" max="100" step="1" disabled></label>
+  <output id="bend" for="elbow"></output>
+  <label for="staff">Staff lift <input id="staff" type="range" min="-.26" max=".38" step=".005" disabled></label>
+  <output id="lift" for="staff"></output>
+</div>
+<p id="status" role="status">Preparing the rig…</p>
+</main>
+<script src="../../dist/ink-studio.browser.js"></script>
+<script src="breakwater-warden.js"></script>
+<script type="module" src="demo.mjs"></script>
+</body>
+</html>

@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Painted shot lighting · Ink Studio</title>
+<style>
+  :root { color-scheme: dark; --bg: #151716; --panel: #1d201e; --line: #383e37; --ink: #eef0e7; --muted: #b9bfb2; --accent: #dcf787; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 15px/1.45 system-ui, sans-serif; }
+  main { max-width: 1190px; margin: auto; padding: 38px clamp(16px, 4vw, 50px) 48px; }
+  header { display: flex; justify-content: space-between; align-items: flex-end; flex-wrap: wrap; gap: 16px; margin-bottom: 28px; }
+  .app { color: var(--muted); font: 12px ui-monospace, monospace; letter-spacing: .07em; }
+  h1 { margin: 6px 0 0; font-size: clamp(28px, 5vw, 45px); line-height: 1.15; letter-spacing: -.045em; }
+  h2 { margin: 0; font-size: 15px; font-weight: 650; }
+  button, label.toggle { border: 1px solid var(--line); background: #262b26; color: var(--ink); padding: 7px 11px; border-radius: 6px; font: inherit; cursor: pointer; }
+  button:hover, label.toggle:hover { border-color: #8a987d; }
+  button:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  button[aria-pressed="true"] { background: #394632; border-color: #758468; }
+  button:disabled { opacity: .48; cursor: default; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #202619; font-weight: 650; }
+  .controls { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; }
+  .frames { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
+  .card { min-width: 0; margin: 0; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  .caption { min-height: 51px; padding: 8px 13px; display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+  .caption button, .caption label { font-size: 12px; }
+  .art { background: #0b0d0b; }
+  canvas, .art img { display: block; width: 100%; image-rendering: pixelated; }
+  canvas { touch-action: none; cursor: crosshair; }
+  .regions { display: grid; gap: 8px; margin-top: 14px; }
+  .region { min-width: 0; display: grid; grid-template-columns: minmax(130px, 1fr) 75px minmax(80px, 1.2fr); align-items: center; gap: 12px; border-radius: 7px; border: 1px solid var(--line); padding: 6px 11px; background: var(--panel); }
+  .pick { display: flex; align-items: center; gap: 8px; min-width: 0; }
+  .region:has(input:checked) { border-color: #91a17d; }
+  input[type="radio"], input[type="checkbox"] { accent-color: var(--accent); }
+  input[type="color"] { margin: 0; background: none; border: 0; padding: 0; width: 48px; height: 28px; cursor: pointer; }
+  .sample { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .swatch { width: 13px; height: 13px; border: 1px solid #ffffff44; border-radius: 3px; }
+  .metrics, .hint, .meta { color: var(--muted); }
+  .hint { margin: 12px 0 0; }
+  .meta { font: 12px ui-monospace, monospace; }
+  .tools { margin-top: 14px; justify-content: space-between; }
+  [hidden] { display: none !important; }
+  @media (max-width: 660px) { main { padding-top: 22px; } .frames { grid-template-columns: 1fr; } .region { gap: 6px; grid-template-columns: 1fr 49px 1fr; } header { margin-bottom: 17px; } }
+</style>
+<main>
+  <header>
+    <div><div class="app">Ink Studio</div><h1>Painted shot lighting</h1></div>
+    <div class="controls" aria-label="Downloads">
+      <button id="fit-paint" class="primary" hidden>Fit paint</button>
+      <button id="save-targets" disabled>Download targets</button>
+      <button id="save-rig" hidden>Download fitted rig</button>
+    </div>
+  </header>
+  <div class="frames">
+    <section class="card">
+      <div class="caption"><h2>Paint targets</h2><label class="toggle"><input id="overlay" type="checkbox" checked> Show paint</label></div>
+      <div class="art"><canvas id="paint" tabindex="0" aria-label="Paint on the starting frame. Arrow keys move the brush and Space paints."></canvas></div>
+    </section>
+    <section class="card" id="comparison" hidden>
+      <div class="caption"><h2 id="view-label">Fitted frame</h2><div class="controls" aria-label="Comparison frame"><button id="before" aria-pressed="false">Before</button><button id="after" aria-pressed="true">Fitted</button></div></div>
+      <div class="art"><img id="result" alt="Fitted lighting on the original scene"></div>
+    </section>
+  </div>
+  <div class="controls tools">
+    <div class="controls"><button id="erase" aria-pressed="false">Erase</button><button id="undo" disabled>Undo</button><button id="reset">Reset paint</button></div>
+    <span class="meta" id="frame-meta"></span>
+  </div>
+  <div id="regions" class="regions" role="group" aria-label="Paint regions"></div>
+  <p class="hint" id="hint">Choose a target color, then drag over the part of the frame you want to match. Download the targets to fit them with <code>ink-studio shot light-fit</code>.</p>
+  <p class="hint" id="status" role="status"></p>
+</main>
+<script>
+'use strict';
+/*COLOR_SPACE*/
+const data = /*WORKSHOP_DATA*/;
+const get = id => document.getElementById(id);
+const [width, height] = data.plan.grid;
+const canvas = get('paint');
+canvas.width = width;
+canvas.height = height;
+const context = canvas.getContext('2d');
+const overlay = new ImageData(width, height), owners = new Uint8Array(width * height);
+const source = new Image();
+const originals = data.plan.regions;
+const regions = (originals.length ? originals : [
+  { id: 'key-region', color: '#dd9771' }, { id: 'fill-region', color: '#706a87' }, { id: 'anchor-region', color: '#45586e' }
+]).map(region => ({ ...region }));
+const initialColors = regions.map(region => region.color);
+const fitted = new Map((data.regions || []).map(region => [region.id, region]));
+const history = [];
+const samples = [], fittedSwatches = [];
+let active = 0, pointer = null, last = null, keyboard = null, ready = false, working = false;
+const title = id => id.replaceAll('-', ' ').replace(/^./, c => c.toUpperCase());
+const rgb = hex => hex.slice(1).match(/../g).map(channel => parseInt(channel, 16));
+
+function restoreMask() {
+  owners.fill(0);
+  originals.forEach(({ spans }, index) => {
+    for (const [y, x, length] of spans) owners.fill(index + 1, y * width + x, y * width + x + length);
+  });
+}
+
+function redraw() {
+  if (!ready) return;
+  context.drawImage(source, 0, 0);
+  if (get('overlay').checked) {
+    const colors = regions.map(region => rgb(region.color));
+    overlay.data.fill(0);
+    for (let i = 0; i < owners.length; i++) {
+      if (!owners[i]) continue;
+      overlay.data.set([...colors[owners[i] - 1], owners[i] === active + 1 ? 200 : 150], i * 4);
+    }
+    paintContext.putImageData(overlay, 0, 0);
+    context.drawImage(paintLayer, 0, 0);
+  }
+  if (keyboard) {
+    context.strokeStyle = '#fff';
+    context.strokeRect(keyboard[0] - 2.5, keyboard[1] - 2.5, 6, 6);
+  }
+}
+
+const paintLayer = document.createElement('canvas');
+paintLayer.width = width;
+paintLayer.height = height;
+const paintContext = paintLayer.getContext('2d');
+
+function updateCounts() {
+  const counts = Array(regions.length).fill(0);
+  for (const owner of owners) if (owner) counts[owner - 1]++;
+  samples.forEach((sample, index) => { sample.textContent = counts[index] + (counts[index] === 1 ? ' pixel' : ' pixels'); });
+  const empty = !counts.some(Boolean);
+  get('save-targets').disabled = empty;
+  get('fit-paint').disabled = empty || working;
+  get('undo').disabled = working || history.length === 0;
+  get('reset').disabled = working;
+  regions.forEach((_, index) => { get('color-' + index).disabled = working; });
+}
+
+function remember() {
+  if (history.length === 20) history.shift();
+  history.push({ owners: owners.slice(), colors: regions.map(region => region.color) });
+  get('undo').disabled = false;
+  get('status').textContent = '';
+}
+
+function restoreColors(colors) {
+  regions.forEach((region, index) => { region.color = colors[index]; get('color-' + index).value = region.color; });
+}
+
+function makeControls() {
+  regions.forEach((region, index) => {
+    const row = document.createElement('div'); row.className = 'region';
+    const label = document.createElement('label'); label.className = 'pick';
+    const radio = document.createElement('input'); radio.type = 'radio'; radio.name = 'region'; radio.checked = index === active;
+    radio.addEventListener('change', () => { active = index; redraw(); });
+    label.append(radio, title(region.id));
+    const color = document.createElement('input'); color.type = 'color'; color.id = 'color-' + index; color.value = region.color;
+    color.setAttribute('aria-label', title(region.id) + ' color');
+    color.addEventListener('input', () => { region.color = color.value; redraw(); });
+    const note = document.createElement('span'); note.className = 'metrics';
+    const sample = document.createElement('span'); samples.push(sample); note.append(sample);
+    if (fitted.has(region.id)) {
+      const measured = fitted.get(region.id), swatch = document.createElement('span');
+      swatch.className = 'sample';
+      const chip = document.createElement('span'); chip.className = 'swatch'; chip.style.backgroundColor = measured.after;
+      const value = document.createTextNode(measured.after);
+      swatch.append(chip, value);
+      swatch.title = 'Mean fitted color in the reference region';
+      fittedSwatches[index] = { chip, value, swatch };
+      note.append(' · ', swatch);
+    }
+    row.append(label, color, note); get('regions').append(row);
+  });
+}
+
+function point(event) {
+  const bounds = canvas.getBoundingClientRect();
+  return [Math.floor((event.clientX - bounds.left) * width / bounds.width), Math.floor((event.clientY - bounds.top) * height / bounds.height)];
+}
+
+function mark(x, y) {
+  const erase = get('erase').getAttribute('aria-pressed') === 'true';
+  for (let yy = Math.max(0, y - 2); yy <= Math.min(height - 1, y + 2); yy++)
+    for (let xx = Math.max(0, x - 2); xx <= Math.min(width - 1, x + 2); xx++)
+      if ((xx - x)**2 + (yy - y)**2 <= 4) owners[yy * width + xx] = erase ? 0 : active + 1;
+}
+
+function stroke(from, to) {
+  const dx = to[0] - from[0], dy = to[1] - from[1], steps = Math.max(1, Math.abs(dx), Math.abs(dy));
+  for (let i = 0; i <= steps; i++) mark(Math.round(from[0] + dx * i / steps), Math.round(from[1] + dy * i / steps));
+  updateCounts(); redraw();
+}
+
+canvas.addEventListener('pointerdown', event => {
+  if (working || pointer !== null || event.button !== 0) return;
+  remember(); keyboard = null; pointer = event.pointerId; last = point(event);
+  canvas.setPointerCapture(pointer); stroke(last, last);
+});
+canvas.addEventListener('pointermove', event => {
+  if (pointer !== event.pointerId) return;
+  const next = point(event).map((value, index) => Math.max(0, Math.min((index ? height : width) - 1, value)));
+  stroke(last, next); last = next;
+});
+canvas.addEventListener('lostpointercapture', () => { pointer = null; });
+canvas.addEventListener('keydown', event => {
+  const directions = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] };
+  if (working || (!(event.key in directions) && event.key !== ' ')) return;
+  event.preventDefault(); keyboard ??= [Math.floor(width / 2), Math.floor(height / 2)];
+  if (event.key === ' ') { remember(); stroke(keyboard, keyboard); return; }
+  keyboard = keyboard.map((value, i) => Math.max(0, Math.min((i ? height : width) - 1, value + directions[event.key][i])));
+  redraw();
+});
+canvas.addEventListener('blur', () => { keyboard = null; redraw(); });
+get('overlay').addEventListener('change', redraw);
+get('erase').addEventListener('click', event => {
+  const pressed = event.target.getAttribute('aria-pressed') === 'true';
+  event.target.setAttribute('aria-pressed', String(!pressed));
+});
+get('undo').addEventListener('click', () => {
+  const previous = history.pop(); owners.set(previous.owners); restoreColors(previous.colors); updateCounts(); redraw();
+});
+get('reset').addEventListener('click', () => { remember(); restoreMask(); restoreColors(initialColors); updateCounts(); redraw(); });
+
+function download(name, documentData) {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(documentData, null, 2) + '\n'], { type: 'application/json' }));
+  const link = document.createElement('a'); link.href = url; link.download = name; link.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+get('save-targets').addEventListener('click', () => {
+  const output = regions.map(region => ({ ...region, spans: [] }));
+  for (let y = 0; y < height; y++) for (let x = 0; x < width;) {
+    const owner = owners[y * width + x], start = x++;
+    if (!owner) continue;
+    while (x < width && owners[y * width + x] === owner) x++;
+    output[owner - 1].spans.push([y, start, x - start]);
+  }
+  download('lighting-targets.json', { ...data.plan, regions: output.filter(region => region.spans.length) });
+  get('status').textContent = 'Targets downloaded.';
+});
+
+if (data.after) {
+  let solved = data.after, rig = data.rig;
+  function compare(after) {
+    get('result').src = after ? solved : data.before;
+    get('result').alt = after ? 'Fitted lighting on the original scene' : 'Original lighting on the scene';
+    get('view-label').textContent = after ? 'Fitted frame' : 'Starting frame';
+    get('before').setAttribute('aria-pressed', String(!after));
+    get('after').setAttribute('aria-pressed', String(after));
+  }
+  get('comparison').hidden = false;
+  get('before').addEventListener('click', () => compare(false));
+  get('after').addEventListener('click', () => compare(true));
+  compare(true);
+  get('save-rig').hidden = false;
+  get('save-rig').addEventListener('click', () => download('shot-lighting.json', rig));
+  get('hint').textContent = 'The fitted frame shows the original targets. Repaint and download your targets to run a new fit with ink-studio shot light-fit.';
+  if (data.candidates?.length) {
+    const button = get('fit-paint');
+    button.hidden = false;
+    get('hint').textContent = 'Repaint a region or change its color, then choose Fit paint. This offline demo compares stored native renders. The CLI searches a new rig.';
+    button.addEventListener('click', async () => {
+      working = true;
+      updateCounts();
+      get('status').textContent = 'Comparing rendered candidates…';
+      try {
+        const targets = regions.map(region => ({ pixels: [], color: ColorSpace.toOKLab(rgb(region.color).map(n => n / 255)),
+          weight: region.weight ?? 1 }));
+        owners.forEach((owner, i) => { if (owner) targets[owner - 1].pixels.push(i * 4); });
+        const probe = document.createElement('canvas');
+        probe.width = width; probe.height = height;
+        const reader = probe.getContext('2d', { willReadFrequently: true });
+        const preview = new Image();
+        let best;
+        for (const candidate of data.candidates) {
+          preview.src = candidate.image;
+          await preview.decode();
+          reader.drawImage(preview, 0, 0);
+          const rgba = reader.getImageData(0, 0, width, height).data;
+          const means = targets.map(({ pixels }) => {
+            if (!pixels.length) return null;
+            const sum = [0, 0, 0];
+            for (const address of pixels) for (let c = 0; c < 3; c++) sum[c] += rgba[address + c];
+            return sum.map(total => total / pixels.length);
+          });
+          const error = means.reduce((sum, mean, index) => {
+            if (mean === null) return sum;
+            const measured = ColorSpace.toOKLab(mean.map(n => n / 255)), target = targets[index];
+            return sum + target.weight * measured.reduce((delta, value, c) => delta + (value - target.color[c]) ** 2, 0);
+          }, 0);
+          if (!best || error < best.error) best = { candidate, means, error };
+        }
+        solved = best.candidate.image;
+        rig = best.candidate.rig;
+        best.means.forEach((mean, index) => {
+          const { chip, value, swatch } = fittedSwatches[index];
+          swatch.hidden = mean === null;
+          if (mean) {
+            chip.style.backgroundColor = value.data = '#' + mean.map(n => Math.round(n).toString(16).padStart(2, '0')).join('');
+            swatch.title = 'Mean fitted color in the current region';
+          }
+        });
+        compare(true);
+        get('status').textContent = 'Best match among ' + data.candidates.length + ' rendered candidates.';
+      } catch (error) {
+        get('status').textContent = 'Could not compare candidates. ' + error.message;
+      } finally {
+        working = false;
+        updateCounts();
+      }
+    });
+  }
+}
+get('frame-meta').textContent = width + ' × ' + height + ' art pixels' + (data.evaluations ? ' · ' + data.evaluations + ' candidates' : '');
+makeControls(); restoreMask(); updateCounts();
+source.onload = () => { ready = true; redraw(); };
+source.src = data.before;
+</script>
+</html>

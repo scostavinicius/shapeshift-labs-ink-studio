@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Signal Room · Ink Studio</title>
+<style>
+:root{color-scheme:dark;--bg:#14191c;--panel:#1c2427;--edge:#3b4a4d;--text:#f5eee2;--muted:#b5bdba;--gold:#f0bb77;--mint:#bee1d3}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,sans-serif}main{max-width:1000px;margin:auto;padding:40px 24px 34px}h1{font:clamp(3rem,8vw,5.5rem)/.91 Georgia,serif;letter-spacing:-.06em;margin:0}p{margin:10px 0;color:var(--muted)}header{margin-bottom:24px}header p{max-width:67ch}.grid{display:grid;grid-template-columns:1.08fr 1fr;gap:12px}.panel{border:1px solid var(--edge);border-radius:14px;background:var(--panel);min-width:0}.diagram{overflow:hidden}.diagram svg{display:block;width:100%;height:auto}.controls{padding:16px;display:flex;flex-direction:column;justify-content:space-between}.transport{display:flex;align-items:center;gap:8px;flex-wrap:wrap}button{background:#273337;border:1px solid #46565a;border-radius:7px;color:var(--text);padding:8px 11px;font:inherit;cursor:pointer}button:hover{border-color:var(--mint)}button:focus-visible,input:focus-visible,a:focus-visible,summary:focus-visible{outline:2px solid var(--mint);outline-offset:3px}button[aria-pressed=true]{color:#122121;background:var(--mint);border-color:var(--mint)}#play{min-width:85px;background:var(--gold);border-color:var(--gold);color:#231d19;font-weight:650}.labels{display:flex;justify-content:space-between;gap:7px;flex-wrap:wrap;margin:19px 0 0;align-items:baseline}#source{font:1.35rem Georgia,serif}#time,#angles{color:var(--muted);font-variant-numeric:tabular-nums}.timeline{width:100%;accent-color:var(--gold);margin:10px 0 0}.positions{display:flex;gap:5px;flex-wrap:wrap;margin-top:10px}.positions button{padding:5px 8px;font-size:.84rem}.positions button[aria-current=true]{border-color:var(--gold);color:var(--gold)}.presets{margin:15px 0 0;display:flex;gap:5px;flex-wrap:wrap}.presets button{font-size:.87rem}.report{margin-top:12px;padding:12px 16px}.report p{margin:7px 0;font-size:.88rem}.report summary{cursor:pointer}.digest{overflow-wrap:anywhere;color:var(--mint)}.credit{font-size:.81rem;margin:14px 0 0}a{color:var(--mint)}
+@media(max-width:700px){main{padding:25px 13px}.grid{grid-template-columns:1fr}.diagram svg{max-height:325px}.controls{padding:12px}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>The Signal Room</h1>
+<p>Put on headphones for seven strikes around a fixed listener. Switch between Chrome preview and WAV export at the same moment. Stereo pan gives you the left–right reference.</p>
+</header>
+<div class="grid">
+<section class="panel diagram" aria-label="Head-relative source positions">
+<svg viewBox="0 0 480 355" role="img" aria-labelledby="diagram-title">
+<title id="diagram-title">Source azimuth around the head and source elevation</title>
+<rect width="480" height="355" fill="#1c2427"/>
+<g transform="translate(185 178)" stroke="#506369" fill="none">
+<circle r="124"/><circle r="94" stroke-dasharray="2 5"/>
+<path d="M-125 0H125m-125-125v250" stroke-dasharray="3 5"/>
+<ellipse rx="28" ry="35" fill="#293a3d" stroke="#bed8ce"/>
+<path d="M-8-33 0-45 8-33 M-29-8q-17 8 0 18 M29-8q17 8 0 18" stroke="#bed8ce" stroke-width="2"/>
+</g>
+<g fill="#b5bdba" font-size="14" text-anchor="middle">
+<text x="185" y="41">Front</text><text x="185" y="327">Behind</text>
+<text x="33" y="183">Left</text><text x="336" y="183">Right</text>
+<text x="413" y="54">Elevation</text><text x="445" y="90">90°</text><text x="442" y="263">0°</text>
+</g>
+<path d="M409 86V258m-8-172h16m-16 172h16" fill="none" stroke="#697d82"/>
+<path id="ray" d="M185 178V54" fill="none" stroke="#f0bb77" stroke-width="1.6"/>
+<circle id="mark" cx="185" cy="54" r="8" fill="#f0bb77" stroke="#161b1e" stroke-width="3"/>
+<circle id="height" cx="409" cy="258" r="6" fill="#f0bb77"/>
+</svg>
+</section>
+<section class="panel controls" aria-label="Audition and timeline">
+<div>
+<div class="transport">
+<button id="play" type="button">Play</button>
+<output id="time" aria-label="Playback time">0.00 s</output>
+</div>
+<div class="labels"><output id="source">Front</output><output id="angles" aria-label="Source bearing"></output></div>
+<input id="timeline" class="timeline" type="range" min="0" max="7.36" step=".01" value="0" aria-label="Playback position">
+<div class="positions" id="positions" aria-label="Jump to a strike"></div>
+</div>
+<div class="presets" role="group" aria-label="Comparison output">
+<button type="button" data-mode="preview" aria-pressed="true">Chrome preview</button>
+<button type="button" data-mode="offline" aria-pressed="false">WAV export</button>
+<button type="button" data-mode="stereo" aria-pressed="false">Stereo pan</button>
+</div>
+</section>
+</div>
+<details class="panel report" open>
+<summary>Profile and render comparison</summary>
+<p id="data"></p>
+<p>SHA-256 <code class="digest" id="hash"></code></p>
+</details>
+<p class="credit" id="credit"></p>
+<audio id="audio" preload="auto" aria-label="Signal Room audition"></audio>
+</main>
+<script>
+const demo=/*INK_BINAURAL_DEMO*/;
+const get=id=>document.getElementById(id), audio=get('audio'), play=get('play'), timeline=get('timeline');
+const modes=[...document.querySelectorAll('[data-mode]')], cues=demo.cues;
+let selection='preview', seekAfterLoad=null, resumeAfterLoad=false, animation=0;
+const pins=cues.map((cue,i)=>{
+  const button=document.createElement('button');
+  button.type='button';button.textContent=cue.name;
+  button.addEventListener('click',()=>seek(Math.max(0,cue.time-.05)));
+  get('positions').append(button);
+  return button;
+});
+const stats=demo.statistics;
+get('data').textContent=`${stats.profile.id} · ${stats.profile.directions} directions · ${stats.rate/1000} kHz comparison · ${stats.peakSampleDelta.toExponential(2)} peak sample difference`;
+get('hash').textContent=stats.profile.sha256;
+get('credit').textContent=demo.credit+' Copyright 1994 MIT Media Laboratory. ';
+const archive=document.createElement('a');archive.href=demo.sourceURL;archive.textContent='Measurement archive';get('credit').append(archive);
+function show(t){
+  const i=Math.max(0,cues.findLastIndex(cue=>cue.time-.055<=t)), {azimuth,elevation,name}=cues[i];
+  const a=azimuth*Math.PI/180, radius=124*Math.cos(elevation*Math.PI/180);
+  const x=185+radius*Math.sin(a), y=178-radius*Math.cos(a);
+  get('mark').setAttribute('cx',x);get('mark').setAttribute('cy',y);
+  get('ray').setAttribute('d',`M185 178L${x} ${y}`);
+  get('height').setAttribute('cy',258-172*elevation/90);
+  get('source').value=name;get('angles').value=`${azimuth}° az · ${elevation}° el`;
+  get('time').value=t.toFixed(2)+' s / '+demo.duration.toFixed(2)+' s';
+  timeline.value=t;
+  pins.forEach((button,j)=>button.setAttribute('aria-current',String(i===j)));
+}
+function follow(){show(audio.currentTime);if(!audio.paused)animation=requestAnimationFrame(follow);}
+function seek(t){if(audio.readyState)audio.currentTime=t;else seekAfterLoad=t;show(t);}
+function choose(mode){
+  if(audio.getAttribute('src')&&selection===mode)return;
+  seekAfterLoad=seekAfterLoad??audio.currentTime;
+  resumeAfterLoad=resumeAfterLoad||!audio.paused;
+  selection=mode;
+  modes.forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.mode===mode)));
+  audio.src=demo.clips[mode];
+  show(seekAfterLoad);
+}
+audio.addEventListener('loadedmetadata',()=>{
+  if(seekAfterLoad!==null){audio.currentTime=seekAfterLoad;seekAfterLoad=null;}
+  if(resumeAfterLoad){resumeAfterLoad=false;audio.play().catch(()=>{});}
+  show(audio.currentTime);
+});
+audio.addEventListener('play',()=>{play.textContent='Pause';cancelAnimationFrame(animation);follow();});
+audio.addEventListener('pause',()=>{play.textContent='Play';cancelAnimationFrame(animation);show(seekAfterLoad??audio.currentTime);});
+audio.addEventListener('ended',()=>{play.textContent='Replay';show(demo.duration);});
+play.addEventListener('click',()=>{if(audio.paused)audio.play().catch(()=>{});else audio.pause();});
+timeline.max=demo.duration;timeline.addEventListener('input',()=>seek(Number(timeline.value)));
+modes.forEach(button=>button.addEventListener('click',()=>choose(button.dataset.mode)));
+choose('preview');
+</script>
+</body>
+</html>

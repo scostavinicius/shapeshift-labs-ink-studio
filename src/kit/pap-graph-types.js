@@ -92,9 +92,57 @@
       list(samples) && samples.length <= 32000000 && samples.length % channels === 0 && all(samples, n => Number.isFinite(n) && n>=-1 && n<=1);
   }
 
+  const maxFieldSamples = 2097152, maxTraceSamples = 8000000, maxPoints = 250000, maxEvents = 100000;
+  const label = value => typeof value === 'string' && value.length > 0 && value.length <= 96;
+  const name = value => label(value) && /^[a-z0-9_][\w.-]*$/i.test(value) &&
+    !['__proto__','constructor','prototype'].includes(value);
+  const count = (value, max) => Number.isSafeInteger(value) && value >= 0 && value <= max;
+  function gridField(value) {
+    const {shape,components,origin,spacing,data,unit,frame} = value ?? {};
+    return value?.format==='ink-studio/grid-field' && value.version===1 &&
+      Array.isArray(shape) && shape.length>=1 && shape.length<=3 && all(shape,n=>count(n,maxFieldSamples)&&n>0) &&
+      count(components,4) && components>0 && vector(origin,shape.length) && vector(spacing,shape.length) &&
+      spacing.every(n=>n>0) && count(data?.length,maxFieldSamples) &&
+      data.length===shape.reduce((size,n)=>size*n,components) && all(data,Number.isFinite) && label(unit) && label(frame);
+  }
+  function trace(value) {
+    const {sampleRate,startSample,frames,channels} = value ?? {};
+    return value?.format==='ink-studio/sample-trace' && value.version===1 &&
+      count(sampleRate,192000) && sampleRate>0 && count(startSample,Number.MAX_SAFE_INTEGER) &&
+      count(frames,maxTraceSamples) && Number.isSafeInteger(startSample+frames) && record(channels) &&
+      Object.keys(channels).length>=1 && Object.keys(channels).length<=64 &&
+      frames*Object.keys(channels).length<=maxTraceSamples && Object.entries(channels).every(([id,row])=>
+        name(id) && label(row?.unit) && row.samples?.length===frames && all(row.samples,Number.isFinite));
+  }
+  function pointBuffer(value) {
+    const {positions,velocities,velocityValid,ids,count:points,frame,unit} = value ?? {};
+    return value?.format==='ink-studio/point-buffer' && value.version===1 && count(points,maxPoints) &&
+      positions?.length===points*3 && all(positions,Number.isFinite) && label(frame) && label(unit) &&
+      (ids===undefined || Array.isArray(ids) && ids.length===points &&
+        all(ids,id=>label(id)||Number.isSafeInteger(id)) && new Set(ids).size===points) &&
+      (velocities===undefined ? velocityValid===undefined : velocities?.length===points*3 && all(velocities,Number.isFinite) &&
+        (velocityValid===undefined || velocityValid?.length===points && all(velocityValid,n=>n===0||n===1)));
+  }
+  function eventLog(value) {
+    const {entries,dropped} = value ?? {};
+    return value?.format==='ink-studio/event-log' && value.version===1 && Array.isArray(entries) &&
+      count(entries.length,maxEvents) && count(dropped,Number.MAX_SAFE_INTEGER) && all(entries,row=>
+        record(row?.event) && (Number.isFinite(row.at) && row.at>=0 || ratio(row.at) && row.at.numerator>=0) &&
+        (row.exact===undefined||record(row.exact)&&typeof row.exact.numerator==='string'&&
+          /^(0|[1-9][0-9]{0,127})$/.test(row.exact.numerator)&&typeof row.exact.denominator==='string'&&
+          /^[1-9][0-9]{0,127}$/.test(row.exact.denominator)));
+  }
+
   const checks = {
     any: () => true,
     number: Number.isFinite,
+    unitScalar: unit,
+    liveSnapshot: value => value===null||K.world?.liveSnapshots?.validPacket(value)===true,
+    worldFrame: value => value===null||value?.format==='ink-studio/world-graph-frame'&&value.version===1&&
+      name(value.world)&&name(value.branch)&&Number.isSafeInteger(value.seed)&&
+      Number.isSafeInteger(value.tick)&&value.tick>=0&&Number.isFinite(value.dt)&&value.dt>0&&value.dt<=1&&
+      Number.isSafeInteger(value.eventFrom)&&value.eventFrom>=0&&value.eventFrom<=value.tick+1&&
+      Array.isArray(value.events)&&value.events.length<=maxEvents&&record(value.samples),
     boolean: value => typeof value === 'boolean',
     string: value => typeof value === 'string',
     vec2: value => vector(value, 2),
@@ -103,13 +151,17 @@
     record: value => record(value) && [Object.prototype,null].includes(Object.getPrototypeOf(value)),
     geometry: value => record(value) && ((value.points && value.faces) || (value.pos && value.tri) || value.positions || mesh(value)),
     field: value => typeof value === 'function' || typeof value?.sample === 'function',
+    fieldSpriteMaterial: value => value?.format === 'ink-studio/field-sprite-material' && typeof value.sample === 'function',
+    fieldSpriteSurface: value => value?.format === 'ink-studio/field-sprite-surface' &&
+      raster(value.value) && raster(value.position) && raster(value.normal) &&
+      raster(value.illumination) && raster(value.coverage),
     points: Array.isArray,
     world: value => record(value) && Number.isSafeInteger(value.count) && value.count >= 0 &&
       list(value.data) && value.data.length >= value.count * 16,
     renderFrame: value => record(value) && Number.isSafeInteger(value.w) && value.w > 0 &&
       Number.isSafeInteger(value.h) && value.h > 0 && list(value.rgb) && value.rgb.length === value.w * value.h * 3,
     image: value => record(value) && Number.isSafeInteger(value.width) && Number.isSafeInteger(value.height) && value.data,
-    raster, path, mesh, palette, atlas, audio, cameraGrid, frameRate, linearRaster,
+    raster, path, mesh, palette, atlas, audio, cameraGrid, frameRate, linearRaster, gridField, trace, pointBuffer, eventLog,
     pixels: value => vector(value, 2),
     uv: value => vector(value, 2),
     worldPosition: value => vector(value, 3),
@@ -125,6 +177,7 @@
   };
   // Semantic ports retain compatibility with legacy numeric and raster sockets.
   const semantics = {
+    unitScalar: ['normalized scalar in [0,1]', 'number'],
     pixels: ['top-left pixel coordinates', 'vec2'],
     uv: ['normalized top-left UV coordinates', 'vec2'],
     worldPosition: ['world XYZ position', 'vec3'],

@@ -17,6 +17,15 @@
       outputs: {value: 'displayRaster'}, run(inputs) { return {value: R.canvas(inputs)}; }
     },
     'raster.rgba': unary(R.rgba, {}),
+    'raster.select': {
+      description:'Select one raster from an ordered set of graph passes.',
+      inputs:{sources:'array<raster>',index:'number'}, outputs:{value:'raster'},
+      run({sources,index}) {
+        if (!Number.isSafeInteger(index) || index<0 || index>=sources.length)
+          throw new RangeError('Raster selection index is out of range');
+        return {value:sources[index]};
+      }
+    },
     'raster.channel': unary(R.channel),
     'raster.crop': unary(R.crop),
     'raster.resize': unary(R.resize),
@@ -36,9 +45,19 @@
       inputs: {background: 'raster', foreground: 'raster', options}, outputs: {value: 'raster'},
       run({background, foreground, options}) { return {value: R.blend(background, foreground, options)}; }
     },
+    'raster.mix': {
+      description:'Crossfade aligned raster samples with optional alpha or RGB-mean coverage.',
+      inputs:{source:'raster',edited:'raster',mask:{type:'any',default:null},options},
+      outputs:{value:'raster'},run({source,edited,mask,options}){return {value:R.mix(source,edited,mask,options)};}
+    },
     'raster.stack': stack('stack'),
     'raster.depth': stack('depth'),
     'raster.height': stack('height'),
+    'raster.spriteLayer': {
+      inputs: {width: 'number', height: 'number', sprites: 'array<record>', options},
+      outputs: {value: 'raster', report: 'record'}, time: true,
+      run({width, height, sprites, options}, {time}) { return R.spriteLayer({time, ...options, width, height, sprites}); }
+    },
     'raster.spriteStack': {
       inputs: {source: 'any', options}, outputs: {value: 'raster'},
       run({source, options}) { return {value: R.spriteStack(source, options)}; }

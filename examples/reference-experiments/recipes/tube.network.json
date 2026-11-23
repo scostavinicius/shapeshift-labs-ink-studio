@@ -1,0 +1,30 @@
+{
+  "format": "ink-studio/wave-network",
+  "version": 1,
+  "id": "reference-air-column",
+  "nodes": {
+    "source": {},
+    "tip": {}
+  },
+  "tubes": {
+    "bore": {
+      "from": "source",
+      "to": "tip",
+      "sections": [
+        {
+          "length": 1.372,
+          "area": 0.006
+        }
+      ]
+    }
+  },
+  "observations": {
+    "inside": {
+      "tube": "bore",
+      "t": 0.375
+    },
+    "tip": {
+      "node": "tip"
+    }
+  }
+}

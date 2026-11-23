@@ -104,6 +104,6 @@ const OpticalMaterials = (() => {
     }
     return out;
   }
-  return Object.freeze({ STRIDE, material, medium, pack, frame, slabOpacity, waterReflection });
+  return Object.freeze({ STRIDE, material, medium, pack, frame, fresnel, slabOpacity, waterReflection });
 })();
 if (typeof module !== 'undefined') module.exports = OpticalMaterials;

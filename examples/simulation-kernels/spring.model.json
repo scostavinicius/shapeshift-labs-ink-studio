@@ -1,0 +1,31 @@
+{
+  "format": "ink-studio/simulation-model",
+  "version": 1,
+  "id": "damped-spring",
+  "revision": 1,
+  "seed": 1,
+  "numerics": { "dt": 0.01 },
+  "domain": {},
+  "parameters": {},
+  "initial": {},
+  "boundaries": {},
+  "operators": {
+    "solver": {
+      "kind": "damped-spring",
+      "revision": 1,
+      "config": { "mass": 1, "stiffness": 26, "damping": 0.42, "displacement": 0.72 }
+    }
+  },
+  "inputs": { "force": "solver/force" },
+  "outputs": {
+    "displacement": "solver/displacement",
+    "velocity": "solver/velocity",
+    "energy": "solver/energy",
+    "crossings": "solver/crossings"
+  },
+  "commands": [
+    { "tick": 158, "input": "force", "value": 3.2 },
+    { "tick": 176, "input": "force", "value": 0 }
+  ],
+  "probes": {}
+}

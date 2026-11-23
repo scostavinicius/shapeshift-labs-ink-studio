@@ -1,0 +1,13 @@
+{
+  "format": "ink-studio/simulation-model",
+  "version": 1,
+  "id": "sample-resonator",
+  "revision": 1,
+  "seed": 42,
+  "numerics": { "dt": 0.000010416666666666666, "blockSize": 1600 },
+  "domain": {}, "parameters": {}, "initial": {}, "boundaries": {},
+  "operators": { "solver": { "kind": "sample-resonator", "revision": 1 } },
+  "inputs": { "drive": "solver/drive" },
+  "outputs": { "signal": "solver/signal", "peak": "solver/peak" },
+  "probes": {}
+}

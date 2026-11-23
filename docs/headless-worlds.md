@@ -4,6 +4,11 @@ Ink Studio can advance a declarative world, apply timed actions, inspect the
 result, and replay or compare runs. A scene uses the same query descriptors
 from JavaScript and the CLI. Each query reads one published revision.
 
+[Story triggers](story-documents.md#trigger-a-story-from-a-world) activate authored
+incidents, questlets, and arcs from committed events or measured world conditions.
+[Story host adapters](story-documents.md#connect-a-host-runtime) add typed
+queries, operations, and receipts from an external simulation.
+
 For editable SDF-biome scenes, the
 [biome revision API](procedural.md#biome-revisions) stages terrain, water,
 navigation and splats together. Its packed render world can also be read
@@ -68,6 +73,10 @@ actions shared range, access, duration, and effects.
 
 [First-divergence debugging](first-divergence.md) compares timelines
 tick by tick and reports actual inputs and changed state paths.
+
+[In-scene simulation forecasts](simulation-forecasts.md) preview pending
+commands from the current checkpoint and draw paths, flow, and the first
+visible change in the scene.
 
 ## Run and compare a watershed
 
@@ -390,6 +399,11 @@ values available at the start of the tick. Solvers step from the
 settled snapshot. A failed endpoint write aborts the tick, including
 any earlier transfers. Checkpoints and replay preserve receipts.
 
+Use [two-way transfer coupling](simulation-transfer-coupling.md) when
+multiple exchanges depend on the balances they change within the same tick.
+Coupling groups publish bounded iteration and residual reports and post the
+selected exchanges through the same ledger.
+
 The [transfer station](../examples/world-transfers.json) requests
 five cubic world units from a shallow-water basin. The cistern has
 room for two, so the basin drops from eight to six while the tank
@@ -502,7 +516,10 @@ A stateful publication is visible at the following boundary.
 Combinational connections can deliver values at a shared boundary
 in dependency order.
 
-A connection's `sample` sets the crossing rule.
+A connection's `sample` sets the crossing rule. Use `signal` to declare
+an instantaneous level, accumulated increment, or event stream. See
+[explicit rate crossings](simulation-rate-crossings.md) for linear
+interpolation, anti-aliased decimation, and fractional delay.
 
 | Rule | Behavior |
 | --- | --- |
@@ -513,7 +530,9 @@ A connection's `sample` sets the crossing rule.
 
 Connection delays are measured in world ticks. Delayed levels hold
 the selected tick's final value. Delayed sums and events carry all
-publications from the selected tick as a batch. Manual numeric inputs
+publications from the selected tick as a batch. Use
+[timed event inputs](simulation-timed-events.md) to react at a known instant
+inside a receiver's step. Manual numeric inputs
 hold their latest command value. Manual events accumulate in command
 order and wait for the scheduled consumer. Initial outputs seed held
 levels, while sums and event wires collect solver publications.
@@ -631,6 +650,552 @@ map. Style the panel with CSS parts, `--ink-cause-*` properties, or a
 custom `stylesheet` with `defaultStyles:false`. Labels, value formatting,
 and visible controls are configurable.
 
+## Record and trace typed world facts
+
+Declare named occurrence types in the world's `facts.types` table.
+Each type defines subject roles and payload fields. A fact records the
+type, world tick and time, location, named subjects, and earlier events
+that contributed to it.
+
+```json
+"facts": {
+  "types": {
+    "delivery-confirmed": {
+      "subjects": { "courier": "character", "recipient": "place" },
+      "fields": { "crates": "integer" }
+    }
+  },
+  "limit": 256,
+  "eventLimit": 2048
+}
+```
+
+Publish a fact with a scheduled `world/fact` action. Its location
+can carry a qualified `place`, an `entity` with an optional `socket`,
+a finite XYZ `point`, or a combination. Include a point to preserve
+the position of an occurrence at a moving entity. Stable subject
+IDs can be qualified, for example `crew/mira` or `crew/mira/2` for a
+particular generation. Ink attaches the subject kinds from the schema.
+
+```json
+{
+  "tick": 2,
+  "action": "world/fact",
+  "args": {
+    "type": "delivery-confirmed",
+    "at": { "place": "harbor/pier", "entity": "south-pier" },
+    "subjects": { "courier": "crew/mira", "recipient": "harbor/pier" },
+    "data": { "crates": 2 },
+    "causes": ["1.0"]
+  }
+}
+```
+
+Fields support `number`, `integer`, `boolean`, `string`, `id`, and
+`point`. A type can have up to 16 subject roles and 32 fields. Each
+declared role and payload field is required when publishing that type.
+The `subjects`, `data`, and `causes` maps or lists can be omitted when
+empty. Strings accept up to 1,024 characters. Preflight lists the
+compiled schemas under `facts`.
+
+A cause is a world event ID from the same run. Up to 16 distinct
+earlier IDs can be linked, including an event emitted earlier in the
+same tick. Ink verifies the references and stores receipts with the
+event kind, system, and tick. Facts publish a `world-fact` event
+whose `fact` record shares the event ID. An event action can route a
+native event into a fact by binding `/causes/0` to `/id` and mapping
+any required data. The new fact records the tick when it is published,
+and its cause retains the original event's tick.
+
+Probe `world/facts` to filter the ledger by ID, type, subject and role,
+place or entity, inclusive tick bounds, and a normal `where` condition.
+Use the same probe in story feasibility or state triggers. Story event
+triggers and objectives can match `world-fact` fields such as
+`/fact/type` and `/fact/data/crates`.
+
+Facts and event receipts have independent retention from ordinary
+history. `limit` retains 1–4,096 facts and defaults to 256.
+`eventLimit` retains 1–20,000 event receipts for future cause
+references and defaults to 2,048. A retained fact also remains a
+valid cause by ID. Each saved cause receipt survives with its
+dependent fact. Trace `world/fact-causes` to follow direct fact
+links through earlier retained facts and native event receipts.
+A partial result identifies evicted intermediate facts or traversal
+limits. With causality enabled, `world/cause` also follows linked
+event nodes into the native solver graph when those nodes are retained.
+
+The [pier fact demo](../examples/story-documents/pier-facts.world.json)
+takes a real inventory transfer, records who delivered the crates and
+where, and lets the full delivery start and complete a watch story.
+A partial delivery records what arrived. Both cases run with ordinary
+history disabled.
+
+```sh
+ink-studio sim run examples/story-documents/pier-facts.world.json \
+  --actions examples/story-documents/pier-facts.full.actions.json --ticks 6 --record pier.run.json
+ink-studio probe pier.run.json --field world/facts --args '{"type":"delivery-confirmed","subject":"crew/mira","role":"courier"}'
+ink-studio trace pier.run.json world/fact-causes --args '{"id":"3.0"}'
+ink-studio trace pier.run.json world/cause --args '{"event":"3.0"}'
+```
+
+## Track what actors and factions know
+
+Enable `"knowledge": true` alongside typed world facts. Each holder
+has its own view of an occurrence. Use a holder of kind `actor` or
+`faction` with a stable qualified ID. Actor and faction IDs occupy
+separate scopes, and reports can move between either kind.
+
+Add `witnesses` to a `world/fact` action to record firsthand
+observations when the fact is published. A witness can observe all
+details or a named subset. The fact ID and type identify what the
+observation is about. The selectable details are `at`, each
+`subject/<role>`, and each `data/<field>` declared by the fact type.
+
+```json
+"witnesses": [
+  { "holder": { "kind": "actor", "id": "crew/mira" } },
+  { "holder": { "kind": "actor", "id": "crew/niko" }, "fields": ["at"] }
+]
+```
+
+Use `world/share-fact` to report selected details. An omitted
+`fields` list shares everything the sender currently knows about
+that fact. The receiver gains the new details and keeps the original
+receipt for each detail it already knew. A report that asks for an
+unknown detail is rejected as a unit, with the missing fields on
+the `fact-report-rejected` event.
+
+```json
+{
+  "tick": 4,
+  "action": "world/share-fact",
+  "args": {
+    "fact": "1.0",
+    "from": { "kind": "actor", "id": "crew/mira" },
+    "to": { "kind": "faction", "id": "harbor-watch" },
+    "fields": ["data/severity"]
+  }
+}
+```
+
+Probe `world/knowledge` with a holder and a fact ID for
+`unknown`, `partial`, or `complete` status. The holder's report
+includes the disclosed values, missing detail names, and a receipt
+for each known detail. Its origin is `witness`, `secondhand`, or
+`mixed`. Query by holder alone to list their knowledge, or by fact ID
+to see all retained holders' views of that occurrence. Results can
+also be filtered by `type`. Lists accept a `limit`.
+
+A `fact-learned` event records the holder, newly learned detail
+names, and the preceding receipt for each detail. A story can trigger
+on that event and use `world/knowledge` for its own holder's feasibility
+checks and objective evidence. Use the authoritative `world/facts`
+ledger for world-level inspection. Trace `world/knowledge` with a
+holder, fact, and field to follow a particular detail back through
+reports to a witness. With causality enabled, learning events link
+to their retained source events in the native causal graph.
+
+The knowledge ledger retains 512 holder/fact entries by default.
+Set `"knowledge": {"limit":32}` to change that limit within 1–4,096.
+It evicts the entry least recently updated with new information.
+Known details remain available after the authoritative fact is
+evicted. The lineage reports a gap when an earlier holder's record
+is evicted from the knowledge ledger.
+
+In the [lock knowledge demo](../examples/story-documents/lock-knowledge.world.json),
+Mira witnesses the damage and Niko sees its location. The harbor
+watch first hears where it happened. The severity report opens the
+repair brief, and a later report gives the watch the lane count
+needed to finish it.
+
+```sh
+ink-studio sim run examples/story-documents/lock-knowledge.world.json \
+  --actions examples/story-documents/lock-knowledge.relay.actions.json --ticks 9 --record lock.run.json
+ink-studio probe lock.run.json --ticks 4 --field world/knowledge \
+  --args '{"holder":{"kind":"faction","id":"harbor-watch"},"fact":"1.0"}'
+ink-studio trace lock.run.json world/knowledge \
+  --args '{"holder":{"kind":"actor","id":"crew/niko"},"fact":"1.0","field":"data/severity"}'
+```
+
+## Model rumours and conflicting accounts
+
+Enable `beliefs` alongside `facts` and `knowledge` to give actors and
+factions separate beliefs about the same situation. Define each named
+topic against a typed fact detail. Pick a topic ID that identifies the
+particular question in this world, such as `east-channel`.
+
+```json
+"beliefs": {
+  "topics": { "east-channel": { "type": "channel-inspection", "field": "data/state" } },
+  "limit": 512,
+  "accountLimit": 16
+}
+```
+
+The field can be `at`, `subject/<role>`, or `data/<field>`. Accounts use
+the same value shape as the declared detail. A holder or source is
+`{"kind":"actor","id":"crew/niko"}` or `{"kind":"faction","id":"harbor-watch"}`.
+
+| Action | Arguments | Effect |
+| --- | --- | --- |
+| `world/claim-belief` | `topic`, `holder`, `source`, `value`, `confidence` | Record the named source's account as heard by the holder. Use an integer confidence from 0 to 100. An account can arrive before an inspection takes place. |
+| `world/relay-belief` | `topic`, `from`, `to`, `account`, optional `confidence` | Pass on an account the sender holds, using its original event ID. Preserve its value and source, record the relay, and keep or lower its confidence. A recipient retains at most one copy of each original account. |
+| `world/verify-belief` | `topic`, `holder`, `fact` | Apply a matching fact to the topic once the holder knows its configured detail. The author selects the fact for the named situation. A more recent occurrence can revise the verified value again. |
+
+Probe `world/beliefs` with both `holder` and `topic` to read one
+perspective. Either filter can also be used on its own to list records.
+An unseen topic is `unknown` for that holder. The highest-confidence
+account guides a `believed` topic. Equally strong accounts with different
+values leave the topic `contested`, with no selected value. Accounts keep
+their stated confidence regardless of how often the value is repeated.
+Verification selects the fact's value at confidence 100 and keeps rival
+accounts visible. A claim at confidence 100 is still a claim. The
+`world/knowledge` ledger still tracks only witnessed and shared facts.
+
+An accepted update publishes `belief-updated` with the holder, topic,
+before and after assessments, and its account or evidence receipt. A
+relay exposes the original source and event plus the immediate sender
+and preceding receipt. An attempt to relay an unavailable account,
+inflate its confidence, or verify without the required fact detail
+emits `belief-rejected`. Duplicate relays and evidence at or before the
+current verified fact leave the existing belief in place. With causality
+enabled, `world/cause` can follow an update through retained relay and
+fact-learning events. Checkpoints and recordings carry the ledger even
+when ordinary event history is disabled.
+
+A story can trigger on `belief-updated` and use `world/beliefs` at
+the same scheduler boundary. Select `/status` for the assessment and
+`/belief/value` for the selected value. A story may act on a rumour
+or wait for that holder to receive verification.
+
+Declare up to 128 topics. The ledger retains up to 512 holder/topic
+entries by default (configurable from 1 to 4,096) and evicts the least
+recently updated entry first. Each entry retains its latest 16 accounts
+by default (configurable from 2 to 64) and tracks applied evidence
+separately. That evidence stays with the entry if the source fact or
+knowledge record ages out.
+
+In the [east channel demo](../examples/story-documents/channel-beliefs.world.json),
+Niko hears conflicting accounts and the harbor watch acts on the one it
+receives. The evidence actions disclose the inspection finding and start
+the convoy reroute. Run without those actions to see the watch keep
+believing the passage is open while the reroute remains blocked.
+
+```sh
+ink-studio sim run examples/story-documents/channel-beliefs.world.json \
+  --actions examples/story-documents/channel-beliefs.evidence.actions.json --ticks 5 --record channel.run.json
+ink-studio probe channel.run.json --ticks 3 --field world/beliefs
+ink-studio probe channel.run.json --ticks 4 --field world/beliefs
+ink-studio trace channel.run.json world/cause --args '{"event":"4.1"}'
+```
+
+## Remember outcomes and query relationships
+
+Declare the outcomes worth remembering under `memories.types`. A
+memory belongs to an actor or faction. It can name another actor or
+faction as its subject and affect how its holder views that subject.
+
+```json
+"memories": {
+  "limit": 512,
+  "durableLimit": 128,
+  "types": {
+    "missed-signal": { "decayTicks": 8, "effects": { "trust": -40 } },
+    "river-rescue": {
+      "durable": true,
+      "effects": { "trust": 30 },
+      "data": { "story": "id", "outcome": "id" }
+    }
+  }
+}
+```
+
+Schedule `world/remember` with `type` and
+`holder: {"kind":"actor","id":"crew/ilya"}`. Supply `about` in the same
+format when the memory affects a relationship. Types can declare data
+fields using the typed fact value shapes. Each memory supplies those
+fields as `data`. A memory can carry an earlier event receipt ID in
+`source`. Reusing that receipt for the same retained type, holder, and
+subject leaves the original memory in place. When causality is enabled
+and the event is retained, a `world/cause` trace links the memory back
+to that event. The memory keeps its source ID after the event ages out.
+A source at or after the memory's event position is rejected with
+`source-not-earlier`.
+
+Use `eventActions` to turn a native questlet outcome, settlement,
+order result, fact, or belief update into a memory. Filter the event
+with `on.where` and bind `"/source": "/id"` to retain its receipt.
+The action runs on the next tick by default. An accepted action
+publishes `memory-recorded` with the resulting record.
+
+| Query | Arguments | Returns |
+| --- | --- | --- |
+| `world/memories` | Optional `holder`, `about`, `type`, `id`, `limit` | Retained records with typed outcome data, source IDs, current strength and effects, and ledger counts for expiry and eviction. |
+| `world/relationship` | `holder`, `with` | A directed view with signed scores for each configured axis and the memories that contribute to them. An unknown relationship has zero scores and no contributors. |
+
+Relationship scores add the current effects from matching memories.
+Effects are integers from −100 to 100 per axis. A fading memory starts
+at full effect and declines linearly over `decayTicks`, defaulting to
+600 simulation ticks. The query truncates each signed effect toward
+zero and rounds the displayed strength up to a whole percent. The
+memory expires at its recorded tick plus `decayTicks`. A durable
+memory stays at full strength.
+
+The two storage limits each accept 1–4,096 entries. When ordinary
+storage fills up, new memories evict the oldest fading memory. A full
+durable ledger emits `memory-rejected` with reason `durable-capacity`
+and keeps the formative memories already recorded. The ledgers survive
+checkpoints and recordings with ordinary event history disabled.
+
+In the [river crossing demo](../examples/story-documents/river-memories.world.json),
+a missed signal lowers the wardens’ trust in Ilya. A rescue creates
+a durable positive memory. The crossing contract waits until the
+missed signal fades enough for Ilya to meet the trust threshold.
+Without the rescue, trust returns to neutral and the contract expires
+while still ineligible. The demo also fills the ordinary memory ledger with supply
+logs so you can see that the rescue is retained.
+
+```sh
+ink-studio sim run examples/story-documents/river-memories.world.json \
+  --actions examples/story-documents/river-memories.rescue.actions.json --ticks 13 --record river.run.json
+ink-studio probe river.run.json --ticks 6 --field world/relationship \
+  --args '{"holder":{"kind":"faction","id":"river-wardens"},"with":{"kind":"actor","id":"crew/ilya"}}'
+ink-studio probe river.run.json --field world/memories --args '{"type":"river-rescue"}'
+```
+
+## Track promises, debts, and obligations
+
+A `social-ledger` system records agreements. Open one with
+`<ledger>/open-obligation` or a story settlement's `obligation` effect.
+Give it a stable `obligation` ID, `debtor`, `creditor`, and a `terms`
+record describing what is owed. Use an optional `category` of `promise`,
+`debt`, or `duty`. Party IDs can name an actor, faction, exposed account,
+or another identity in the world.
+
+```json
+{
+  "obligation": "bridge-advance",
+  "category": "debt",
+  "debtor": "funds/porter",
+  "creditor": "funds/wardens",
+  "terms": { "amount": 4, "units": "coin" },
+  "fulfillment": {
+    "event": { "kind": "transfer", "system": "world", "where": { "path": "/applied", "value": 4 } },
+    "debtorPath": "/from",
+    "creditorPath": "/to"
+  },
+  "onDeparture": { "debtor": "transfer" }
+}
+```
+
+An evidence rule uses a world event's `kind`, optional `system`, and
+optional `where` condition. `debtorPath` and `creditorPath` compare
+event fields with the current parties, including after a handoff.
+Evidence starts counting on the tick after the obligation opens. One
+event can fulfill one agreement per ledger. If several open agreements
+match, the first by obligation ID receives the receipt.
+
+A `transfer` rule requires a full transfer from the native account
+system. Use `where` to choose the amount or resource to accept. The
+fulfillment retains both the event receipt and the actual payer,
+payee, and amount under `resolution.payment`. Other event kinds retain
+their source receipt. Use `resolve-obligation` with `released` to
+waive an agreement or `broken` to record a breach. The
+`obligation-resolved` event can feed a memory and a later
+[story callback](story-documents.md#let-past-events-change-later-decisions).
+
+Define each monitored party in the ledger's `config.parties`. Its
+`departure` matcher can use a native event such as `agent-despawned`
+scoped to a roster, agent ID, and generation, or a host-authored event.
+An optional `successor` names the party that can inherit an agreement.
+Each party ID records one departure. Use distinct party IDs when the same
+actor name represents different lifetimes.
+
+| Policy | On the current party's departure |
+| --- | --- |
+| `retain` | Keep the original assignment open. This is the default for either side. |
+| `release` | Close the agreement as released and keep the departure receipt. |
+| `transfer` | Assign that side to the configured successor and keep a handoff receipt. The agreement stays open. If the successor is unavailable or would owe itself, the ledger reports the blocker and keeps the current assignment. |
+
+Probe `<ledger>/obligations` with `obligation` for one agreement, or
+filter the table by `debtor`, `creditor`, `status`, and `category`.
+`<ledger>/departures` returns the recorded departure receipts, with an
+optional `party` filter. Stories and event actions can respond to
+`obligation-transferred`, `obligation-resolved`, or
+`obligation-departure-blocked`. A native event observed before story
+evaluation can fulfill an agreement and trigger a story in that tick.
+Events produced by story settlement are also processed before world
+event actions run. Checkpoints and recordings keep the agreement and
+its receipts independently of ordinary event history.
+
+In the [bridge credit demo](../examples/story-documents/bridge-credit.world.json),
+a questlet issues an advance. The porter leaves and the guild inherits
+the debt. The clerk's departure releases an inspection promise, while
+the duty to return tools stays assigned to the porter. Run with the
+payment actions to see the guild's transfer clear the debt and start
+the crossing questlet.
+
+```sh
+ink-studio sim run examples/story-documents/bridge-credit.world.json \
+  --actions examples/story-documents/bridge-credit.payment.actions.json --ticks 7 --record bridge.run.json
+ink-studio probe bridge.run.json --ticks 3 --field standing/obligations
+ink-studio probe bridge.run.json --field standing/obligations --args '{"obligation":"bridge-advance"}'
+```
+
+## Follow custody and provenance of individual objects
+
+Declare significant objects in `custody.objects` with stable IDs.
+Each starts `undiscovered`. A catalog entry can include a display
+`label` and an `entity` reference to a scene object.
+
+```json
+"custody": {
+  "objects": { "archive/survey-seal": { "label": "Bronze survey seal", "entity": "seal" } },
+  "historyLimit": 32
+}
+```
+
+A holder is a `{kind, id}` reference. Kinds include `actor`,
+`faction`, `container`, and `site`. The same object ID follows the
+item throughout its history. Each held object has a single custodian.
+Use `world/transfer` for quantities in stock accounts and custody
+actions for named objects.
+
+| Action | Required arguments in addition to `object` | Effect |
+| --- | --- | --- |
+| `world/discover-object` | `to`, `at` | Record the first known holder and discovery site. |
+| `world/transfer-object` | `from`, `to` | Move a held object between custodians. |
+| `world/lose-object` | `from` | Clear the current custodian and mark the object lost. |
+| `world/recover-object` | `to`, `at` | Return a lost object to custody and record the recovery site. |
+| `world/inherit-object` | `from`, `to` | Record a succession as a distinct change of custody. |
+| `world/destroy-object` | `from` if held | Record permanent destruction of a known object. Omit `from` for an already lost object. |
+
+Use a typed place, entity, or point in `at`. For a transfer, loss,
+inheritance, or destruction, supply it when a location is known.
+It becomes the object's `lastKnown` location. A valid change from
+held custody requires `from` to match the current holder. Changes after discovery
+can also specify `previous`, the current custody receipt ID, so a
+stale command cannot apply to a later custody state.
+
+`destroyed` is a terminal custody state. Attempts to discover,
+recover, transfer, or inherit that identity are rejected. A story can
+record the destruction alongside recoverable losses and salvage in
+its [closure report](story-documents.md#close-with-partial-and-irreversible-consequences).
+
+Any action can cite a retained earlier world event in `source`.
+Current and previous tick events, retained world history, and the typed
+fact ledger can supply the reference. The custody receipt keeps a
+copy of its source ID, kind, system, and tick after that event ages
+out. Use `eventActions` to bind `"/source": "/id"` from a discovery
+fact, delivery event, or departure. For inheritance, author the
+successor in the route and match the correct former holder's event.
+
+A custody change publishes `custody-changed` with the object ID,
+operation, previous receipt, and new status. Rejected actions emit
+`custody-rejected` with a reason and leave custody unchanged. Probe
+`world/custody` with `object` to get its current status and holder.
+Without an object ID, list the catalog or filter it by `holder` or
+`status`. Stories can react to the change and read the new state in
+the same tick. Use `trace world/custody` to read an object's discovery
+receipt and latest changes in order. With causality enabled,
+`trace world/cause` also follows retained links between those changes
+and the events that caused them.
+
+A world can declare up to 1,024 objects. The ledger keeps each
+discovery receipt, the last known location, and up to 32 subsequent
+changes by default. Set `historyLimit` from 1 to 128. A trace reports
+as partial when changes have been evicted or the requested result limit
+omits steps. Custody state and retained receipts survive checkpoints
+and recordings with ordinary event history disabled.
+
+In the [survey seal demo](../examples/story-documents/survey-seal.world.json),
+a surveyor finds a seal and puts it in a chest before it is lost.
+A recovery fact sends the same seal to a diver. The archive inherits
+it when the diver departs, which opens the vault questlet and records
+a durable memory. Without the recovery fact, the seal stays lost and
+the inheritance attempt is rejected.
+
+```sh
+ink-studio sim run examples/story-documents/survey-seal.world.json \
+  --actions examples/story-documents/survey-seal.recovery.actions.json --ticks 9 --record survey.run.json
+ink-studio probe survey.run.json --field world/custody --args '{"object":"archive/survey-seal"}'
+ink-studio trace survey.run.json world/custody --args '{"object":"archive/survey-seal"}'
+```
+
+## Carry site history between visits
+
+Give each significant place a stable ID under `siteHistory.sites`.
+A camp, ruin, crossing, or meeting place can define its own `kind`
+and typed state. The optional `at` uses the same place, entity, or
+point shape as a typed fact. Its default is the site's ID as a place.
+
+```json
+"siteHistory": {
+  "sites": {
+    "ridge/ford": {
+      "kind": "crossing",
+      "fields": { "safe": "boolean", "surface": "string", "rations": "integer" },
+      "initial": { "safe": false, "surface": "washed-out", "rations": 0 }
+    }
+  }
+}
+```
+
+| Action | Arguments | Effect |
+| --- | --- | --- |
+| `world/visit-site` | `site`, `visitor`, optional `source` | Record an actor or faction's visit. The `site-visited` event contains the site's cumulative `visitNumber` and the visitor's retained `visitorCount`. |
+| `world/change-site` | `site`, `outcome`, `set`, optional `visit`, `source`, `expect` | Set one or more typed fields and record the named consequence. The `site-changed` event carries the applied values and receipts. |
+
+The visitor is a `{kind, id}` reference with kind `actor` or
+`faction`. A change can cite a visit receipt from the same site in
+`visit`. Use any retained visit entry or the first or latest receipt
+for a tracked visitor. Either action can cite an earlier retained
+world event in `source`. To guard against stale state, put the
+expected field values in `expect`. A mismatch rejects the entire
+change. Failed actions emit `site-history-rejected`.
+
+Use `eventActions` to record visits from arrival events or write
+consequences from questlet outcomes, work receipts, transfers, or
+other systems. Bind `source` to the triggering event's ID. A story
+that started on a visit can bind `visit` from its trigger evidence
+when recording the outcome.
+
+Probe `world/site-history` with `site` to read the current `state`,
+total `visits`, and the latest `consequences` for each changed field.
+Pass `visitor` to also get that visitor's count and first and latest
+retained receipt IDs. Omit `site` to list sites, optionally filtered
+by `kind`. In a story condition, select a current field such as
+`/state/safe`. A story can react to `site-visited` or `site-changed`
+and read the updated site on that tick.
+
+Use `trace world/site-history` to read the retained visits and changes
+in order. Where causality is enabled, `world/cause` can follow those
+entries back to their retained triggers. Site state, total visits,
+and the latest receipt for each changed field survive timeline
+eviction, checkpoint restore, and replay. They also persist with
+ordinary event history disabled.
+
+Declare up to 1,024 sites with up to 32 fields each. Set `historyLimit`
+from 1 to 128 entries per site (default 32). A trace reports a partial
+timeline when earlier entries have been evicted or a result limit
+omits them. Set `visitorLimit` from 1 to 256 per site (default 64).
+The least recently seen visitor is evicted when the table fills.
+After evictions, a missing visitor is reported as `untracked`, and
+their next visit starts a fresh retained count. The site's total
+visit count continues to accumulate.
+
+In the [Ridge Ford demo](../examples/story-documents/ridge-ford.world.json),
+the caravan can reinforce the crossing and leave rations or mark the
+unsafe deck. On its return, the saved site state opens the crossing
+questlet or the ridge detour.
+
+```sh
+ink-studio sim run examples/story-documents/ridge-ford.world.json \
+  --actions examples/story-documents/ridge-ford.reinforce.actions.json --ticks 9 --record ford.run.json
+ink-studio probe ford.run.json --field world/site-history --args '{"site":"ridge/ford"}'
+ink-studio trace ford.run.json world/site-history --args '{"site":"ridge/ford"}'
+```
+
 ## Physical material assets
 
 A versioned asset pack can carry a `materials` list alongside families
@@ -641,6 +1206,10 @@ for a specified wetness. Most numeric properties accept a constant or
 
 | Property | What uses it |
 | --- | --- |
+| `density` | Bulk density in kg/m³ for [mass and inertia measurements](mass-properties.md) and model operators. |
+| `elastic.youngModulus`, `elastic.poissonRatio`, `damping` | Young’s modulus in Pa, Poisson’s ratio, and a dimensionless damping ratio available to structural and motion models. |
+| `intrinsicPermeability` | Material permeability in m² for transport models. |
+| `thermal.specificHeat`, `thermal.conductivity`, `thermal.expansion` | Specific heat in J/(kg·K), thermal conductivity in W/(m·K), and linear thermal expansion in 1/K. Each is optional. |
 | `friction` | Mechanics uses the coefficient to reduce sliding and cap driven wheel traction. If both contacting materials supply a coefficient, their geometric mean is used. |
 | `permeability` | Potential water loss through the bed in world units per second. Surface water caps the loss by available water and reports it in its drainage ledger. |
 | `thermal.heatCapacity`, `thermal.conductance`, `dryingRate` | Lumped heat capacity in J/K and conductance in W/K use the same reference area. Each cell approaches its ambient temperature at their ratio. The drying rate is in inverse seconds at 20 °C. Dry cells lose moisture faster as their temperature rises. |
@@ -719,6 +1288,10 @@ dependency reports include water changes beyond the brush where a
 connection opens or closes. Checkpoints save the ordered edits and
 reconstruct the same solid, material and water state on restore.
 
+[Two-way material conversion](material-conversion.md) lets a connected
+patch of material cells become a moving, heated rigid piece and return to
+the lattice on impact.
+
 The [spillway quarry](../examples/world-live-volumes.json) opens a
 copper-lined passage at tick 2, applies a limestone layer at tick 4,
 and closes the passage with a fill at tick 6.
@@ -761,6 +1334,8 @@ Probe `rig/surface-state` by body ID and face UV, or pass a world-space point
 and body ID to resolve the local face and original UV. `rig/surface-charts`
 returns the atlas data. Checkpoints save the chart windows and stamps.
 For a custom mesh, use [surface chart correspondences](procedural.md#surface-state-through-remeshing).
+To turn committed chart values into native mesh pigment, roughness, sheen, or
+relief, see [simulation-driven material layers](simulation-material-layers.md).
 
 Cloth sheets and nets can stamp the same channels in their rest UVs and keep them through stretch, tears, and replay. [Deformation-aware materials](deformation-materials.md)
 
@@ -829,7 +1404,7 @@ and call `solve(pins)` to fit the coordinate constraints.
 A manifest has `format: "ink-studio/world"`, `version: 1`, a stable `id`,
 `seed`, `dt`, and tables of `entities` and `systems`. A system record
 declares a `kind`, a `config`, and optionally a [solver schedule](#multi-rate-simulation). Optional sections include `connections`,
-`prefabs`, `assetPacks`, `commands`, `history`, `causality`, `metadata` and
+`prefabs`, `assetPacks`, `commands`, `history`, `causality`, `facts`, `knowledge`, `metadata` and
 `scenario`. See [the watershed](../examples/world-watershed.json) and
 [the quarry crossing](../examples/world-crossing.json) for working manifests.
 
@@ -1208,6 +1783,9 @@ stroke, and can reverse with the pressure gap. Its ports report
 `position.<pipe>`, `speed.<pipe>`, and available `force.<pipe>`.
 Connect position to a mechanics slider's position drive. The mechanical
 load can be authored or supplied on `load.<pipe>`.
+
+Use a [moving boundary](moving-boundaries.md) to drive a valve from a measured
+mechanical lift or a moving cloth patch.
 
 Use `world/input` or signal connections to drive the numeric
 `valve.<pipe>`, `boost.<pipe>`, `leak.<leak>`, and
@@ -1716,7 +2294,9 @@ rejected during validation.
 `run.composition()` reports the order, state aliases, typed ports, spatial
 reads and writes, event declarations, same-phase dependencies, and connection
 sampling policies. The CLI exposes the same report as
-`ink-studio sim plan <world|checkpoint|recording>`. A system with declared
+`ink-studio sim plan <world|model|checkpoint|recording>`. Its
+[execution plan](simulation-execution-plan.md) includes rate boundaries,
+signal sampling, feedback, assets, and resource estimates. A system with declared
 peer state reads runs on the host. Worker systems can continue to exchange
 typed signals and use `after` to order their steps.
 

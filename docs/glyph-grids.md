@@ -13,6 +13,9 @@ inscription around locked fragments from a second memory. The bottom strip
 runs a seeded neighborhood rule through the glyph atlas. The main display
 uses the same painted pixels for a sprite surface and emissive splats.
 
+[Signal Fall](../examples/signal-fall.js) shows editable
+[pixel-stamp glyphs](pixel-stamps.md#signal-fall) pulsing down a fixed grid.
+
 ```sh
 node cli/ink-studio.js clip examples/glyph-grid.js --w 720 --h 414 --to 7 --fps 16 --out palimpsest.png
 ```
@@ -108,3 +111,7 @@ reports `emitted` and whether the splat budget or draw capacity
 The grid supports up to 65,536 cells. Recall supports up to 32 patterns
 subject to a combined memory budget of 1,048,576 cells. Step batches,
 rasters and splat emission also have bounded work or output sizes.
+
+Use [grid turns](pixel-tiles.md#turn-selected-cells-or-glyphs) to rotate
+selected glyphs after rasterizing a frame. The turn layer holds its own
+cue timing and can use hand-authored intermediate cels.

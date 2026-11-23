@@ -100,6 +100,8 @@
       FrameComposite.settings(look?.composite);
       Cutaway.prepare(look?.cutaway);
       ColorClusters.prepare(look?.colorClusters);
+      ShotCorrections.prepare(look?.shotCorrections);
+      BoundaryCels.prepare(look?.boundaryCels, { scenePalette: paletteOptions.palette, paletteRoles: paletteOptions.roles });
       RenderGraph.prepare(look?.renderGraph);
       RenderStages.prepare(look?.renderStages, paletteOptions);
       RenderStages.optics(look?.optics, paletteOptions);
@@ -124,8 +126,18 @@
     return { look, material, forEntity, validate };
   }
 
-  function visual({makeBuilder,makeSculpt},view,query,{ controls, take, time: presentationTime } = {}) {
+  function visual({makeBuilder,makeSculpt},view,query,{ controls, take, time: presentationTime, eventEffects, visualConsequences = true } = {}) {
     const time = take?.start ?? presentationTime ?? view.time ?? view.tick * view.world.dt;
+    const effects = W.eventVisualEffects;
+    const T = K.procedural.takeTime;
+    const effectTime = () => T.pack(take ? T.requireFrame(take).start : presentationTime !== undefined ?
+      T.read(presentationTime) : T.mul(T.read(view.tick), T.period(view.world.dt, view.world.takeClock?.simulationRate)));
+    const effectTrack = eventEffects === undefined ? null : effects.open(eventEffects);
+    if (effectTrack?.source) W.data.check(effectTrack.source.world === view.world.id,
+      'Event visual effects sheet belongs to a different world');
+    const effectFrame = effectTrack?.sample(effectTime(), {
+      world: view.world.id, stream: view.eventStream, throughTick: view.tick
+    });
     const timeline = sceneTimeline(view.world), frame = take && timeline?.forTake ? timeline.forTake(take) : timeline?.sample(time);
     const { world: bound, values, dataInputs } = visualParameters(view.world, { time, query, controls });
     const edits = frame?.edits.filter(edit => edit.path[0] === 'visual');
@@ -137,7 +149,12 @@
     const region=W.fields.bounds(config.bounds ?? volume?.bounds ?? enclosed?.bounds ?? {min:[-5,-1,-5],max:[5,5,5]});
     const {min,max}=region, span=Math.max(max[0]-min[0],max[2]-min[2],1), resolution=config.resolution??Math.max(.08,span/100);
     W.data.check(Number.isFinite(resolution)&&resolution>=.02&&resolution<=10&&span/resolution<=256,'Render grid exceeds its sample budget');
-    const B=makeBuilder(view.world.seed,config.palette??palette), S=K.sculpt(makeSculpt(B));
+    const scenePalette = config.palette ?? palette;
+    const consequences = W.visualConsequences;
+    const consequencePlan = visualConsequences && consequences.prepare(config.consequences, world, scenePalette);
+    const persistent = consequencePlan && consequences.sample(consequencePlan, view, query);
+    const B=makeBuilder(view.world.seed,scenePalette), S=K.sculpt(makeSculpt(B));
+    if (persistent?.length || effectFrame && effects.visible(effectFrame, 'mark', 16).length) S.keepRenderSdf = true;
     const looks = visualLooks(view.world,catalog,config);
     const entities = view.world.entities, targets = new Map();
     function targetFor(id) {
@@ -305,8 +322,17 @@
     for(const field of linkFields){
       const read=query.probe(field);
       if(read.status!=='ok')continue;
-      for(const {id,entity,material,radius,paths,look} of Object.values(read.value)){
+      for(const link of Object.values(read.value)){
+        const {id,entity,material,radius,paths,look}=link;
         const first=B.count(), target=targetFor(entity), ramp=look??[19,20,21,22,23];
+        if (config.routedLinkRenderer === 'curve-splats') {
+          const profiles = config.routedLinkProfiles;
+          const profile = profiles && Object.hasOwn(profiles, id) ? profiles[id] : undefined;
+          K.curveSplats.draw(B, { kind: 'routed', link }, {
+            paletteRoles: config.paletteRoles, ...profile, color: B.P[ramp[Math.floor(ramp.length / 2)]] ?? B.P[1], target
+          });
+          continue;
+        }
         for(const points of paths)for(let i=1;i<points.length;i++){
           const a=points[i-1], b=points[i], d=V.sub(b,a), length=V.len(d);
           if(length<1e-6)continue;
@@ -432,10 +458,14 @@
         B.describeSplats?.(start,B.count(),{object:row.entity,material:'contact-spray',target:{surface:'contact-spray'}});
       }
     }
+    if (effectFrame) effects.stamp(B, effectFrame);
     const marks = K.dataMarks.prepare(config.dataMarks, { dataInputs })?.sample(time, { query });
     if (marks) K.dataMarks.stamp(B, marks);
     const fieldViews = config.fieldViews === undefined ? null :
       K.fieldViews.stampQuery(B,query,config.fieldViews,{bounds:region});
+    const marked = effectFrame && effects.paint(B, effectFrame, scenePalette);
+    const consequencePaint = persistent && consequences.paint(B, scenePalette, view, persistent);
+    const layers = [...(consequencePaint?.paint ?? []), ...(marked?.paint?.layers ?? [])];
     const baked=B.finish({lookSnapshot: { time, tick: view.tick, query }, cam,
       ...(timeline && { timeline }),
       ...(values && { parameterValues: values }),
@@ -444,6 +474,8 @@
       ...(contacts?.kick.some(Boolean)&&{anim:{kick:contacts.kick}}),
       radius:span,detail:30,dither:.22,look:looks.look,paletteRoles:config.paletteRoles,
       ...K.authoring.environments.rendererSettings(config),
+      ...(config.areaLights !== undefined && { areaLights: config.areaLights }),
+      ...(layers.length > 0 && { paint: { layers } }),
       ...(config.environmentSource && {environmentSource:config.environmentSource}),
       ...(view.weatherTrackState && {weatherTrackState:view.weatherTrackState}),
       ...(waterScene && { water: waterScene }),
@@ -451,6 +483,11 @@
       ...(config.reflections && { reflections: config.reflections }), ...(surfaceEffects&&{surfaceEffects})});
     const result=volume?SplatProvenance.join([...volume.parts,baked],baked):baked;
     if (marks) K.dataMarks.bind(result, marks);
+    if (consequencePaint) result.visualConsequences = consequencePaint.report;
+    if (effectFrame) {
+      effects.optics(result, effectFrame);
+      result.eventEffects = { ...effectFrame, ...(marked && { marks: marked.marks }) };
+    }
     return rig ? K.cameraRig.bind(result, rig, { query }) : result;
   }
   W.visual = visual;
@@ -462,6 +499,7 @@
     sceneCameraRig(presentation);
     K.dataMarks.prepare(presentation.visual?.dataMarks, { dataInputs });
     K.fieldViews.prepare(presentation.visual?.fieldViews);
+    W.visualConsequences.prepare(presentation.visual?.consequences, presentation, presentation.visual?.palette ?? palette);
     return presentation.visual;
   };
 })(KIT);

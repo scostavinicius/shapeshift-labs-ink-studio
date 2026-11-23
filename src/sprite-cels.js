@@ -7,8 +7,8 @@ const SpriteCels = (() => {
 
   function prepare(definition, groups, { width, color, depthRange, copyRgba, pixelBudget }) {
     if (definition === undefined) return null;
-    if (!fields(definition, ['poses', 'replacements', 'holds']))
-      throw new TypeError('Sprite cels need poses, replacements or holds');
+    if (!fields(definition, ['poses', 'replacements', 'holds', 'fringe', 'transitions', 'silhouettes']))
+      throw new TypeError('Sprite cels need poses, replacements, holds, fringe, transitions or silhouettes');
     const { poses = {}, replacements = [], holds = [] } = definition;
     if (!isRecord(poses) || Object.entries(poses).some(([name, frame]) => !name.trim() || !groups.has(frame)) ||
         ![replacements, holds].every(list => Array.isArray(list) && list.length <= 4096))
@@ -62,7 +62,20 @@ const SpriteCels = (() => {
         held.set(destination, source);
       }
     }
-    return { edited, held };
+    const transitionViews = clip => {
+      if (clip.frame !== undefined) return select(clip).views;
+      const views = [...groups.values()].flat().filter(view =>
+        (clip.direction === undefined || clip.direction === view.direction) &&
+        (clip.pitch === undefined || clip.pitch === view.pitch));
+      if (!views.length) throw new RangeError('Sprite transition matches no baked view');
+      return views;
+    };
+    const transitions = typeof SpriteTransitions === 'undefined' ? require('./sprite-transitions.js') : SpriteTransitions;
+    const transition = transitions.prepare(definition.transitions, transitionViews, playback,
+      { width, color, depthRange, copyRgba, pixelBudget, edited, silhouettes: definition.silhouettes, selectAnchor: select });
+    const fringes = typeof SpriteFringe === 'undefined' ? require('./sprite-fringe.js') : SpriteFringe;
+    const fringe = fringes.prepare(definition.fringe, groups, select, transition?.pixelBudget ?? pixelBudget);
+    return { edited, held, fringe, transition };
   }
 
   function playback(entries, fps, mode) {

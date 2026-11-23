@@ -1,0 +1,36 @@
+{
+  "format": "ink-studio/curve-splat-scene",
+  "version": 1,
+  "id": "copper-wire",
+  "background": "#101b27",
+  "palette": ["#6e3226", "#aa5936", "#ce8651", "#efb470", "#ffe0a0", "#663935"],
+  "paletteRoles": {
+    "copper": [1, 2, 3, 4, 5],
+    "oxide": [6]
+  },
+  "camera": { "target": [0, 0, 0], "dist": 6.55, "yaw": -0.12, "pitch": 0.14 },
+  "liveSun": { "direction": [-0.12, 0.55, 1], "intensity": 1.15, "shadows": false },
+  "strands": [
+    {
+      "object": "wire",
+      "material": "copper",
+      "source": {
+        "kind": "spline",
+        "points": [[-2.55,-0.61,0.1],[-1.88,-0.61,0.1],[-1.39,0.67,0.33],[-0.67,0.96,0.51],[-0.21,0.27,0.86],[0.12,-0.78,0.56],[0.80,-0.99,0.20],[1.43,-0.37,-0.20],[1.79,0.57,0.09],[2.48,0.57,0.13]],
+        "samples": 12
+      },
+      "edge": "hard",
+      "section": "round",
+      "radius": 0.155,
+      "caps": "blunt",
+      "along": {
+        "paletteRole": {
+          "keys": [[0,"oxide"],[0.21,"copper.1"],[0.42,"copper.3"],[0.64,"copper.2"],[0.83,"copper.highlight"],[1,"copper.1"]],
+          "interpolation": "linear"
+        },
+        "pigment": { "samples": ["#ffe5d8", "#ffe6d5", "#ffffff", "#ffebe2", "#ffefd4"] },
+        "roughness": [[0,0.88],[0.22,0.79],[0.42,0.16],[0.64,0.38],[0.83,0.11],[1,0.7]]
+      }
+    }
+  ]
+}

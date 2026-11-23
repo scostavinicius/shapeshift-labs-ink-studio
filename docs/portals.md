@@ -328,14 +328,15 @@ camera frame into the next place.
 Pass `session.view()` to `renderer.render(world, { portal })`. To render
 a portal without a session, supply `{ opening, destination }`. Build
 `opening` with `portals.doorway()`, and use the source and destination
-anchors' normals and up axes to set their orientation. WebGL supports one
-live view per render, rectangular and elliptical openings, and perspective
-and orthographic cameras. It supports tilted or horizontal openings along
-with upright doors. Author the frame geometry as part of the source scene.
+anchors' normals and up axes to set their orientation. WebGL supports a
+chain of up to two live views, rectangular and elliptical openings, and
+perspective and orthographic cameras. It supports tilted or horizontal
+openings along with upright doors. Author the frame geometry as part of
+the source scene.
 
 The renderer evaluates the aperture on each camera ray. Foreground splat
-coverage and opaque edge sprite pixels on the near side of the source
-plane occlude the opening. Thin, tilted splats can straddle the plane.
+coverage, opaque edge sprites and painted surface texels on the near side
+of the source plane occlude the opening. Thin, tilted splats can straddle the plane.
 Their fragments are tested using depth estimated from the projected
 Gaussian, so a splat can cover part of the opening while leaving the
 rest visible. Occlusion uses a coverage threshold for soft splats.
@@ -346,6 +347,58 @@ the arrival plane are clipped. Destination water optics begin at the
 arrival plane. Set `destinationFrame` on the view for destination render
 options such as `time`. The same portal view works on the canvas and when
 rendering to a GPU target for the [transition compositor](transitions.md#render-ink-studio-worlds-directly-into-a-transition).
+
+#### Paint an aperture and show a second doorway
+
+Pass `mask` to `portals.doorway()` or include it in a travel link's
+`aperture`. Paint a raster with bright or opaque pixels wherever the
+portal should show through. Left to right follows the source anchor's
+right axis, and the first row is at the top. The raster spans the
+opening's full half extents and is sampled one texel at a time. You can
+paint torn edges, detached pinholes, and islands of material inside the
+opening. The same pixels constrain headless crossing sweeps. A nonzero
+traveler radius also needs clearance from nearby closed texels.
+
+Use a one-channel raster of coverage bytes or supply alpha in a two- or
+four-channel raster. RGB masks use luminance. The default `maskThreshold`
+is `128` on a 0–255 scale. Use `maskThreshold: 1` for a 0/1 stencil.
+Masks can be up to 1024 × 1024 pixels and also work with elliptical openings.
+
+```js
+const paper = portals.doorway({
+  from: shrineAnchor, to: gardenEntry, halfWidth: 1.85, halfHeight: 1.59,
+  mask: tornPaperMask
+});
+const gate = portals.doorway({
+  from: gardenGate, to: courtEntry, halfWidth: 1.04, halfHeight: 1.17,
+  mask: gateMask
+});
+renderer.render(shrine, {
+  time,
+  portal: {
+    opening: paper, destination: garden,
+    destinationFrame: { portal: { opening: gate, destination: moonCourt } }
+  }
+});
+```
+
+Place the second source anchor in the first destination world. Each level
+maps the current view through its own anchors. The inner opening only shows
+up beyond the garden arrival plane and through the outer opening. Anything
+in the garden between its arrival plane and the second doorway can occlude
+the view into the court. The renderer stops after the second doorway.
+
+[Rain Between Rooms](../examples/painted-portals.cjs) shows each mask and
+lets you scrub a painted lantern across both views. To build the standalone
+browser example from the repository root, bundle the WebGL renderer and
+embed it in the demo.
+
+```sh
+npx esbuild src/webgl/renderer.mjs --bundle --format=esm --outfile=/tmp/ink-portal-renderer.mjs
+node examples/painted-portals.cjs /tmp/ink-portal-renderer.mjs /tmp/ink-portal-demo
+```
+
+Open `/tmp/ink-portal-demo/rain-between-rooms.html` in a WebGL 2 browser.
 
 ## Drop through a hatch
 

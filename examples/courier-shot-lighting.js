@@ -2,7 +2,8 @@ module.exports = ({ KIT: K, makeBuilder, makeSculpt }) => ({
   id: 'courier-shot-lighting',
   name: 'The night courier',
   seed: 24,
-  build(seed) {
+  build(seed, { controls = {} } = {}) {
+    const { lanternWalk } = controls;
     const B = makeBuilder(seed, [
       0x101827, 0x263246, 0x344358, 0x4b5b6c, 0x617178, 0x7b8791,
       0x282633, 0x463341, 0x663f4c, 0x8f5260, 0xaa6267, 0xbe7973,
@@ -21,6 +22,8 @@ module.exports = ({ KIT: K, makeBuilder, makeSculpt }) => ({
     const blue = { r:[2,22,23,24], materialId:'enamel' };
     const wall = { objectId:'wall', res:.066 }, floor = { objectId:'floor', res:.09 };
     const actor = { objectId:'courier', res:.032 }, lamp = { objectId:'lantern', res:.024 };
+    const reachingArm = lanternWalk ? { ...actor, objectId:'reaching-sleeve' } : actor;
+    const hand = lanternWalk ? { ...actor, objectId:'active-glove' } : actor;
     const box = (at, half, material, item, rd = .025) => S.box(at, half, material, { ...item, rd });
     const tube = (points, radius, material, item) => S.tube(points, radius, radius, material, item);
 
@@ -46,15 +49,16 @@ module.exports = ({ KIT: K, makeBuilder, makeSculpt }) => ({
 
     for (const side of [-1,1]) {
       const x=-.33+side*.16;
-      tube([[x,.85,.29],[x+side*.05,.45,.34],[x+side*.07,.12,.39]],.131,leather,actor);
-      S.ball([x+side*.064,.105,.485],[.131,.105,.217],leather,actor);
+      const leg = lanternWalk ? { ...actor, objectId:side < 0 ? 'left-leg' : 'right-leg' } : actor;
+      tube([[x,.85,.29],[x+side*.05,.45,.34],[x+side*.07,.12,.39]],.131,leather,leg);
+      S.ball([x+side*.064,.105,.485],[.131,.105,.217],leather,leg);
     }
     S.lathe([-.32,.45,.20],.99,t => .30 + .14*(1-t)**1.55,cloth,{...actor,maxRadius:.44});
     S.ball([-.32,1.20,.17],[.39,.31,.235],hood,actor);
     tube([[-.58,1.24,.18],[-.755,.98,.35],[-.77,.74,.45]],.107,cloth,actor);
     S.ball([-.774,.71,.452],[.107,.126,.09],leather,actor);
-    tube([[-.045,1.22,.27],[.21,1.05,.48],[.48,1.40,.56]],.103,hood,actor);
-    S.ball([.485,1.423,.562],[.115,.09,.10],leather,actor);
+    tube([[-.045,1.22,.27],[.21,1.05,.48],[.48,1.40,.56]],.103,hood,reachingArm);
+    S.ball([.485,1.423,.562],[.115,.09,.10],leather,hand);
     S.ball([-.295,1.7,.232],[.319,.365,.258],hood,{...actor,surfaceId:'courier-hood'});
     S.ball([-.264,1.702,.405],[.236,.258,.189],skin,{...actor,surfaceId:'courier-face'});
     S.ball([-.156,1.669,.555],[.069,.064,.074],skin,{...actor,surfaceId:'courier-face'});
@@ -79,11 +83,36 @@ module.exports = ({ KIT: K, makeBuilder, makeSculpt }) => ({
     }
     S.bake();
 
-    return B.finish({
-      cam:{target:[.12,1.18,.05],dist:4.35,yaw:.08,pitch:.11,ortho:true,sway:0},
+    const world = B.finish({
+      cam:{target:[.12,1.18,.05],dist:lanternWalk ? 5.2 : 4.35,yaw:.08,pitch:.11,ortho:true,sway:0},
       radius:6, dither:0,
       skyEnvironment:{defaults:{zenith:'#182642',horizon:'#435875',ground:'#23313e',sunStrength:0}},
       look:{splatCoverage:'continuous'}
     });
+    if (lanternWalk) {
+      const { objects, objectIds } = world.renderMetadata;
+      const actors = new Set(['courier','reaching-sleeve','active-glove','lantern','left-leg','right-leg']);
+      const moving = Array.from(objectIds.keys()).filter(i => actors.has(objects[objectIds[i]]));
+      const stage = K.stage(world);
+      stage.stateful = false;
+      stage.add({ pre(_dt, time) {
+        const phase = Math.max(0, Math.min(1, time / 2.8));
+        const walk = phase * phase * (3 - 2 * phase), swing = Math.sin(walk * 5 * Math.PI);
+        const raise = Math.sin(Math.PI * Math.max(0, Math.min(1, (time - .9) / 2.4)));
+        const dx = -1.76 + walk * 3.25, bob = .06 * swing * swing;
+        for (const i of moving) {
+          const q = i * 16, name = objects[objectIds[i]], x = stage.base[q], y = stage.base[q + 1];
+          const stride = name === 'left-leg' ? swing : name === 'right-leg' ? -swing : 0;
+          const foot = Math.max(0, 1 - y / .85);
+          const reach = name === 'reaching-sleeve' ? Math.max(0, Math.min(1, (x - .04) / .44)) :
+            Number(name === 'active-glove' || name === 'lantern');
+          stage.D[q] = x + dx + .10 * stride * foot + .17 * raise * reach;
+          stage.D[q + 1] = y + bob * (1 - foot * Number(stride !== 0)) +
+            .12 * Math.max(0, stride) * foot + .37 * raise * reach;
+          stage.touch(i);
+        }
+      } });
+    }
+    return world;
   }
 });

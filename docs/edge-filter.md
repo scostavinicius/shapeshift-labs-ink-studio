@@ -27,8 +27,9 @@ top-level `strength` as a fallback. Set the option to `true` to filter all
 eligible geometry or `false` to disable it. Node callers can override
 `world.look.edgeFilter` with `render(world, { edgeFilter })`.
 
-The filter applies to ordinary geometry and static strokes in the Node and CLI
-renderer. Glass, emitted particles, pixel-snapped effects, and raster sprites
+The filter applies to ordinary geometry, static strokes, and
+[finite curve splats](curve-splats.md#filter-subpixel-coverage-by-material)
+in the Node and CLI renderer. Glass, emitted particles, pixel-snapped effects, and raster sprites
 keep their authored sampling. The original sculpt still owns coverage where
 SDF assist is enabled. Filtered silhouettes use more coverage samples, so use
 scoped rules for selective filtering and to limit the work.

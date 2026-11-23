@@ -1,0 +1,17 @@
+{
+  "format": "ink-studio/match-cut",
+  "version": 1,
+  "title": "Relay to moonrise",
+  "width": 208,
+  "height": 120,
+  "fps": 12,
+  "motionFrames": 4,
+  "previewFrames": 10,
+  "limit": 4,
+  "separationFrames": 5,
+  "outgoing": { "scene": "relay-to-moon.js", "label": "The relay lens", "fromFrame": 0, "toFrame": 34 },
+  "incoming": { "scene": "relay-to-moon.js", "label": "The moon over the inlet", "controls": { "shot": "moon" }, "fromFrame": 3, "toFrame": 37 },
+  "matches": [
+    { "id": "disc", "label": "Light disc", "outgoing": { "object": "relay-lens" }, "incoming": { "object": "moon" } }
+  ]
+}

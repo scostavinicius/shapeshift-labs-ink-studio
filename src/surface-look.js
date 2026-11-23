@@ -1,12 +1,14 @@
 /* View-dependent surface finishes for splats. The shader works on a surface sample
    in world space and is shared by the software renderer and script bundle. */
 const SurfaceLook = (() => {
+  const facing = typeof FacingColors === 'undefined' ? require('./facing-colors.js') : FacingColors;
   const optics = typeof SceneOptics === 'undefined' ? require('./scene-optics.js') : SceneOptics;
   const detail = typeof StableDetail === 'undefined' ? require('./stable-detail.js') : StableDetail;
   const kits = typeof SurfaceDetailKits === 'undefined' ? require('./surface-detail-kits.js') : SurfaceDetailKits;
   const effects = typeof SplatEffects === 'undefined' ? require('./splat-effects.js') : SplatEffects;
   const stages = typeof RenderStages === 'undefined' ? require('./render-stages.js') : RenderStages;
   const pixelLook = typeof PixelLook === 'undefined' ? require('./pixel-look.js') : PixelLook;
+  const shadowBandPaint = typeof ShadowBandPaint === 'undefined' ? require('./shadow-band-paint.js') : ShadowBandPaint;
   const history = typeof MaterialHistory === 'undefined' ? require('./material-history.js') : MaterialHistory;
   let curves, luts, stacks, colorSpace, reflectionDetail;
   try {
@@ -370,8 +372,9 @@ const SurfaceLook = (() => {
     bevel(layer, q) {
       return clamp(q.nl) ** layer.power * q.light;
     },
-    diffuse(layer, { nl, light }) {
-      return clamp(nl) * light;
+    diffuse(layer, { nl, light }, bias = 0) {
+      const wrap = layer.wrap ?? 0;
+      return shadowBandPaint.level((nl + wrap) / (1 + wrap), light, bias);
     },
     specular(layer, q) {
       const { nt, ht, hb, nl, light } = q;
@@ -464,6 +467,7 @@ const SurfaceLook = (() => {
       }
       const reflected = q.reflection?.(layer, q.n, q.geometricNormal, captureDetail);
       if (!reflected) return 0;
+      if (q.planarMatte) q.planarSample = reflected;
       for (let i = 0; i < 3; i++) col[i] *= reflected.rgb[i];
       return reflected.coverage * fresnel(q.nv, layer.f0 ?? 0.04, layer.power ?? 5);
     },
@@ -547,10 +551,14 @@ const SurfaceLook = (() => {
 
   function prepare(settings, palette = [], lightDirection = [-0.55, 0.72, 0.43], context = {},
     { colorCurves = true, colorLut = true, colorStack = true, paletteConstraints = true, paletteRoles, blueNoise, onPaletteClip,
-      transmission = true, detailKits = true, validateOnly = false, skipMasks = false, ditherSpaceOverride } = {}) {
+      transmission = true, detailKits = true, diffuseRamps = true, paintShadowBands = true, shadeNormals = true,
+      validateOnly = false, skipMasks = false, ditherSpaceOverride, facingRamp, facingColors = true, directionalColors = true } = {}) {
     if (!isRecord(settings)) throw new TypeError('Surface settings must be an object');
     const roles = pixelLook.bindRoles(palette, paletteRoles, settings.paletteRoles);
     const resolveColor = value => color(value, palette, WHITE, roles);
+    const facingProfile = facingColors && facing.prepare(settings.facingColors, palette, {
+      inheritedRamp: facingRamp, validateOnly, resolveColor
+    });
     if (validateOnly && settings.renderStages !== undefined) {
       const stages = typeof RenderStages === 'undefined' ? require('./render-stages.js') : RenderStages;
       stages.prepare(settings.renderStages, { palette, roles, blueNoise, context, validateOnly });
@@ -604,11 +612,14 @@ const SurfaceLook = (() => {
     }
     const signals = prepareSignals(settings.signals, context, validateOnly);
     const sourceLayers = settings.layers ?? {};
+    const directionProfile = directionalColors && facing.prepareDirection(sourceLayers, resolveColor);
     const layers = Object.entries(settings.lookAssetId && sourceLayers.lookAssetRamp ?
       {lookAssetRamp:sourceLayers.lookAssetRamp,...sourceLayers} : sourceLayers)
       .filter(([, layer]) => layer && (layer.strength !== 0 || layer.drive?.strength !== undefined) &&
+        !facing.isDirectionalLayer(layer) &&
         (colorCurves || layer.type !== 'colorCurve') && (colorLut || layer.type !== 'colorLut') &&
         (colorStack || layer.type !== 'colorStack') && (transmission || layer.type !== 'transmission') &&
+        (diffuseRamps || layer.type !== 'diffuse') &&
         (detailKits || layer.type !== 'detailKit'))
       .map(([id, layer]) => {
         const colorLayer = colorLayers.has(layer.type);
@@ -620,6 +631,19 @@ const SurfaceLook = (() => {
         const lightingRamp = layer.lightingRamp === undefined || layer.lightingRamp === false ? null :
           prepareLightingRamp(layer.lightingRamp, palette, roles, id, layer.type);
         if (layer.type === 'diffuse' && !lightingRamp) throw new TypeError(id + ' diffuse layer needs a lightingRamp');
+        if (layer.type === 'diffuse' && layer.wrap !== undefined &&
+            (!Number.isFinite(layer.wrap) || layer.wrap < 0 || layer.wrap > 1))
+          throw new RangeError(id + '.wrap for diffuse lighting must be in [0, 1]');
+        const painted = layer.shadowBand !== undefined && layer.shadowBand !== false;
+        if (painted && (layer.type !== 'diffuse' || !isRecord(layer.shadowBand) ||
+            Object.keys(layer.shadowBand).some(key => key !== 'strokes')))
+          throw new TypeError(id + '.shadowBand needs an ordered stroke list on a diffuse lighting ramp');
+        const readBand = painted && shadowBandPaint.prepare(layer.shadowBand.strokes);
+        const shaped = layer.shadeNormals !== undefined && layer.shadeNormals !== false;
+        if (shaped && (layer.type !== 'diffuse' || !isRecord(layer.shadeNormals) ||
+            Object.keys(layer.shadeNormals).some(key => key !== 'strokes')))
+          throw new TypeError(id + '.shadeNormals needs an ordered stroke list on a diffuse lighting ramp');
+        const readNormal = shaped && shadowBandPaint.normals.prepare(layer.shadeNormals.strokes);
         numeric(
           layer,
           [
@@ -739,6 +763,8 @@ const SurfaceLook = (() => {
           retainedMask,
           model: models[layer.type],
           lightingRamp,
+          readBand: paintShadowBands && readBand,
+          readShadeNormal: shadeNormals && readNormal || undefined,
           ...(capture && {detail:captureDetail}),
           strength: clamp(layer.strength ?? 1),
           roughness: [roughness[0], roughness[1] ?? roughness[0]].map(v =>
@@ -763,15 +789,17 @@ const SurfaceLook = (() => {
     const weather = layers.some(layer => layer.retainedMask || layer.effect?.weather || layer.drive?.some(entry => entry.signal.weather));
     const hasKits = layers.some(layer=>layer.kit);
     const kitExposure = layers.some(layer=>layer.kit?.exposure);
+    const diffuseLayers = layers.some(layer => layer.type === 'diffuse');
     return {
-      settings, normal, layers, driven, weather, thin, thinLocal, hasKits, kitExposure, paintsBase,
+      settings, normal, layers, facingProfile, directionProfile, driven, weather, thin, thinLocal, hasKits, kitExposure, paintsBase, diffuseLayers,
       captureDetail: layers.some(layer=>(layer.type==='planarReflection'||layer.type==='localReflection') && layer.detail),
       needsDistance: layers.some(layer=>layer.type==='bevel' || layer.kit?.recipe==='crevice-moss' && layer.kit.crevices!=='joints'),
-      finishBeforeFog: thin || driven || hasKits || paintsBase || layers.some(layer => layer.type === 'tint'), sun: unit(vector(lightDirection, AXES.y)),
+      finishBeforeFog: Boolean(facingProfile || directionProfile) || thin || driven || hasKits || paintsBase ||
+        layers.some(layer => layer.type === 'tint' || layer.shadowBand || layer.shadeNormals), sun: unit(vector(lightDirection, AXES.y)),
       paletteConstraint: paletteConstraints && settings.paletteConstraint !== undefined
         ? pixelLook.prepareLookPolicy(settings.paletteConstraint, { palette, roles, blueNoise, context, validateOnly, onPaletteClip,
           skipMaskedStacks: !colorStack, skipMasks, ditherSpaceOverride }) : null,
-      projected: Boolean(settings.rainRipple) || driven || weather || hasKits || layers.some(layer => layer.effect || layer.spatialMask),
+      projected: Boolean(settings.rainRipple) || driven || weather || hasKits || layers.some(layer => layer.effect || layer.spatialMask || layer.shadowBand || layer.shadeNormals),
       depth: layers.some(layer => layer.effect?.depth),
       reveals: layers.some(layer => layer.effect?.reveals)
     };
@@ -822,6 +850,7 @@ const SurfaceLook = (() => {
       transmissionSun: sample.transmissionSun,
       transmissionLights: sample.transmissionLights,
       reflection: sample.reflection,
+      planarMatte: sample.planarMatte,
       localReflection: sample.localReflection,
       reflectionTangent: sample.reflectionTangent,
       reflectionDepth:sample.reflectionDepth, reflectionPixelAngle:sample.reflectionPixelAngle,
@@ -839,6 +868,8 @@ const SurfaceLook = (() => {
       bl = dot(b, sun);
     const rgb = [0, 0, 0];
     reflected?.fill(0);
+    const planarMatte = sample.planarMatte;
+    planarMatte?.fill(0);
     let unlit = prepared.paintsBase;
     const shaded = unlit && output === base ? Array.from(base).slice(0,3) : base;
     const albedo = unlit && (sample.albedo ?? shaded);
@@ -925,6 +956,10 @@ const SurfaceLook = (() => {
           if (reflected && layer.blend !== 'add') reflected[i] *= mix(1, layer.blend === 'multiply' ? result[i] : 0, amount);
         }
         if (clipped) onClip(...clipped);
+        if (planarMatte && layer.blend !== 'add') {
+          const retention = mix(1,layer.blend === 'multiply' ? (result[0]+result[1]+result[2])/3 : 0,amount);
+          for (let k=0;k<planarMatte.length;k++) planarMatte[k] *= retention;
+        }
         if (step) Object.assign(step, { applied: amount > 0, effectiveWeight: amount, output: output.slice(0, 3) });
         if (amount && visit) visit(layer, layer.mask ? maskWeight : null, amount, settings);
         continue;
@@ -938,7 +973,16 @@ const SurfaceLook = (() => {
       shading.lb = bl * c - tl * s;
       shading.light = layer.shadow === false ? 1 : visibility;
       for (let i = 0; i < 3; i++) rgb[i] = layer.color[i];
-      let response = layer.model(layer, shading, rgb);
+      if (planarMatte) shading.planarSample = undefined;
+      let response;
+      if (layer.type === 'diffuse') {
+        const at = sample.shadeNormalPosition ?? position, frame = sample.shadeNormalFrame;
+        const base = frame ? frame.restNormal(n) : n;
+        const aimed = layer.readShadeNormal?.(at,base) ?? base;
+        const posed = frame ? frame.worldNormal(aimed) : aimed;
+        const incidence = dot(posed === aimed ? aimed : unit(posed),sample.shadeNormalLight ?? sun);
+        response = layer.model(layer, { nl:incidence, light:shading.light }, layer.readBand ? layer.readBand(at) : 0);
+      } else response = layer.model(layer, shading, rgb);
       if (layer.lightingRamp) {
         const level = clamp(response);
         layer.lightingRamp.tint(level, rgb);
@@ -964,6 +1008,11 @@ const SurfaceLook = (() => {
         continue;
       }
       for (let i = 0; i < 3; i++) output[i] = mix(output[i], rgb[i], amount);
+      if (planarMatte && amount) {
+        const sampled = shading.planarSample;
+        for (let k=0;k<planarMatte.length;k++)
+          planarMatte[k] = planarMatte[k]*(1-amount) + (sampled?.matte && sampled.coverage ? sampled.matte[k]*amount/sampled.coverage : 0);
+      }
       if (reflected && amount) {
         const reflection = layer.type === 'reflection' || layer.type === 'planarReflection' || layer.type === 'localReflection';
         for (let i = 0; i < 3; i++) reflected[i] = mix(reflected[i], reflection ? rgb[i] : 0, amount);
@@ -971,9 +1020,25 @@ const SurfaceLook = (() => {
     }
     if (prepared.paletteConstraint) output[5] = prepared.paletteConstraint.swatches;
     if (unlit) reapplyLight();
+    if (prepared.facingProfile)
+      facing.shade(prepared.facingProfile, output, sample.facingNormal ?? geometricNormal, sample.facingView ?? v);
+    if (prepared.directionProfile)
+      facing.shadeDirection(prepared.directionProfile, output, sample.directionalView ?? view);
     return output;
   }
 
-  return { basePaint, STRIDE, hasBevel, needsDistance, material, merge, prepare, shade, prepareLightTrack, lightRamps, withLightRamps };
+  function prepareFacing(settings, palette, paletteRoles, inheritedRamp, validateOnly) {
+    const roles = pixelLook.bindRoles(palette, paletteRoles, settings.paletteRoles);
+    return facing.prepare(settings.facingColors, palette, {
+      inheritedRamp, validateOnly, resolveColor: value => color(value, palette, WHITE, roles)
+    });
+  }
+
+  function prepareDirection(settings, palette, paletteRoles) {
+    const roles = pixelLook.bindRoles(palette, paletteRoles, settings.paletteRoles);
+    return facing.prepareDirection(settings.layers, value => color(value, palette, WHITE, roles));
+  }
+
+  return { facingColors: facing, prepareFacing, prepareDirection, shadowBandPaint, basePaint, STRIDE, hasBevel, needsDistance, material, merge, prepare, shade, prepareLightTrack, lightRamps, withLightRamps };
 })();
 if (typeof module !== 'undefined') module.exports = SurfaceLook;

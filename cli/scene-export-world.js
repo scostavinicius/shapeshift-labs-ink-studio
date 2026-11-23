@@ -2,6 +2,8 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const { embed } = require('./data-inputs.js');
+const { embedModels } = require('./simulation-model-files.js');
+const { embedStoryDocuments } = require('./story-document.js');
 const { validateTake, readTakeWorld } = require('./take-document.js');
 
 const read = file => JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -20,12 +22,14 @@ function readExportWorld(file, kit) {
     source.dt ??= K.timeDomains.take(settings).dt;
     audio = spec.audio === undefined ? undefined : path.resolve(path.dirname(location), spec.audio);
   } else {
-    if (spec?.format !== K.world.format) return;
+    if (spec?.format !== K.world.format && spec?.format !== K.world.models.format) return;
+    source = embedStoryDocuments(embedModels(spec, location), location);
+    source = require('./asset-references.js').visual(K.authoring.assetReferences, source, 'world', location);
     if (source.dataInputs !== undefined) source.dataInputs = embed(K.dataInputs, source.dataInputs, location);
   }
   const create = () => K.world.runtime.create(source);
   return {
-    fps: settings?.fps, audio,
+    fps: settings?.fps, audio, runtime: create,
     capture({ width, height, options, render }) {
       const run = create(), original = run.view(), { dt } = original.world;
       const period = settings?.simulationRate === undefined ? T.period(dt) : T.div(T.read(1), T.read(settings.simulationRate));

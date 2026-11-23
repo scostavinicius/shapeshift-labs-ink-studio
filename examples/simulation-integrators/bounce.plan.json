@@ -1,0 +1,13 @@
+{
+  "format": "ink-studio/integration-plan",
+  "version": 1,
+  "module": "bounce.cjs",
+  "settings": {
+    "method": "rk4",
+    "initial": [0.26, 1.55, 1.28, 0],
+    "step": 0.24,
+    "eventStep": 0.08,
+    "eventTolerance": 0.000000001
+  },
+  "times": [0.24, 0.48, 0.72, 0.96, 1.2, 1.44, 1.68, 1.92, 2.16, 2.4]
+}

@@ -1,0 +1,28 @@
+{
+  "format": "ink-studio/discretization-plan",
+  "version": 1,
+  "id": "reference-slab",
+  "revision": 1,
+  "units": "m",
+  "source": {
+    "kind": "grid",
+    "size": [
+      32,
+      3
+    ],
+    "spacing": [
+      0.0375,
+      0.1
+    ]
+  },
+  "regions": [
+    {
+      "tag": "left",
+      "side": "x0"
+    },
+    {
+      "tag": "right",
+      "side": "x1"
+    }
+  ]
+}

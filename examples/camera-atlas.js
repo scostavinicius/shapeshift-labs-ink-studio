@@ -4,7 +4,7 @@ module.exports = ({ KIT: K, SpriteSurface, makeBuilder, makeSculpt }) => ({
   id: 'camera-atlas',
   name: 'Relay yard',
   seed: 52,
-  build(seed) {
+  build(seed, { controls: { compositeVideo = false } = {} } = {}) {
     const B = makeBuilder(seed, [
       0x080d1b, 0x14243b, 0x203c55, 0x2e5871, 0x4b7986, 0x7ab8b0,
       0x39283d, 0x693942, 0xa9554a, 0xe28152, 0xffbb78, 0xffedb4,
@@ -88,6 +88,7 @@ module.exports = ({ KIT: K, SpriteSurface, makeBuilder, makeSculpt }) => ({
       maxPixelsPerFrame: 2 * tileWidth * tileHeight,
       views: cameras.map(({ id, fps, target, yaw, pitch, dist }, i) => ({
         id, fps, rect: [i * (tileWidth + 2), 0, tileWidth, tileHeight],
+        ...(id === 'west' && { compositeVideo }),
         frame: ({ time }) => ({ camera: { target, pitch, dist, yaw: yaw + .17 * Math.sin(time * (i + 1) * .6) },
           spriteSurfaces: false })
       }))

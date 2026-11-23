@@ -1,0 +1,302 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Thread Studies · Ink Studio</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        color: #efe3d4;
+        background: #101219;
+        font:
+          15px/1.5 system-ui,
+          sans-serif;
+        --accent: #e5a692;
+        --muted: #b5aab0;
+        --rule: #3d343e;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+      }
+      main {
+        max-width: 1430px;
+        margin: auto;
+        padding: 32px clamp(18px, 4vw, 58px) 42px;
+      }
+      header {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 4px 32px;
+      }
+      h1 {
+        margin: 0;
+        color: #f2dfca;
+        font:
+          500 clamp(40px, 6vw, 72px)/1.05 Georgia,
+          serif;
+        letter-spacing: -0.035em;
+      }
+      header p {
+        color: var(--muted);
+        margin: 0;
+      }
+      nav {
+        display: flex;
+        gap: 0 24px;
+        flex-wrap: wrap;
+        margin-top: 24px;
+        border-bottom: 1px solid var(--rule);
+      }
+      button {
+        font: inherit;
+        color: var(--muted);
+        cursor: pointer;
+        background: none;
+      }
+      button:focus-visible,
+      canvas:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 3px;
+      }
+      nav button {
+        padding: 8px 0 11px;
+        border: 0;
+        border-bottom: 2px solid transparent;
+      }
+      nav button[aria-pressed='true'] {
+        color: #f6d7bf;
+        border-bottom-color: var(--accent);
+      }
+      button:hover {
+        color: #fff3df;
+      }
+      figure {
+        margin: 0;
+      }
+      .frame {
+        border: 1px solid var(--rule);
+        border-top: 0;
+        background: #111621;
+      }
+      canvas {
+        display: block;
+        width: 100%;
+        height: auto;
+        aspect-ratio: 1240 / 758;
+        touch-action: none;
+        cursor: grab;
+      }
+      canvas:active {
+        cursor: grabbing;
+      }
+      figcaption {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 12px;
+        margin-top: 13px;
+      }
+      h2 {
+        margin: 0;
+        font:
+          500 27px/1.15 Georgia,
+          serif;
+      }
+      #technique {
+        display: block;
+        margin-top: 4px;
+        color: var(--muted);
+        font-size: 13px;
+      }
+      .controls {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+      }
+      .controls button {
+        min-width: 37px;
+        min-height: 37px;
+        padding: 6px 12px;
+        border: 1px solid var(--rule);
+      }
+      #view-help {
+        margin: 12px 0 0;
+        color: var(--muted);
+        font-size: 12px;
+      }
+      #error {
+        color: #ffb4a9;
+        margin: 0;
+        padding: 16px;
+      }
+      @media (max-width: 600px) {
+        main {
+          padding-top: 24px;
+        }
+        nav {
+          gap: 0 17px;
+        }
+        nav button {
+          font-size: 13px;
+        }
+        figcaption {
+          align-items: flex-start;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>Thread Studies</h1>
+        <p>Ink Studio</p>
+      </header>
+      <nav aria-label="Textile studies">
+        <button type="button" data-study="garden" aria-pressed="true">Moon Garden</button>
+        <button type="button" data-study="moth" aria-pressed="false">Ember Moth</button>
+        <button type="button" data-study="harbor" aria-pressed="false">Signal Harbor</button>
+      </nav>
+      <figure>
+        <div class="frame">
+          <canvas
+            id="view"
+            width="1240"
+            height="758"
+            tabindex="0"
+            aria-label="Interactive textile rendering"
+            aria-describedby="view-help"
+          ></canvas>
+          <p id="error" role="alert" hidden></p>
+        </div>
+        <figcaption>
+          <div aria-live="polite">
+            <h2 id="title">Moon Garden</h2>
+            <span id="technique">Directional embroidery</span>
+          </div>
+          <div class="controls" aria-label="Camera controls">
+            <button type="button" id="zoom-in" aria-label="Zoom in">+</button>
+            <button type="button" id="zoom-out" aria-label="Zoom out">−</button>
+            <button type="button" id="reset">Reset view</button>
+          </div>
+        </figcaption>
+      </figure>
+      <p id="view-help">Drag or use the arrow keys to orbit. Scroll or use + and − to zoom.</p>
+    </main>
+    <script src="../dist/ink-studio.browser.js"></script>
+    <script src="./thread-studies.js"></script>
+    <script type="module">
+      import { createRenderer } from '../webgl.mjs';
+
+      const canvas = document.querySelector('#view');
+      const buttons = [...document.querySelectorAll('[data-study]')];
+      const error = document.querySelector('#error');
+      const cache = new Map();
+      const toolkit = { KIT, PixelLook, RenderStages, makeBuilder, makeSculpt, SpriteSurface, ContributionRules };
+      let renderer,
+        study,
+        camera,
+        pending = false,
+        drag;
+      const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
+      function report(problem) {
+        error.hidden = false;
+        error.textContent = problem instanceof Error ? problem.message : String(problem);
+      }
+      function redraw() {
+        if (pending || !study) return;
+        pending = true;
+        requestAnimationFrame(() => {
+          pending = false;
+          try {
+            renderer.render(study.world, {
+              camera,
+              width: canvas.width,
+              height: canvas.height,
+              time: 0,
+              raw: true,
+              damp: false,
+              changedRows: [],
+              stepAnimation: false
+            });
+          } catch (problem) {
+            report(problem);
+          }
+        });
+      }
+      function setStudy(id) {
+        if (!cache.has(id)) cache.set(id, makeThreadStudy(toolkit, id));
+        study = cache.get(id);
+        camera = { ...study.world.cam };
+        document.querySelector('#title').textContent = study.title;
+        document.querySelector('#technique').textContent = study.technique;
+        for (const button of buttons) button.setAttribute('aria-pressed', String(button.dataset.study === id));
+        redraw();
+      }
+      function zoom(factor) {
+        camera.dist = clamp(camera.dist * factor, 3.7, 20);
+        redraw();
+      }
+      try {
+        renderer = createRenderer(canvas, { toolkit });
+        setStudy('garden');
+        for (const button of buttons)
+          button.onclick = () => {
+            try {
+              setStudy(button.dataset.study);
+            } catch (problem) {
+              report(problem);
+            }
+          };
+        document.querySelector('#zoom-in').onclick = () => zoom(0.79);
+        document.querySelector('#zoom-out').onclick = () => zoom(1 / 0.79);
+        document.querySelector('#reset').onclick = () => {
+          camera = { ...study.world.cam };
+          redraw();
+        };
+        canvas.onpointerdown = event => {
+          canvas.setPointerCapture(event.pointerId);
+          drag = { x: event.clientX, y: event.clientY, yaw: camera.yaw, pitch: camera.pitch };
+        };
+        canvas.onpointermove = event => {
+          if (!drag) return;
+          camera.yaw = clamp(drag.yaw - (event.clientX - drag.x) * 0.005, -1.15, 1.15);
+          camera.pitch = clamp(drag.pitch + (event.clientY - drag.y) * 0.005, -0.75, 0.85);
+          redraw();
+        };
+        canvas.onlostpointercapture = () => {
+          drag = null;
+        };
+        canvas.addEventListener(
+          'wheel',
+          event => {
+            event.preventDefault();
+            zoom(Math.exp(clamp(event.deltaY, -175, 175) * 0.002));
+          },
+          { passive: false }
+        );
+        canvas.onkeydown = event => {
+          const move = { ArrowLeft: [-0.09, 0], ArrowRight: [0.09, 0], ArrowUp: [0, 0.09], ArrowDown: [0, -0.09] }[
+            event.key
+          ];
+          if (move) {
+            camera.yaw = clamp(camera.yaw + move[0], -1.15, 1.15);
+            camera.pitch = clamp(camera.pitch + move[1], -0.75, 0.85);
+            redraw();
+          } else if (event.key === '+' || event.key === '=') zoom(0.85);
+          else if (event.key === '-') zoom(1 / 0.85);
+          else return;
+          event.preventDefault();
+        };
+      } catch (problem) {
+        report(problem);
+      }
+    </script>
+  </body>
+</html>

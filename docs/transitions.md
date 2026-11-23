@@ -66,7 +66,7 @@ the corresponding side of the effect.
 
 ## Presets
 
-Use `transitionPresets` to list the 49 definitions with display names, groups,
+Use `transitionPresets` to list the 50 definitions with display names, groups,
 durations, stage spans, and preset-specific default overrides.
 
 | Group | Preset IDs |
@@ -74,7 +74,7 @@ durations, stage spans, and preset-specific default overrides.
 | Blackouts and fades | `hard-blackout`, `fade-out-cut-in`, `cut-out-fade-in`, `stepped-fade`, `fade-through-white`, `fade-through-color`, `silhouette-to-black`, `last-light-out` |
 | Waking, sleeping, and coming to | `first-slit-of-light`, `eyelid-reveal`, `sleepy-double-blink`, `squint-into-daylight`, `come-to-in-fragments`, `drift-off`, `faint`, `wake-from-a-dream`, `wake-in-darkness` |
 | Irises, wipes, and room changes | `character-centered-iris`, `destination-iris`, `diamond-iris`, `horizontal-squeeze`, `vertical-split`, `side-wipe`, `diagonal-wipe`, `stair-step-wipe`, `clock-wipe`, `blind-wipe`, `doorframe-wipe`, `stairwell-blackout` |
-| Tiles, dissolves, and encounters | `checkerboard-swap`, `random-block-blackout`, `tile-flood`, `spiral-blackout`, `scanline-build`, `pixelate-and-rebuild`, `dither-dissolve`, `color-by-color-dissolve`, `strip-pull-apart`, `rush-to-black`, `freeze-flash-swap`, `threat-centered-blackout` |
+| Tiles, dissolves, and encounters | `checkerboard-swap`, `random-block-blackout`, `tile-flood`, `spiral-blackout`, `scanline-build`, `pixelate-and-rebuild`, `dither-dissolve`, `color-by-color-dissolve`, `strip-pull-apart`, `column-melt`, `rush-to-black`, `freeze-flash-swap`, `threat-centered-blackout` |
 | Dreams, memories, and time jumps | `bright-memory-wash`, `palette-drift`, `same-room-time-jump`, `alternating-era-bands`, `lingering-afterimage`, `ripple-into-a-vision`, `ink-soak`, `black-between-fragments` |
 
 | Option | Meaning |
@@ -118,12 +118,48 @@ shader coordinates use the WebGL bottom-left convention.
 | `threat` | White enemy shape for `threat-centered-blackout`. Otherwise it uses a patch centered on `anchor`. |
 | `fragment1`, `fragment2` | Optional consecutive glimpses. They default to `from` and `to`. |
 | `jamb` | Optional doorframe texture used by `doorframe-wipe`. Give its opaque pixels the desired material and use the alpha channel for cutouts. |
+| `melt` | Optional one-row timing map for `column-melt` compiled from artist paint. |
 | `cover` | Reserved solid fill produced from `u_color`. |
 
 Use `removeSource(name)` to release a source. Call `composer.dispose()` when
 unmounting; it also disposes its shaders and render targets. DOM and byte-array
 sources are uploaded again after context restoration. The host must supply new
 external GL textures and redraw its render targets after a context restore.
+
+### Paint a column melt
+
+`column-melt` drops the outgoing image in vertical strips, revealing the
+incoming image from the top. Strips move in whole art-pixel rows. With no
+paint, `cellSize` controls strip width and `seed` sets the repeatable pattern.
+
+Compile a top-left RGBA byte image with `createColumnMeltMap`. Each strip
+takes the strongest alpha-weighted value painted anywhere along it for each
+channel independently.
+
+- **Red** starts the slip. Brighter red starts it sooner. Blank paint starts a
+  wave from the center.
+- **Green** slows the wave as it crosses painted strips. `spread` sets the
+  travel time across an unpainted image. Lower values give a faster spread.
+- **Blue** makes a strip sag, hold, then drop. Brighter blue holds it longer.
+
+`strips` defaults to the paint image width. Use fewer strips for wider bands
+and more strips for narrow cuts. All strips clear by the end of the transition.
+
+```js
+import { createColumnMeltMap, createTransition, renderColumnMelt } from './ink-studio/webgl.mjs';
+
+const melt = createTransition('column-melt', { duration: 1.65 });
+const map = createColumnMeltMap(paintRGBA, { strips: 58, spread: 0.62 });
+composer.setSource('melt', map);
+const frame = melt.sample(0.85);
+composer.draw(frame);
+
+// The same effect on RGBA byte images in a headless job.
+const pixels = renderColumnMelt(fromRGBA, toRGBA, { map, progress: frame.value });
+```
+
+Run `node examples/column-melt.mjs ./out/column-melt` to generate the
+Lantern Sluice loop and an interactive paint and scrub demo.
 
 ### Render Ink Studio worlds directly into a transition
 

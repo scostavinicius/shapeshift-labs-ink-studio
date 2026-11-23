@@ -1,6 +1,7 @@
 /* An arranged cue with independent performance, instrumentation and mix. */
 (function (P) {
-  const C=P.musicComposer, H=P.musicHarmony, T=P.takeTime, I=P.musicInstruments, G=P.musicGestures;
+  const C=P.musicComposer, H=P.musicHarmony, T=P.takeTime, I=P.musicInstruments, G=P.musicGestures,Q=P.musicCueMap;
+  const N=P.musicNoteClips,R=P.performanceGroove,F=P.musicPhrasePerformance;
   const {record,fields,finite,integer,id,check,clamp,db,hash}=I;
   const epsilon=1e-8;
   const number=(raw,key,fallback,low,high)=>{
@@ -157,12 +158,16 @@
     return result;
   }
 
-  function compile(source,assets={}) {
-    check(fields(source,['arrangement','patches','tracks','room','gain','seed']) &&
+  function compile(source,assets={},host) {
+    check(fields(source,['arrangement','patches','tracks','room','gain','seed','cueMap','grooveMap']) &&
       Number.isSafeInteger(source.seed ?? 0), 'A production needs an arrangement, patches and tracks');
-    const plan=source.arrangement?.format==='ink-studio/phrase-arrangement' ?
+    const written=source.arrangement?.format==='ink-studio/phrase-arrangement' ?
       C.compose(source.arrangement.definition) : C.compose(source.arrangement);
-    const program=P.musicScore.compile(plan.score), clock=P.musicTiming.compile(plan.score.tempoMap);
+    const clock=P.musicTiming.compile(written.score.tempoMap);
+    const cue=source.cueMap===undefined ? null : Q.compile(source.cueMap,written,source.tracks,clock,source.seed ?? 0);
+    const score=cue ? Q.harmonize(cue,written.score) : written.score;
+    const plan=score===written.score ? written : P.data.freeze({...written,score});
+    const program=P.musicScore.compile(plan.score);
     const assetMap=Object.fromEntries(table(assets,128,'instrument asset').map(([name,asset])=>{
       const audio=P.mediaGraph.audio(asset);
       check(audio.channels<=2 && audio.samples.length>0 && audio.samples.length/audio.channels/audio.sampleRate<=60,
@@ -178,8 +183,11 @@
       decay:number(roomSpec,'decay',.42,.05,2),damping:number(roomSpec,'damping',.65,0,1)};
     const tracks=Object.fromEntries(table(source.tracks,8,'production track').map(([name,raw])=>{
       check(name!=='room' && Object.hasOwn(plan.parts,name) &&
-        fields(raw,['patch','gain','pan','highpass','lowpass','send','groove','pad','choke','duck','gestures']) &&
+        fields(raw,['patch','gain','pan','highpass','lowpass','send','groove','pad','choke','duck','gestures','clips','phrases','timingEdits']) &&
         Object.hasOwn(patches,raw.patch) && (raw.choke===undefined || id(raw.choke)), 'Track needs a score part and an instrument patch');
+      check(raw.clips===undefined || plan.parts[name].role!=='percussion' ||
+        Array.isArray(raw.clips) && raw.clips.every(clip=>clip?.mode==='layer'),
+      'Percussion tracks accept additive note clips');
       check(raw.duck===undefined || fields(raw.duck,['from','depth','release']),'Invalid ducking settings');
       const duck=raw.duck && {from:raw.duck.from,depth:number(raw.duck,'depth',4,0,18),
         release:number(raw.duck,'release',.1,.015,1)};
@@ -188,50 +196,159 @@
         highpass:number(raw,'highpass',0,0,4000),lowpass:number(raw,'lowpass',20000,80,24000),
         send:number(raw,'send',0,0,1),choke:raw.choke,duck};
       const patch=patches[raw.patch];
-      return [name,{patch:raw.patch,play:patch.player,mix,echo:patch.echo,color:patch.color,
+      const compiled={patch:raw.patch,play:patch.player,external:patch.external,performance:patch.performance,mix,echo:patch.echo,color:patch.color,
         gestures:G.score(raw.gestures,patch,plan,clock),
-        groove:groove(raw.groove),pad:raw.pad===undefined ? null : pad(raw.pad,plan.sections)}];
+        clips:raw.clips===undefined ? null : N.rows(raw.clips,clock,program,plan.sections.at(-1).end),
+        timingEdits:P.musicTimingEdits.compile(raw.timingEdits),groove:groove(raw.groove),pad:raw.pad===undefined ? null : pad(raw.pad,plan.sections)};
+      compiled.phrases=F.compile(raw.phrases,plan.sections.at(-1).end,clock,compiled);
+      return [name,compiled];
     }));
     check(Object.keys(tracks).length>0,'A production needs at least one track');
-    const events={}, end=program.duration;
-    let eventCount=0;
-    for (const [name,track] of Object.entries(tracks)) {
-      const rows=scoreRows(plan,program,clock,name,track.pad), g=track.groove;
-      const notes=[], last=new Map(), lastNotes=new Map();
+    const names=Object.keys(tracks), end=program.duration;
+    const articulations=source.grooveMap?.ensemble && Object.fromEntries(names.map(name=>
+      [name,I.articulationNames(source.patches[tracks[name].patch])]));
+    const performance=source.grooveMap===undefined ? null : R.compile(source.grooveMap,plan,names,articulations);
+    const ensemble=performance?.ensemble, events=Object.fromEntries(names.map(name=>[name,[]]));
+    function prepare(name) {
+      const track=tracks[name], scoreNotes=N.overlay(scoreRows(plan,program,clock,name,track.pad),track.clips,clock);
+      const rows=cue ? Q.shape(cue,name,scoreNotes) : scoreNotes;
+      const silence=cue?.perTrack[name].silence ?? [], cuts=cue?.perTrack[name].cuts ?? [];
+      const silent=time=>silence.some(window=>time>=window.startTime-epsilon && time<window.endTime-epsilon);
+      const drafts=[];
       for (const row of rows) {
         if (row.midi===null || !row.frequency || !row.velocity) continue;
-        const beatStyle=grooveAt(g,row.beat), style=G.perform(track.gestures,row.beat,row.play,track.color);
-        let play=style.play;
-        const time=Math.max(0,row.time+beatStyle.delay+(play.delay ?? 0));
+        const beat=round(row.beat), beatStyle=row.played ? {delay:0,accent:1} : grooveAt(track.groove,row.beat);
+        const style=G.perform(row.played ? [] : track.gestures,row.beat,row.play,track.color), play=style.play;
+        const phrase=F.at(track.phrases,beat), authoredNote=phrase?.overrides.get(F.noteKey(row));
+        if (authoredNote?.articulation!==undefined) style.play={...play,articulation:authoredNote.articulation};
+        const inherited=row.played ? null : performance?.style(name,style.play.articulation,beat,clock);
+        const phrasing=row.played ? null : ensemble?.style(name,beat,row.midi,clock);
+        const authored=row.time+beatStyle.delay+(play.delay ?? 0)+(inherited?.delay ?? 0)+(phrasing?.delay ?? 0)+
+          (authoredNote?.delay ?? 0);
+        const proposed=performance?.anchor(row.beat) ? row.time : Math.max(0,authored);
+        const velocity=clamp(row.velocity*beatStyle.accent*style.accent*(inherited?.accent ?? 1)*(phrasing?.accent ?? 1)*(authoredNote?.accent ?? 1));
+        const audible=proposed<end && !silent(round(proposed)) && velocity>0;
+        drafts.push({row,style,inherited,phrasing,authored,proposed,audible,velocity,authoredNote,adjustment:0});
+      }
+      return {drafts,silence,cuts,silent};
+    }
+    const prepared=ensemble && Object.fromEntries(names.map(name=>[name,prepare(name)]));
+    const matches=ensemble?.couple(prepared,clock,performance.anchor), references={};
+    let eventCount=0;
+    for (const name of performance?.order ?? names) {
+      const track=tracks[name], follow=performance?.driver(name,events,clock);
+      const {drafts,silence,cuts,silent}=prepared ? prepared[name] : prepare(name);
+      const next=(rows,time)=>rows.find(window=>window.startTime>time+epsilon);
+      const notes=[], last=new Map(), lastNotes=new Map(), hits=[];
+      for (const {row,style,inherited,phrasing,authored,velocity,authoredNote,adjustment} of drafts) {
+        const articulation=authoredNote?.articulation ?? phrasing?.articulation;
+        let play=articulation ? {...style.play,articulation} : style.play;
+        const proposed=authored+adjustment;
+        const anchored=performance?.anchor(row.beat);
+        // Played clips skip automatic groove, but explicit take edits still apply.
+        const performed=anchored ? row.time : row.played ?
+          Math.max(row.clipLaunch ?? 0,row.time+(authoredNote?.delay ?? 0)) :
+          follow ? follow(proposed,row.beat) : proposed;
+        const delay=anchored || !track.timingEdits.size ? 0 : track.timingEdits.get(P.musicTimingEdits.key(row))?.delay ?? 0;
+        const time=delay ? Math.max(row.clipLaunch ?? 0,performed+delay) : Math.max(0,performed);
         const connection=round(time);
-        const velocity=clamp(row.velocity*beatStyle.accent*style.accent);
-        const gate=Math.max(.001,(row.end-row.time)*(play.gate ?? 1));
-        const voice=row.voice ?? 0, retrigger=play.retrigger ?? 1, fromFrequency=last.get(voice);
+        if (silent(connection)) continue;
+        const writtenGate=(row.end-row.time)*(row.ties ? 1 : play.gate ?? 1), length=inherited?.gate;
+        let shapedGate=writtenGate+(length && !row.ties ? (length.target-writtenGate)*length.strength : 0);
+        if (phrasing && !row.ties) {
+          const takeGate=phrasing.gate;
+          if (takeGate) shapedGate+=(takeGate.target-shapedGate)*takeGate.strength;
+          shapedGate*=phrasing.length;
+        }
+        const gate=Math.max(row.played ? 1e-5 : .001,shapedGate*(authoredNote?.gate ?? 1));
+        const voice=row.voice ?? 0, retrigger=row.ties ? 1 : play.retrigger ?? 1, fromFrequency=last.get(voice);
         const previous=lastNotes.get(voice);
-        const connected=style.legato && velocity>0 && plan.parts[name].role!=='percussion' &&
-          !track.pad && previous?.velocity>0 && connection<end && connection>previous.time+.005 &&
-          connection-previous.time-previous.gate<=.14;
+        const connected=!track.performance && style.legato && velocity>0 && plan.parts[name].role!=='percussion' &&
+          !track.pad && previous?.velocity>0 && previous.time>=(row.clipLaunch ?? -Infinity)-epsilon && connection<end && connection>previous.time+.005 &&
+          connection-previous.time-previous.gate<=.14 &&
+          (next(silence,previous.time)?.startTime ?? Infinity)>connection;
         if (connected) {
           previous.gate=connection-previous.time;
-          previous.choke=connection+.012;
+          previous.choke=Math.min(previous.choke ?? Infinity,connection+.012);
           if (play.glide===undefined) play={...play,glide:.05};
         }
         last.set(voice,row.frequency);
         for (let r=0;r<retrigger;r++) {
           const onset=round(time+r*gate/retrigger);
-          if (onset>=end) continue;
+          if (onset>=end || silent(onset) ||
+              (next(silence,connection)?.startTime ?? Infinity)<=onset) continue;
           const salt=hash([source.seed ?? 0,name,round(row.beat),voice,r]);
-          const note={part:name,beat:round(row.beat),time:onset,gate:gate/retrigger,midi:row.midi,
+          const stop=next(silence,onset)?.startTime ?? Infinity;
+          const note={part:name,beat:round(row.beat),time:onset,gate:Math.min(gate/retrigger,stop-onset),midi:row.midi,
             frequency:row.frequency,velocity,play,fromFrequency,salt,roundRobin:notes.length,
-            ...(style.gesture && {gesture:style.gesture}),...(connected && r===0 && {connected:true})};
+            ...(row.clip && {clip:row.clip,voice:row.voice,note:row.note,...(row.ties && {ties:row.ties})}),
+            ...(track.performance && !row.clip && row.voice!==undefined && {voice:row.voice}),
+            ...(row.clipLaunch!==undefined && {clipLaunch:row.clipLaunch}),
+            ...(row.clipEnd!==undefined && {clipEnd:row.clipEnd,choke:row.clipEnd+.006,chokeFade:.006}),
+            ...(r>0 && {retrigger:r}),...(row.played && {played:true}),...(style.gesture && {gesture:style.gesture}),...(connected && r===0 && {connected:true})};
+          const cut=next(cuts,onset)?.startTime;
+          if (cut!==undefined && cut<(note.choke ?? Infinity) && (track.external || track.performance || track.phrases.length || onset+track.play.prepare(note,48000,note.gate).duration>cut))
+            note.choke=cut;
           notes.push(note);
+          if (r===0 && phrasing?.reference) hits.push({beat:note.beat,midi:note.midi,time:note.time,...phrasing.reference});
           lastNotes.set(voice,note);
           check(++eventCount<=32768,'Production exceeds its event budget');
         }
       }
       notes.sort((a,b)=>a.time-b.time);
+      if (track.performance) P.musicPhrasing.apply(track.performance,notes,silence,plan.parts[name].role==='percussion');
       events[name]=notes;
+      if (hits.length) references[name]=hits;
     }
+    applyChokes(tracks,events);
+    for (const name of names) {
+      const track=tracks[name];
+      if (track.performance) P.musicPhrasing.releases(events[name]);
+      if (track.timingEdits.size) for (const note of events[name]) {
+        const offset=track.timingEdits.get(P.musicTimingEdits.key(note))?.offset;
+        if (offset!==undefined) note.play={...note.play,offset};
+      }
+      if (!track.phrases.length) continue;
+      const patch=source.patches[track.patch];
+      const release=[patch,...Object.values(patch.instruments ?? {})].some(voice=>voice.type==='sample' &&
+        voice.zones.some(zone=>zone.oneShot!==false)) ? Infinity : 8;
+      let knots=0;
+      for (const note of events[name]) {
+        const phrase=F.at(track.phrases,note.beat);
+        if (phrase) {
+          knots+=F.bind(note,phrase,release);
+          check(knots<=400000,'Phrase expression exceeds its total voice knot budget');
+        }
+      }
+    }
+    const locks=cue || performance ? Object.keys(C.locks(written)) : [];
+    if (locks.length) {
+      const {cueMap,grooveMap,...plain}=source, base=compile(plain,assets);
+      for (const name of locks) {
+        const moments=[...base.program.events,...program.events,...written.cues.filter(row=>row.part===name)];
+        check(tracks[name] ? JSON.stringify(base.events[name])===JSON.stringify(events[name]) &&
+          (!cue || cue.perTrack[name].room.every(row=>row.send.every(value=>value===tracks[name].mix.send)) &&
+          !cue.perTrack[name].cuts.length && !cue.perTrack[name].tail.length && !cue.perTrack[name].depth.length &&
+          [...cue.perTrack[name].level,...cue.perTrack[name].eq]
+            .every(row=>row.gainDb===0)) :
+          moments.every(row=>JSON.stringify(base.program.pitch(name,row.time))===JSON.stringify(program.pitch(name,row.time))),
+        (cue ? 'Cue map or groove changes pinned part ' : 'Groove changes pinned part ')+name);
+      }
+    }
+    let evidence;
+    if (ensemble) {
+      const onsets=Object.fromEntries(names.map(name=>[name,new Map(events[name].filter(note=>note.velocity>0).slice()
+        .reverse().map(note=>[note.beat,note.time]))]));
+      for (const match of matches) {
+        const [a,b]=match.tracks.map((track,i)=>onsets[track].get(match.beats[i]));
+        match.realizedSeconds=a===undefined || b===undefined ? null : round(b-a);
+      }
+      evidence={id:ensemble.id,matches,references};
+    }
+    return {arrangement:plan,events,end,program,clock,tracks,room,gain,cue,host,...(evidence && {ensemble:evidence})};
+  }
+
+  function applyChokes(tracks,events) {
     const chokeGroups=new Map();
     for (const [name,track] of Object.entries(tracks)) if (track.mix.choke) {
       const group=track.mix.choke, rows=chokeGroups.get(group) ?? [];
@@ -239,105 +356,274 @@
       chokeGroups.set(group,rows);
     }
     for (const rows of chokeGroups.values()) {
-      rows.sort((a,b)=>a.time-b.time);
+      const onset=note=>note.start ?? note.time;
+      rows.sort((a,b)=>onset(a)-onset(b));
       let next=Infinity;
       for (let i=rows.length-1;i>=0;i--) {
-        const at=rows[i].time;
-        if (rows[i+1]?.time>at) next=rows[i+1].time;
+        const at=onset(rows[i]);
+        if (rows[i+1] && onset(rows[i+1])>at) next=onset(rows[i+1]);
         if (next!==Infinity) rows[i].choke=Math.min(rows[i].choke ?? next,next);
       }
     }
-    return {arrangement:plan,events,end,program,clock,tracks,room,gain};
   }
 
   function sampleAt(time,rate) {
     return T.index(T.roundDown(T.mul(T.read(time),[BigInt(rate),1n])));
   }
   const roomTimes=[.019,.029,.043,.057,.073,.097,.117,.149,.183,.211,.254,.287,.331,.383,.449];
-  function renderCompiled(music,options={}) {
-    check(fields(options,['start','end','sampleRate','stems','tail','layers']),'Invalid production render options');
-    const {start=0,end=music.end,sampleRate=48000,stems=false,tail=0,layers={}}=options;
-    check(finite(start,0,music.end) && finite(end,start,music.end) && end>start &&
-      integer(sampleRate,8000,96000) && typeof stems==='boolean' && finite(tail,0,8), 'Invalid production export range');
-    const begin=sampleAt(start,sampleRate), stop=sampleAt(end+tail,sampleRate), n=stop-begin;
-    const names=Object.keys(music.tracks);
-    check(record(layers) && Object.entries(layers).every(([name,level])=>names.includes(name) &&
-      finite(level,0,1)), 'Invalid production layer levels');
-    check(n>0 && stop*(names.length+3)*2<=36e6,'Production exceeds its sample budget');
-    const buffers={}, mix=new Float32Array(n*2), feed=new Float32Array(stop*2);
-    for (const name of names) {
-      const track=music.tracks[name], data=new Float32Array(stop*2);
-      for (const note of music.events[name]) {
-        if (note.time>=end) break;
-        const first=Math.ceil(note.time*sampleRate-1e-7);
-        if (first>=stop) break;
-        const sound=track.play.prepare(note,sampleRate,Math.min(note.gate,end-note.time));
-        const endTime=Math.min(note.choke ?? Infinity,note.time+sound.duration);
-        const last=Math.min(stop,Math.ceil(endTime*sampleRate));
-        for (let at=first;at<last;at++) {
-          const t=Math.max(0,at/sampleRate-note.time);
-          const fade=note.choke===endTime ? clamp((endTime-at/sampleRate)*250) : 1;
-          const frame=at-first;
-          const left=sound.signal(t,frame,0)*fade;
-          data[2*at]+=left;
-          data[2*at+1]+=sound.stereo ? sound.signal(t,frame,1)*fade : left;
-        }
+  function roomTaps(room,rate) {
+    return roomTimes.map((seconds,i)=>{
+      const time=seconds*room.size;
+      return {samples:Math.max(1,Math.round(time*rate)),
+        gain:room.gain*Math.exp(-3*time/room.decay)*(i%3===1?-.31:.28), cross:i%2===0};
+    });
+  }
+  const roomSmoothing=room=>.06+.39*(1-room.damping);
+  function makeSessionRoom(room,rate) {
+    const taps=roomTaps(room,rate), smoothing=roomSmoothing(room);
+    const length=1+Math.max(...taps.map(row=>row.samples)), ring=new Float32Array(length*2);
+    const state={index:0,history:0,left:0,right:0};
+    const out=[0,0];
+    return P.audioCheckpoint((inputL,inputR,cut)=>{
+      let {index,history,left,right}=state;
+      if (cut) {history=0; left=right=0;}
+      let l=0,r=0;
+      for (const tap of taps) {
+        if (tap.samples>history) continue;
+        const at=2*((index+length-tap.samples)%length);
+        l+=ring[at+Number(tap.cross)]*tap.gain;
+        r+=ring[at+Number(!tap.cross)]*tap.gain;
       }
-      const desk=track.mix, panL=Math.sqrt((1-desk.pan)/2), panR=Math.sqrt((1+desk.pan)/2);
-      const automation=G.automate(track.gestures,{gain:0,pan:desk.pan,cutoff:desk.lowpass,echo:track.echo?.send ?? 0},sampleRate);
-      const echo=G.tapeEcho(track.echo,sampleRate);
-      const coefficient=frequency=>1-Math.exp(-2*Math.PI*Math.min(sampleRate*.49,frequency)/sampleRate);
-      const high=coefficient(desk.highpass), low=coefficient(desk.lowpass);
-      const dry=stems ? new Float32Array(n*2) : null;
-      let lowL=0,lowR=0,highL=0,highR=0, hit=0;
-      const anchors=desk.duck && music.events[desk.duck.from].filter(note=>note.time<end);
-      const gain=desk.gain*music.gain*(layers[name] ?? 1);
-      for (let i=0;i<stop;i++) {
-        const index=2*i, time=i/sampleRate;
+      left+=(l-left)*smoothing; right+=(r-right)*smoothing;
+      ring[2*index]=inputL; ring[2*index+1]=inputR;
+      if (++index===length) index=0;
+      if (!cut) history=Math.min(length,history+1);
+      state.index=index; state.history=history; state.left=left; state.right=right;
+      out[0]=left;out[1]=right;
+      return out;
+    },state,ring);
+  }
+  function prepareVoice(track,note,gateEnd,sampleRate,tails) {
+    const start=note.start ?? note.time;
+    const first=Math.ceil(start*sampleRate-1e-7);
+    // A truncated loop keeps the authored envelope and expression up to its cut.
+    if (note.clipEnd!==undefined) gateEnd=Math.max(gateEnd,note.time+note.gate);
+    const gate=Math.min(note.gate,gateEnd-note.time)+note.time-start;
+    const nativeGate=note.start===undefined ? Math.min(note.gate,gateEnd-note.time) : gate;
+    const cropped=note.performance?.release && gateEnd<note.time+note.gate-1e-8;
+    const sound=track.play.prepare(cropped ? {...note,suppressRelease:true} : note,sampleRate,nativeGate);
+    const naturalEnd=Math.min(note.choke ?? Infinity,start+sound.duration);
+    const {attackFade=0,releaseLimit=Infinity}=note.play ?? {};
+    const limitedEnd=Math.min(naturalEnd,start+nativeGate+releaseLimit);
+    const shortened=tails?.length ? Q.tailLimit(tails,note.time+note.gate,limitedEnd) : null;
+    const endTime=shortened?.stop ?? limitedEnd;
+    const releaseFade=limitedEnd<naturalEnd && endTime===limitedEnd ? Math.min(.02,Math.max(.004,releaseLimit*.5)) : 0;
+    const last=Math.ceil(endTime*sampleRate);
+    const placementGain=note.renderGain ?? 1, entryFade=note.renderFade;
+    function read(at,out) {
+      if (at<first || at>=last) {
+        out[0]=out[1]=0;
+        return;
+      }
+      const t=Math.max(0,at/sampleRate-start);
+      const remaining=endTime-at/sampleRate;
+      const fade=shortened ? Math.sin(clamp(remaining/shortened.fade)*Math.PI/2) :
+        note.choke!==endTime ? 1 : note.chokeFade ?
+          Math.sin(clamp(remaining/note.chokeFade)*Math.PI/2) : clamp(remaining*250);
+      const frame=at-first;
+      const placement=entryFade ? placementGain*Math.sin(Math.PI*.5*
+        clamp((at/sampleRate-entryFade.at)/entryFade.duration)) : placementGain;
+      const fadeIn=attackFade ? Math.sin(Math.PI*.5*clamp(t/attackFade)) : 1;
+      const fadeOut=releaseFade ? Math.sin(Math.PI*.5*clamp(remaining/releaseFade)) : 1;
+      out[0]=sound.signal(t,frame,0)*fade*placement*fadeIn*fadeOut;
+      out[1]=sound.stereo ? sound.signal(t,frame,1)*fade*placement*fadeIn*fadeOut : out[0];
+    }
+    return {first,last,asset:sound.asset,read,write(data,from,to) {
+      const out=[0,0];
+      for (let at=first;at<Math.min(last,to);at++) {
+        read(at,out);
+        data[2*(at-from)]+=out[0];
+        data[2*(at-from)+1]+=out[1];
+      }
+    }};
+  }
+  function scoreStrip(music,name,sampleRate,{end=music.end,withEcho=false,layer=1}={}) {
+    const track=music.tracks[name], local=music.cue?.perTrack[name];
+    const desk=track.mix, panL=Math.sqrt((1-desk.pan)/2), panR=Math.sqrt((1+desk.pan)/2);
+    const automate=()=>G.automate(track.gestures,{gain:0,pan:desk.pan,cutoff:desk.lowpass,echo:track.echo?.send ?? 0},sampleRate);
+    let automation=automate();
+    let echo=withEcho ? G.tapeEcho(track.echo,sampleRate) : null;
+    let cut,roomSend,level,eq,depth,hit;
+    function resetClock() {
+      cut=Q.cursor(local?.cuts ?? []);
+      roomSend=Q.cursor(local?.room ?? []);
+      level=Q.cursor(local?.level ?? []);
+      eq=Q.equalizer(local?.eq ?? [],sampleRate);
+      depth=Q.cursor(local?.depth ?? []);
+      hit=0;
+    }
+    resetClock();
+    const coefficient=frequency=>1-Math.exp(-2*Math.PI*Math.min(sampleRate*.49,frequency)/sampleRate);
+    const high=coefficient(desk.highpass), low=coefficient(desk.lowpass);
+    const state={lowL:0,lowR:0,highL:0,highR:0,cutting:false,depthRow:null,farL:0,farR:0,farCutoff:1};
+    const anchors=desk.duck && music.events[desk.duck.from].filter(note=>note.time<end);
+    const gain=desk.gain*music.gain*layer;
+    return {
+      roomAutomation:Boolean(roomSend || depth), echoAutomation:Boolean(track.echo && automation),
+      snapshot:()=>({state:{...state},eq:eq?.snapshot(),automation:automation?.snapshot()}),
+      restore(snapshot) {
+        Object.assign(state,snapshot.state);
+        eq?.restore(snapshot.eq);
+        automation?.restore(snapshot.automation);
+      },
+      resetClock() {
+        resetClock();
+        automation=automate();
+        state.depthRow=null;
+      },
+      tick(l,r,i,out,time=i/sampleRate,liveAnchor=undefined) {
+        if (cut?.(time)) {
+          if (!state.cutting) {
+            state.cutting=true;
+            state.lowL=state.lowR=state.highL=state.highR=0;
+            eq?.reset();
+            state.depthRow=null;
+            if (withEcho) echo=G.tapeEcho(track.echo,sampleRate);
+          }
+          out[0]=out[1]=out[2]=out[3]=0;
+          return;
+        }
+        state.cutting=false;
         const settings=automation?.(time), cutoff=settings ? coefficient(settings.cutoff) : low;
-        let l=data[index],r=data[index+1], volume=gain;
-        highL+=(l-highL)*high; highR+=(r-highR)*high;
-        lowL+=(l-highL-lowL)*cutoff; lowR+=(r-highR-lowR)*cutoff;
-        if (anchors?.length) {
+        let volume=gain;
+        const ride=level?.(time);
+        if (ride) {
+          const edge=Math.min(time-(ride.fadeFrom ?? ride.startTime),(ride.fadeTo ?? ride.endTime)-time);
+          volume*=db(ride.gainDb*(ride.fadeSeconds ? clamp(edge/ride.fadeSeconds) : 1));
+        }
+        state.highL+=(l-state.highL)*high; state.highR+=(r-state.highR)*high;
+        state.lowL+=(l-state.highL-state.lowL)*cutoff; state.lowR+=(r-state.highR-state.lowR)*cutoff;
+        let anchor=liveAnchor, clock=i/sampleRate;
+        if (liveAnchor===undefined && anchors?.length) {
           while (hit+1<anchors.length && anchors[hit+1].time<=time) hit++;
-          const dt=time-anchors[hit].time;
+          anchor=anchors[hit];
+          clock=time;
+        }
+        if (anchor) {
+          const dt=clock-anchor.time;
           if (dt>=0 && dt<6*desk.duck.release)
-            volume*=db(-desk.duck.depth*anchors[hit].velocity*clamp(dt/.005)*Math.exp(-dt/desk.duck.release));
+            volume*=db(-desk.duck.depth*anchor.velocity*clamp(dt/.005)*Math.exp(-dt/desk.duck.release));
         }
         if (settings) {
           volume*=db(settings.gain);
-          l=lowL*volume*Math.sqrt((1-settings.pan)/2);
-          r=lowR*volume*Math.sqrt((1+settings.pan)/2);
+          l=state.lowL*volume*Math.sqrt((1-settings.pan)/2);
+          r=state.lowR*volume*Math.sqrt((1+settings.pan)/2);
         } else {
-          l=lowL*volume*panL; r=lowR*volume*panR;
+          l=state.lowL*volume*panL; r=state.lowR*volume*panR;
+        }
+        const shaped=eq?.tick(l,r,i,time);
+        if (shaped) [l,r]=shaped;
+        const space=depth?.(time);
+        let amount=0;
+        if (space) {
+          const edge=Math.min(time-(space.fadeFrom ?? space.startTime),(space.fadeTo ?? space.endTime)-time);
+          amount=space.fadeSeconds ? clamp(edge/space.fadeSeconds) : 1;
+          if (space.cutoffHz!==undefined) {
+            if (state.depthRow!==space.startTime) {
+              state.depthRow=space.startTime;
+              state.farL=l; state.farR=r; state.farCutoff=coefficient(space.cutoffHz);
+            }
+            state.farL+=(l-state.farL)*state.farCutoff; state.farR+=(r-state.farR)*state.farCutoff;
+            l+=(state.farL-l)*amount; r+=(state.farR-r)*amount;
+          }
         }
         if (echo) {
           const wet=echo(i,l,r,settings?.echo ?? track.echo.send);
           l+=wet[0]; r+=wet[1];
         }
-        feed[index]+=l*desk.send; feed[index+1]+=r*desk.send;
+        const span=roomSend?.(time);
+        let send=span ? span.send[0]+(span.send[1]-span.send[0])*
+          clamp((time-span.startTime)/(span.endTime-span.startTime)) : desk.send;
+        if (space?.send!==undefined) send+=(space.send-send)*amount;
+        out[0]=l; out[1]=r; out[2]=send; out[3]=settings?.echo ?? track.echo?.send ?? 0;
+      }
+    };
+  }
+  function renderCompiled(music,options={},sessionSource=false,performanceEnd,observeVoice) {
+    check(fields(options,['start','end','sampleRate','stems','tail','layers']),'Invalid production render options');
+    const {start:beginPoint=0,end:endPoint=music.end,sampleRate=48000,stems=false,tail=0,layers={}}=options;
+    const start=T.seconds(T.read(beginPoint)),end=T.seconds(T.read(endPoint));
+    check(finite(start,0,music.end) && finite(end,start,music.end) && end>start &&
+      integer(sampleRate,8000,96000) && typeof stems==='boolean' && finite(tail,0,8), 'Invalid production export range');
+    const begin=sampleAt(beginPoint,sampleRate), stop=sampleAt(tail ? end+tail : endPoint,sampleRate), n=stop-begin;
+    const gateEnd=performanceEnd ?? end, names=Object.keys(music.tracks);
+    check(record(layers) && Object.entries(layers).every(([name,level])=>names.includes(name) &&
+      finite(level,0,1)), 'Invalid production layer levels');
+    const stereoFrames=sessionSource ? stop+n*2 : stop*2+n*(stems ? names.length+2 : 1);
+    check(n>0 && stereoFrames*2<=36e6 && stop*names.length<=48e6,'Production exceeds its sample budget');
+    const buffers={}, mix=sessionSource ? null : new Float32Array(n*2), feed=sessionSource ? null : new Float32Array(stop*2);
+    const data=new Float32Array(stop*2);
+    const instruments={};
+    const fadeDuration=tail ? 0 : music.arrangement.score.endFade ?? .09;
+    for (const name of names) {
+      const track=music.tracks[name], local=music.cue?.perTrack[name];
+      const tails=local?.tail;
+      data.fill(0);
+      const onset=note=>note.start ?? note.time;
+      const events=track.performance ? music.events[name].slice().sort((a,b)=>onset(a)-onset(b)) : music.events[name];
+      if (track.external) {
+        const rendered=P.musicClap.render(music,track.external,events,{end,gateEnd,stop,sampleRate,tails});
+        data.set(rendered.pcm);
+        instruments[name]=rendered.info;
+      }
+      for (const note of track.external ? [] : events) {
+        if (onset(note)>=end) break;
+        const voice=prepareVoice(track,note,gateEnd,sampleRate,tails);
+        if (voice.first>=stop) break;
+        if (observeVoice && voice.last>Math.max(begin,voice.first) && note.velocity && track.mix.gain && layers[name]!==0)
+          observeVoice(Math.max(begin,voice.first)-begin,Math.min(stop,voice.last)-begin,voice.asset);
+        voice.write(data,0,stop);
+      }
+      const strip=scoreStrip(music,name,sampleRate,{end,withEcho:!sessionSource,layer:layers[name] ?? 1});
+      const dry=stems ? new Float32Array(n*2) : null;
+      const roomLevel=sessionSource && strip.roomAutomation ? new Float32Array(n) : null;
+      const echoLevel=sessionSource && strip.echoAutomation ? new Float32Array(n) : null;
+      const out=[0,0,0,0];
+      for (let i=0;i<stop;i++) {
+        const index=i*2,time=i/sampleRate;
+        strip.tick(data[index],data[index+1],i,out);
+        const [l,r,send]=out;
+        if (sessionSource) {
+          const fade=fadeDuration ? clamp((music.end-time)/fadeDuration) : 1;
+          dry[index]=l*fade; dry[index+1]=r*fade;
+          if (roomLevel) roomLevel[i]=send;
+          if (echoLevel) echoLevel[i]=out[3];
+          continue;
+        }
+        feed[index]+=l*send; feed[index+1]+=r*send;
         if (i<begin) continue;
         const at=2*(i-begin);
         if (dry) { dry[at]=l; dry[at+1]=r; }
         mix[at]+=l; mix[at+1]+=r;
       }
+      if (sessionSource) return {dry:{sampleRate,channels:2,samples:dry},roomLevel,echoLevel};
       if (dry) buffers[name]={sampleRate,channels:2,samples:dry};
     }
     const wet=stems ? new Float32Array(n*2) : null;
     let left=0,right=0;
-    const taps=roomTimes.map((seconds,i)=>{
-      const time=seconds*music.room.size;
-      return {samples:Math.max(1,Math.round(time*sampleRate)),
-        gain:music.room.gain*Math.exp(-3*time/music.room.decay)*(i%3===1?-.31:.28), cross:i%2===0};
-    });
-    const smoothing=.06+.39*(1-music.room.damping);
-    const fadeDuration=tail ? 0 : music.arrangement.score.endFade ?? .09;
+    const taps=roomTaps(music.room,sampleRate), smoothing=roomSmoothing(music.room);
+    const cutRoom=Q.cursor(music.cue?.roomCuts ?? []);
+    let history=0;
     let peak=0,power=0,clipped=0;
     for (let i=0;i<stop;i++) {
       let l=0,r=0;
+      if (cutRoom?.(i/sampleRate)) {
+        history=i+1;
+        left=right=0;
+      }
       for (const tap of taps) {
         const at=(i-tap.samples)*2;
-        if (at<0) continue;
+        if (at<history*2) continue;
         l+=feed[at+Number(tap.cross)]*tap.gain;
         r+=feed[at+Number(!tap.cross)]*tap.gain;
       }
@@ -357,15 +643,53 @@
     }
     if (wet) buffers.room={sampleRate,channels:2,samples:wet};
     return {value:{sampleRate,channels:2,samples:mix},stems:buffers,
-      report:{sampleRate,firstSample:begin,endSample:stop,peak,rms:Math.sqrt(power/(2*n)),clipped}};
+      report:{sampleRate,firstSample:begin,endSample:stop,peak,rms:Math.sqrt(power/(2*n)),clipped,...(Object.keys(instruments).length && {instruments})}};
   }
 
-  function render(source,assets,options) {return renderCompiled(compile(source,assets),options);}
+  function render(source,assets,options,host) {return renderCompiled(compile(source,assets,host),options);}
+  function mapCue(source,map,assets) {
+    const production={...source,cueMap:P.data.clone(map)}, music=compile(production,assets);
+    return {production:P.data.freeze(P.data.clone(production)),report:Q.report(music)};
+  }
+  function mapGroove(source,map,assets) {
+    const production={...source,grooveMap:P.data.clone(map)}, after=compile(production,assets);
+    const {grooveMap,...plain}=source, before=compile(plain,assets);
+    const identity=note=>JSON.stringify([note.beat,note.midi,note.voice ?? 0]);
+    const tracks=Object.fromEntries(Object.entries(after.events).map(([name,rows])=>{
+      const groups=new Map();
+      for (const note of before.events[name]) {
+        const key=identity(note);
+        if (!groups.has(key)) groups.set(key,{rows:[],index:0});
+        groups.get(key).rows.push(note);
+      }
+      let moved=0, accented=0, resized=0, matched=0, maxShift=0;
+      for (const note of rows) {
+        const group=groups.get(identity(note)), old=group && group.rows[group.index++];
+        if (!old) continue;
+        matched++;
+        const shift=Math.abs(note.time-old.time);
+        maxShift=Math.max(maxShift,shift);
+        moved+=Number(shift>epsilon);
+        accented+=Number(Math.abs(note.velocity-old.velocity)>epsilon);
+        resized+=Number(Math.abs(note.gate-old.gate)>epsilon);
+      }
+      return [name,{notes:rows.length,moved,accented,resized,
+        added:rows.length-matched,dropped:before.events[name].length-matched,maxShiftSeconds:round(maxShift)}];
+    }));
+    return {production:P.data.freeze(P.data.clone(production)),
+      report:{id:map.template?.id ?? after.ensemble.id,anchors:map.anchors ?? [],links:map.links ?? [],tracks,
+        ...(after.ensemble && {ensemble:after.ensemble})}};
+  }
   function inspect(source,assets) {
-    const {arrangement,events,end,tracks}=compile(source,assets);
+    const compiled=compile(source,assets),{arrangement,events,end,tracks,cue,ensemble}=compiled;
     const gestures=Object.fromEntries(Object.entries(tracks).filter(([,track])=>track.gestures.length).map(([name,track])=>
       [name,track.gestures.map(({curves,mixers,...placement})=>placement)]));
-    return P.data.freeze({arrangement,events:json(events),duration:end,...(Object.keys(gestures).length && {gestures})});
+    return P.data.freeze({arrangement,events:json(events),duration:end,
+      ...(Object.keys(gestures).length && {gestures}),...(cue && {cueMap:Q.report(compiled)}),...(ensemble && {ensemble})});
   }
-  P.musicProduction=Object.freeze({compile,renderCompiled,render,inspect,grooveAt});
+  function renderSessionSource(score,lane,sampleRate) {
+    return renderCompiled({...score,tracks:{[lane]:score.tracks[lane]}},{sampleRate,stems:true},true);
+  }
+  P.musicProduction=Object.freeze({compile,renderCompiled,render,inspect,mapCue,mapGroove,grooveAt,applyChokes,
+    renderSessionSource,makeSessionRoom,prepareVoice,scoreStrip});
 })(KIT.procedural);

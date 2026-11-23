@@ -1,0 +1,15 @@
+{
+  "format": "ink-studio/silhouette-repair",
+  "version": 1,
+  "title": "Passing on the lock bridge",
+  "scene": "lock-bridge.js",
+  "width": 184,
+  "height": 112,
+  "fps": 12,
+  "fromFrame": 0,
+  "toFrame": 34,
+  "subjects": [
+    { "object": "jade-runner", "label": "Jade runner" },
+    { "object": "copper-runner", "label": "Copper runner" }
+  ]
+}

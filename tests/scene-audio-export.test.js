@@ -85,6 +85,22 @@ test('world ticks trigger spatial panning and adaptive score changes between pic
   assert.deepEqual(at(mix, 800), [.125, .625]);
 });
 
+test('timed world cues land at their occurrence sample inside a tick', t => {
+  const out = directory(t), onset = 0.0125;
+  const world = {id:'timed-cue',dt:0.05,commands:[
+    {tick:1,action:'world/event',args:K.world.timedEvents.at(onset,{kind:'audio-cue',cue:'note'})}
+  ]};
+  const audio = ink.createSceneAudio(config({spatial:{cues:{note:'note'}}}),
+    {kit,resolveAsset:()=>sound([0.25])});
+  const {manifest} = ink.exportScene(()=>({scene:world.id,sample:()=>blank,
+    runtime:()=>K.world.runtime.create(world)}),
+  {out,kit,audio,formats:['loop'],fps:20,width:2,height:2,to:0.1});
+  const effect=stem(out,manifest,'spatial');
+  assert.deepEqual(at(effect,99),[0,0]);
+  assert.deepEqual(at(effect,100),[0.25,0.25]);
+  assert.deepEqual(at(effect,400),[0,0]);
+});
+
 test('CLI renders a take world, publishes a graph WAV stem, and calls the registered mux adapter', t => {
   const out = directory(t), save = (file, data) => fs.writeFileSync(path.join(out, file), JSON.stringify(data));
   save('world.json', { format: 'ink-studio/world', id: 'export-audio', dt: 1 / 60,

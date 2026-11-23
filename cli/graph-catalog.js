@@ -7,7 +7,8 @@ function registry(settings) {
   const { toolkit, stock, extensions, overrides } = operationRegistry(kit, operations);
   const entries = { ...toolkit, ...overrides };
   return { kit, entries, origin(id) {
-    return Object.hasOwn(extensions, id) ? 'host' : Object.hasOwn(stock, id) ? 'headless' : 'toolkit';
+    return Object.hasOwn(extensions, id) && extensions[id] !== toolkit[id] ? 'host' :
+      Object.hasOwn(stock, id) ? 'headless' : 'toolkit';
   } };
 }
 
@@ -29,6 +30,7 @@ function describe(id, operation, origin, kit, settings) {
       const details = socketDetails(builtin ? id : null, name, socket.type, builtin && input);
       return [name, { type: socket.type, unit: socket.unit ?? details.unit,
         constraints: { ...details.constraints, ...socket.constraints },
+        ...(socket.quantity && {quantity:socket.quantity}),
         ...(input && { required: !defaults }), ...(defaults && { default: socket.default }),
         ...(socket.description !== undefined && { description: socket.description }),
         ...(socket.properties || details.properties ? { properties: socket.properties ?? details.properties } : {}) }];
@@ -69,6 +71,7 @@ function nodeText(node) {
     return Object.keys(ports).length ? Object.entries(ports).flatMap(([name, port]) => {
       const suffix = [
         ...(port.unit ? ['unit ' + port.unit] : []),
+        ...(port.quantity ? [JSON.stringify(port.quantity)] : []),
         ...(Object.hasOwn(port, 'default') ? ['default ' + JSON.stringify(port.default)] : port.required ? ['required'] : []),
         ...(Object.keys(port.constraints).length ? [JSON.stringify(port.constraints)] : [])
       ];

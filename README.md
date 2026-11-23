@@ -29,6 +29,18 @@ The package includes geometry, materials, lighting, animation, character control
 - [Reflections, ripples and atmosphere](#reflections-ripples-and-atmosphere)
 - [Embedding and custom scene collections](#embedding-and-custom-scene-collections)
 - [Browser renderer](#browser-renderer)
+- [Live show control](#live-show-control)
+- [CLI patch tooling](#cli-patch-tooling)
+- [Story documents](docs/story-documents.md)
+- [Event-driven visual effects](docs/event-visual-effects.md)
+- [Persistent visual consequences](docs/visual-consequences.md)
+- [Adaptive story audio](docs/adaptive-story-audio.md)
+- [Seeded sound recipes](docs/seeded-sound-recipes.md)
+- [Editable story picture and audio](docs/story-editorial-handoff.md)
+- [Configurable story presentation packs](docs/story-presentation-pack.md)
+- [Interactive story installation inputs](docs/story-installation-inputs.md)
+- [Story-aware rehearsal reports](docs/story-rehearsal.md)
+- [WebGPU graphs and Gaussian splat import](#webgpu-graphs-and-gaussian-splat-import)
 - [Screen transitions](#screen-transitions)
 - [Module reference](#module-reference)
 - [Validation and development](#validation-and-development)
@@ -295,6 +307,17 @@ Use the [headless scene editor](docs/scene-editor.md) to select solids, edit tra
 
 Use the [Pixel Stamp Workshop](docs/pixel-stamps.md) to draw indexed surface
 paint and contour masks, or author held cels for depth-aware effects.
+[Signal Fall](examples/signal-fall.js) shows the editable signal glyphs and
+the cels that make up a falling stream.
+[Animated pixel tiles](docs/pixel-tiles.md) join hand-drawn cels into
+circuits and frost that travel through corners and forks.
+[Tile color attributes](docs/tile-attributes.md) let a sprite or effect rewrite the ink and paper of whole tiles over a fixed bitmap.
+[Rule boards](docs/rule-board.md) compile rotatable copper tracks and movable glyphs into inspectable rules.
+[Boundary cels](docs/boundary-cels.md) fit hand-drawn corners, edges, and gaps to visible material and light seams.
+[Shot corrections](docs/cluster-coherence.md#paint-an-exact-correction) pin exact painted pixels to a surface for an authored frame range.
+[Rigid phase changes](docs/coupled-phase-changes.md#freeze-liquid-into-rigid-pieces) share mass and heat between liquid fields and movable solid parcels.
+[Directional contact marks](docs/contact-marks.md) pin hand-drawn flashes
+and skids at the point of contact, with their own clock through a pose hold.
 
 Reuse unchanged bake inputs in the editor and pass `--asset-cache DIR` to retain diorama bake results across CLI runs. [Incremental baking](docs/scene-editor.md#incremental-baking)
 
@@ -325,6 +348,32 @@ Accumulate moving deposits on surface charts or in world volumes, then render th
 Move section planes, depth ranges, and spatial masks across a native render. [Interactive cutaways and clipping](docs/cutaways.md)
 
 Compare synchronized scenes with side-by-side playback, a swipe divider, and signed overlays. [Comparison views](docs/comparison-views.md)
+Align PNG sequences and Ink renders by named beats, loop a passage, and save frame notes. [Reference clip workbench](docs/reference-clip-review.md)
+
+Follow named subjects across a shot and export smooth, safe crops for multiple delivery formats. [Subject-aware shot reframing](docs/subject-reframe.md)
+
+Find cuts where selected shapes line up and carry their motion across the edit. [Match-cut finder](docs/match-cut.md)
+
+Find when moving characters touch or overlap on screen and audition a verified small camera adjustment. [Silhouette collision repair](docs/silhouette-repair.md)
+
+Fit one light rig to contour and exact-swatch limits across native art grids. [Native lighting approval](docs/native-lighting-approval.md)
+
+Update nearby diffuse probes as emissive splats, painted reflectors, and area lights move. [Dynamic colored bounce](docs/bounce-probes.md#follow-moving-color-and-light)
+
+Trace selected sculpt frames with indirect light and transmission, then inspect coverage, shading and sample spacing beside the native render. [Offline SDF reference](docs/sdf-reference.md)
+
+Reconstruct coarse bounded fog with native depth and object edges, and compare it with full-resolution fog on the same shot. [Coarse fog reconstruction](docs/scene-optics.md#reconstruct-coarse-fog-on-the-art-grid)
+
+Edit named cues and parameter lanes against pinned passes, then reuse the effect as a graph group. [Editable effect clips](docs/effect-clips.md)
+Map textures onto tapered curves and route along, across, tangent, and coverage planes into the raster graph. [Curve-to-raster maps](docs/curve-raster-map.md)
+
+Move labeled pieces with their paint attached, composite overlaps by depth, and fill newly exposed gaps. [Move raster regions](docs/raster-region-move.md)
+
+Use a colored emission pass to light nearby raised or painted raster surfaces and route the light into palette effects. [Raster relighting](docs/raster-relight.md)
+
+Read per-material coverage, density and compression, apply timed impulses, and use measured contact with moving masks to drive effects. [Material-point passes and impacts](docs/material-point-impacts.md)
+
+Paint signed-field sprites with graph-authored textures and light ramps, and reuse the same trace to compare finishes. [Signed-field sprite materials](docs/field-sprite-materials.md)
 
 Capture independent cameras under a shared budget and compose their feeds into overlays and textured world panels. [Multi-camera render atlases](docs/camera-atlas.md)
 
@@ -337,6 +386,20 @@ Use `K.rig` for tagged rigid parts, `K.creature` for a creature rig, and `K.pupp
 Named clip markers can drive transitions, puppet contacts, sound cues, and presentation effects. [Animation events and state graphs](docs/animation-events.md)
 
 Bind audio cues to scene emitters, material contacts, and simulation events with listener-relative attenuation and occlusion. [Spatial audio and event cues](docs/spatial-audio.md)
+
+Trace the first audible bounces off room geometry and finite panels in live and recorded mixes. [Geometry-driven early reflections](docs/early-reflections.md)
+
+Blend recorded or baked room impulse responses as the listener moves, with tails that carry across doorways. [Position-dependent room responses](docs/room-response.md)
+
+Pin the same headphone impulse dataset for live audio and deterministic headless spatialization. [Pinned binaural profiles](docs/pinned-binaural.md)
+
+Shape the bass, mids, and treble an emitter sends toward the listener as its body rotates. [Directional sound emitters](docs/directional-audio.md)
+
+Choose which sources use physical arrival time and Doppler, with independent controls for delay and pitch. [Propagation delay and Doppler](docs/propagation-doppler.md)
+
+Synthesize breakaway, slip, and catch pulses from runtime contact load and friction. [Stick-slip contact synthesis](docs/stick-slip-audio.md)
+
+Keep distant crowds and debris audible when the mix runs out of individual voices. [Crowd and debris sound aggregation](docs/crowd-audio-aggregation.md)
 
 <!-- include: examples/puppet.js -->
 
@@ -407,7 +470,15 @@ Use [route followers and events](docs/route-followers.md) for loop-safe vehicle 
 
 Additional animation APIs include `K.anim.machine`, `K.anim.face`, `K.anim.path`, `K.anim.steer`, `K.anim.track` and `K.anim.support`. Deformation maps include body squash/stretch, noodles, folds, lattices, morphs, smears, reaction fields, foliage and line boil. Apply maps on the CPU with `K.deform.apply`, or use puppet/bone skinning with an appropriate host renderer.
 
+Use [motion matching](docs/motion-matching.md) on a procedural foot rig to choose a compatible entry pose for new steering input. The gait keeps planted feet locked and can redirect an active step.
+
+Use [procedural bodies](docs/procedural-body.md) to drive a branching creature with shared, collision-aware joints. The Sluice Diver binds its curved spine and tendrils and carries rigid parts on the same rig.
+
 Use [pose blocking and the pose shelf](docs/pose-blocking.md) to hold named story poses, draft in-betweens, and apply reusable poses to a puppet. The `pose-review` command checks the same landmarks as silhouettes at the size and angles of a directional sprite atlas.
+
+Use [pose-space corrective sculpts](docs/pose-correctives.md) to repair a posed silhouette with editable brush strokes. Named joint rotations blend the correction in live WebGL, headless rendering, and sprite atlases.
+
+Use [view-specific pose corrections](docs/view-poses.md) to reshape the silhouette of a held pose in a camera sector. Elbow and prop edits blend over the orbit while preserving foot plants and grip contacts.
 
 Use [Motion Review](docs/motion-review.md) to inspect loop pops, spacing spikes, arc kinks, and foot drift on solved puppet motion. Audition one beat at a time and apply, mute, or remove corrective layers.
 
@@ -739,6 +810,11 @@ sample withdrawal.
 
 [Headless worlds](docs/headless-worlds.md) adds declarative simulation scenes,
 shared world queries, timed actions, checkpoints, replay and branch comparison.
+[Versioned simulation models](docs/simulation-models.md) package domains, parameters,
+operator revisions, clocks, and named measurements in a runnable JSON asset.
+[Reusable simulation modules](docs/simulation-modules.md) combine those models through named ports with independent instance settings and state.
+[Creator-authored simulation kernels](docs/simulation-kernels.md) add typed solver buffers, portable snapshots, and registered graph nodes.
+[Controlled model changes](docs/simulation-model-changes.md) add sample-timed parameter ramps and prepared topology swaps with state remapping or crossfades.
 [System contracts](docs/headless-worlds.md#compose-system-contracts) expose
 typed connections, state reads, event kinds, and execution dependencies.
 [Spatial field coupling](docs/headless-worlds.md#spatial-field-coupling) shares
@@ -751,6 +827,8 @@ links selected objects and regions to recorded actions, transfers, and prior sta
 reuse measurements across seeds and settings and report aligned results.
 [Persistent simulation places](docs/portals.md#persistent-simulation-places)
 keep terrain, surface, and object edits across saves, travel, and resumed region streams.
+[Painted nested portals](docs/portals.md#paint-an-aperture-and-show-a-second-doorway)
+compose two live views through pixel-painted openings with foreground occlusion.
 
 [Scene-aware streaming](docs/procedural.md#scene-aware-streaming) prioritizes nearby detail, selected subjects, and visible portal destinations within memory and frame budgets.
 
@@ -791,13 +869,24 @@ The CLI and Node `render()` use the CPU renderer. Use the [browser renderer](doc
 | `camera-rig <scene> [--at seconds] [--camera-shot id]` | Inspect the resolved shot, projection, blend, and occlusion clearance. |
 | `camera-review <scene> --from 0 --to 2 --frames 5 --w 160 --h 96` | Check subject framing across a shot at the native export crop. |
 | `passes <scene>` | Save art-pixel coverage, depth, normals, IDs and emission previews. |
+| `export-deep <scene> --out file.exr` | Export depth-sorted samples and camera calibration as deep OpenEXR for compositing. |
 | `export-layers <scene>` | Export transparent color, depth, normals, object IDs, and material mattes on one grid. |
 | `export-scene <scene> --out directory` | Publish a high-resolution still, loop and PNG sequence, replay recording, and web embed. |
+| `shot reframe <plan.json> [--out directory]` | Fit subject-safe crop paths, export an APNG for each format, and review them against a fixed center crop. |
+| `shot match-cut <plan.json> [--out directory]` | Rank matches across two shot handles and preview the shortlisted cuts at the source frame rate. |
+| `shot silhouette-repair <plan.json> [--out directory]` | Find merged silhouettes, test small camera adjustments, and play the repaired interval. |
+| `shot light-approve <plan.json> [--out directory]` | Fit a shared light rig to native-size readability and swatch checks and report trade-offs. |
+| `bounce-probes review <scene> --out directory` | Compare baked and dynamic probe fill at native art resolution. |
+| `sdf-reference <scene> --out directory --t 0,1.4` | Trace selected SDF frames and review differences from the native splats. |
+| `fog-reconstruction review <scene> --out directory` | Compare depth-only, object-guided and full-resolution fog. |
 | `scene-replay <recording> --out frame.png` | Sample a recording or regenerate its web embed with `--embed`. |
 | `project pack <scene.json> --out project.json` | Package an editable diorama and its dependencies for the editor, browser, and CLI. |
 | `project inspect <project.json>` | Show project revisions, toolkit version, and retained files. |
 | `atlas <scene> --directions 8` | Export an RGBA atlas with registered pivots and optional relighting maps. |
+| `atlas <scene> --adaptive-views --view-review` | Allocate views by silhouette, gap and protected-detail error, with a held-out orbit comparison. |
 | `pose-review <scene> --directions 8` | Render named poses and breakdowns as color and silhouette tiles at sprite resolution. |
+| `pose-correctives capture <scene> --plan sculpt.json --t 1.1 --out correction.json` | Save a sculpt made at the chosen joint pose. |
+| `pose-correctives review <scene> --out directory` | Scrub the original rig, corrected rig, and exported sprite in sync. |
 | `motion-review <scene> [--finding kind-or-id]` | Report motion findings, focus ranges, and evidence from a scene that exposes Motion Review. |
 | `clip-sequence <scene> [--handoff 0]` | Report clip instances, retimed keys and cues, and measured handoffs. |
 | `authored-contacts <scene> [--at seconds]` | Report authored contact ranges, transfer timing, and optional pose evidence. |
@@ -808,6 +897,8 @@ The CLI and Node `render()` use the CPU renderer. Use the [browser renderer](doc
 | `variants <scene> --seeds 3,7,12` | Render a ranked seed contact sheet for a scene with variant metrics. |
 | `sheet <scene> --from 0 --to 3 --n 12` | Make a labeled sheet of animation frames. |
 | `turn <scene> --n 8` | Make a sheet from multiple viewing angles. |
+| `shape capture <recipe.js\|shape.json>` | Export editable orthographic silhouette masks for an object-local proxy. |
+| `shape fit <capture-dir>` | Fit one reusable voxel proxy from the edited views. |
 | `clip <scene> --from 0 --to 3 --fps 12` | Save an animated PNG. Use `--text ascii\|symbols\|braille\|blocks` for animated text rendering. |
 | `ghost <scene> --t 1 --spacing 0.12 --n 2` | Overlay neighboring animation poses. |
 | `mesh <file.obj\|.gltf\|.glb>` | Import, inspect and render a mesh from multiple angles. |
@@ -863,7 +954,7 @@ Common rendering controls:
 | `--composite file.json\|off` | Set independent world and screen-layer resolutions. See [mixed-resolution compositing](docs/mixed-resolution.md). |
 | `--render-graph file.json\|off` | Order and scope screen-space passes. See [the render graph](docs/render-graph.md). |
 | `--feedback-fps n` and `--feedback-cuts t1,t2` | Set a fixed feedback replay rate and explicit scene-time resets for clips and sheets. |
-| `--volume-scale`, `--volume-steps`, `--volume-jitter` | Override the atmosphere volume's sampling settings. |
+| `--volume-scale`, `--volume-reconstruction`, `--volume-steps`, `--volume-jitter` | Override the atmosphere volume's sampling and reconstruction settings. |
 | `--seed` | Override the scene seed. |
 | `--colored` | Use palette-aware smoothing of silhouettes and body-colored contours. |
 | `--raw` | Bypass palette styling. |
@@ -898,11 +989,18 @@ Use the first three controls with `paint absorb` or `paint tune`. The CPU and We
 
 For programmatic scenes, pass the saved paint document as `paint` in `B.finish()`, or embed it under `finish.paint` in a JSON diorama. A camera correction retains `view.direction` toward the capture camera. Perspective captures also retain `view.eye`. A decal row contains its XYZ position, XYZ normal, palette index, and optional opacity. Pass `paintCorrections: false` to either renderer to hide named paint.
 
-Use [`paint cause`](docs/caused-marks.md) to bake drips, scuffs, and lichen from solid edges, contact records, and overhead shelter into editable surface layers.
+Use [`paint cause`](docs/caused-marks.md) to bake drips, scuffs, and lichen from geometry or leave editable tide lines, scuffs, soot, and repairs linked to committed simulation events.
 
 The [art-pixel rendering guide](docs/art-passes.md) describes the selectable
 render passes, selective ink, camera snapping, stable dithering, art-pixel
 effects, local fragment ordering and directional export.
+
+## Fit geometry from turntable edits
+
+Use [turntable shape fitting](docs/turntable-shape.md) to open a gap or thicken
+a rigid part across several silhouette views and bake the resulting
+proxy back into the scene. The [lantern comparison](examples/turntable-shape.html)
+lets you edit three masks, refit the handle, orbit the result and download the proxy.
 
 ## View-dependent surface materials
 
@@ -938,6 +1036,8 @@ fs.writeFileSync('ink-studio.browser.js', studio.bundle());
 ```
 
 The bundle defines `makeBuilder`, `makeSculpt`, `KIT`, `PixelLook` and the other names in `studio.EXPORTS` in script scope. Pass that toolkit to the [browser renderer](#browser-renderer) or to your own rendering code. The host controls input and advances animation.
+
+For direct JavaScript sculpting and live rendering, use the [compact browser bake profile](docs/build-profiles.md#bake-and-render-in-the-browser).
 
 To append the demos to a browser script, write `const SCENES = [];` after the toolkit bundle and append `studio.demos()`. Keep source files in the order returned by `files()` when embedding individually.
 
@@ -982,9 +1082,45 @@ The following module can run after `ink-studio.browser.js` loads as a classic sc
 See the [browser renderer guide](docs/browser-renderer.md) for supported effects,
 frame options, texture updates, and the lower-level integration API.
 
+## Texels and surface coverage
+
+[Object-local texels and coverage voting](docs/texel-coverage.md) shows how to
+bake a rigid prop's pixels onto its mesh and resolve splat boundaries from
+surface ownership. The [interactive comparison](examples/texel-coverage/index.html)
+uses a lantern orbit and a subpixel pan.
+
+[Local surface ordering](docs/surface-order.md) fixes visible translucent
+crossings in WebGL. The [Crossed glass demo](examples/surface-order/index.html)
+compares it with the center sort and measures frame cost.
+
+## WebGPU graphs and Gaussian splat import
+
+Build [WebGPU texture and geometry graphs](docs/webgpu-graphs.md) with reusable buffers, textures and custom WGSL compute passes. The [GPU Studies gallery](examples/webgpu-graphs/index.html) includes a live shader editor, a deformed mesh, and a Gaussian splat viewer for Graphdeco PLY and Niantic SPZ. The [Pelagic viewer](examples/live-gaussian/index.html) compares live directional RGB and palette color. The [part proxy guide](docs/gaussian-part-proxies.md) shows how to bind a painted region to a stroke or mesh while keeping its live directional color. The [material workshop](examples/gaussian-materials/index.html) assigns painted regions independent [ramps and light response](docs/gaussian-materials.md). The CLI supports fixed-view renders of the same formats. Run the examples with a [local server](docs/webgpu-graphs.md#run-the-gallery).
+
+```sh
+npx ink-studio render scan.spz --raw --out preview.png
+```
+
+## Live show control
+
+Use the [Signal Room demo](docs/show-control.md#run-signal-room) to mix live audio, follow MIDI Clock or Ableton Link, decode SMPTE timecode, map a projection, and preview DMX fixtures. The [show control guide](docs/show-control.md) covers the browser API, the local bridge, and optional Art-Net, sACN and OSC hardware connections.
+
+```sh
+npx ink-studio show-bridge
+```
+
+## CLI patch tooling
+
+Use `ink-studio patch` to wire typed graph ports, bind signals to parameters, and watch per-stage output from the terminal. The [patch guide](docs/patch-tooling.md) includes two Night Current demos with video, audio, tracking and an optional WGSL finish.
+
+```sh
+npx ink-studio patch plan project.json
+npx ink-studio patch run project.json --watch 'final=$picture' --out previews
+```
+
 ## Screen transitions
 
-The browser package includes 49 preset transitions, from blackouts and eyelid
+The browser package includes 50 preset transitions, from blackouts and eyelid
 reveals to encounter wipes and memory dissolves. Use the compositor with Ink
 Studio render targets or your own images and textures. Presets expose timing,
 shader parameters, and cue markers. Compose custom sequences and register GLSL
@@ -1079,6 +1215,10 @@ Visual baselines are created explicitly by `snap`; no baseline images are bundle
 
 The package is currently version `0.1.0` and marked private.
 
+## Music production
+
+The [native sound library](docs/native-sound-library.md) ships recorded reed, metal, and rhythm packs with editable performance studies and modeled instruments. Export a pack with `ink-studio music production sound-pack ID --out DIR`.
+
 ## License
 
 Licensed under the [MIT License](LICENSE).
@@ -1138,3 +1278,7 @@ Use [faceted surface reconstruction](docs/faceted-surfaces.md) for optional flat
 Use [layered cut paper and relief](docs/paper-relief.md) for real apertures, paper thickness, parallax, native geometry and optional crisp front paint with baked soft shadows. Explore [The Quiet Orchard / Tidal Atlas](examples/paper-relief.html).
 
 Use [voxel and relief-pixel surfaces](docs/voxel-surface.md) to sample selected signed fields into cubes, columns, slabs or shallow relief. [Solid Signals](examples/voxel-surface.html) includes a breakable tower and a sculpt that scatters into rigid blocks.
+
+Use [thread, stitch and woven surfaces](docs/textile-rendering.md) for raised embroidery, interlocking knit loops and patterned warp and weft on curved charts. [Thread Studies](examples/thread-studies.html) includes an embroidered garden, a knitted moth and a woven harbor.
+
+Use [sprite-based object reconstruction](docs/sprite-reconstruction.md) to switch named native geometry to a shared directional atlas at distance, with depth-tested texels and a camera-driven handoff. [Signal Transit](examples/sprite-reconstruction.html) includes a fleet approach and a close inspection bay.

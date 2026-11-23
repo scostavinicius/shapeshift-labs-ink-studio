@@ -1,0 +1,34 @@
+{
+  "format": "ink-studio/world",
+  "id": "spring-feedback-bench",
+  "dt": 0.04,
+  "modules": { "spring": { "file": "../simulation-kernels/spring.model.json", "revision": 1 } },
+  "instances": { "spring": { "module": "spring", "schedule": { "substeps": 2 } } },
+  "systems": {
+    "drive": { "kind": "spring-drive" },
+    "meter": { "kind": "control", "schedule": { "every": 4 }, "config": { "op": "pass" } }
+  },
+  "connections": [
+    { "from": "spring/displacement", "to": "drive/position", "sample": "hold", "delay": 1 },
+    { "from": "drive/force", "to": "spring/force", "sample": "hold" },
+    { "from": "spring/displacement", "to": "meter/value", "sample": "average" }
+  ],
+  "assetPacks": [{
+    "format": "ink-studio/asset-pack",
+    "version": 1,
+    "id": "bench-art",
+    "revision": 1,
+    "title": "Spring bench backdrop",
+    "environmentImages": [{ "id": "bench-art/backdrop", "width": 2, "height": 1,
+      "pixels": [32, 53, 60, 255, 62, 96, 101, 255] }]
+  }],
+  "dataInputs": {
+    "drive-profile": {
+      "kind": "series",
+      "format": "csv",
+      "file": "drive.csv",
+      "columns": { "time": { "type": "number", "units": "s" }, "force": { "type": "number", "units": "N" } },
+      "time": { "column": "time", "outside": "clamp" }
+    }
+  }
+}

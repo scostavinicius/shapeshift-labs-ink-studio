@@ -1,0 +1,17 @@
+{
+  "format": "ink-studio/take",
+  "version": 1,
+  "id": "fast-checkpoint-take",
+  "world": "bench.world.json",
+  "clock": {
+    "fps": 60,
+    "simulationRate": 60,
+    "sampleRate": 48000,
+    "cuts": [{ "frame": 3, "id": "carry-cut" }, { "frame": 6, "id": "reset-cut" }]
+  },
+  "simulation": {
+    "warmup": 1,
+    "cuts": { "carry-cut": { "state": "carry" }, "reset-cut": { "state": "reset", "warmup": 2 } },
+    "loop": { "from": 6, "to": 10, "state": "restore" }
+  }
+}

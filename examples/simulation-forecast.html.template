@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Wicker Sluice · In-scene simulation forecast</title>
+<style>
+  :root{color-scheme:dark;background:#0d161e;color:#e8edd3;font:15px/1.5 system-ui,sans-serif}
+  main{width:min(1044px,calc(100% - 30px));margin:28px auto}
+  canvas{width:100%;height:auto;display:block;image-rendering:pixelated;background:#101c25}
+  .controls{display:flex;align-items:center;gap:10px 17px;flex-wrap:wrap;margin:14px 0}
+  label{display:flex;align-items:center;gap:7px} input{accent-color:#a5f1c7}
+  input[type=range]{width:clamp(100px,22vw,260px)}
+  button{font:inherit;background:#263847;color:inherit;border:1px solid #5d717b;border-radius:4px;padding:5px 15px;cursor:pointer}
+  button:hover{background:#3a505e}
+  :focus-visible{outline:2px solid #a5f1c7;outline-offset:2px}
+  #status{color:#a4c5bd;margin:5px 0}
+  details{margin:12px 0}
+  summary{cursor:pointer}
+  #evidence{max-width:664px;margin-top:8px}
+</style>
+</head>
+<body>
+<main>
+  <canvas id="view" width="348" height="240" aria-label="Wicker Sluice at its current checkpoint, with ghosted future positions and flow arrows"></canvas>
+  <div class="controls">
+    <button type="button" id="play">Play forecast</button>
+    <label>Future tick <input type="range" id="tick" min="8" max="76" step="1" value="76"></label>
+    <label><input type="checkbox" id="baseline" checked> Hold gate</label>
+    <label><input type="checkbox" id="proposal" checked> Open sluice</label>
+    <button type="button" id="first">Jump to first change</button>
+  </div>
+  <p id="status" role="status">Building forecasts from checkpoint…</p>
+  <details><summary>Compare the first changed pixels</summary><canvas id="evidence" aria-label="Enlarged baseline and proposal crops at the first visible change"></canvas></details>
+</main>
+<script type="module">
+try {
+  /* DEMO */
+} catch (error) {
+  document.querySelector('#status').textContent=error.message;
+}
+</script>
+</body>
+</html>

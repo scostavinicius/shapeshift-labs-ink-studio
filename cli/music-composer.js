@@ -147,6 +147,26 @@ function audition(file,opt,kit) {
 module.exports=function musicCommand(pos,opt,kit) {
   const [mode,file,editFile]=pos;
   if (mode==='production') return require('./music-production.js')(pos.slice(1),opt,kit);
+  if (mode==='motif') return require('./music-sample-motif.js')(pos.slice(1),opt,kit);
+  if (mode==='timbre') return require('./music-timbre.js')(pos.slice(1),opt,kit);
+  if (mode==='critique') return require('./music-critique.js')(pos.slice(1),opt,kit);
+  if (mode==='live') return require('./music-live.js')(pos.slice(1),opt,kit);
+  if (mode==='rehearsal') return require('./music-rehearsal.js')(pos.slice(1),opt,kit);
+  if (mode==='session') return require('./music-session.js')(pos.slice(1),opt,kit);
+  if (mode==='atmosphere') return require('./music-atmosphere.js')(pos.slice(1),opt,kit);
+  if (mode==='jam') return require('./music-jam.js')(pos.slice(1),opt,kit);
+  if (mode==='sound') return require('./music-sound-recipe.js').command(pos.slice(1),opt,kit);
+  if (mode==='gestures') return require('./music-gestures.js')(pos.slice(1),opt,kit);
+  if (mode==='samples') return require('./music-samples.js')(pos.slice(1),opt,kit);
+  if (mode==='pads') return require('./music-pads.js')(pos.slice(1),opt,kit);
+  if (mode==='instrument') return require('./music-instrument.js')(pos.slice(1),opt,kit);
+  if (mode==='deliver') return require('./music-delivery.js')(pos.slice(1),opt,kit);
+  if (mode==='repair') return require('./music-repair.js')(pos.slice(1),opt,kit);
+  if (mode==='mix') return require('./music-mixer.js')(pos.slice(1),opt,kit);
+  if (mode==='rack') return require('./music-racks.js')(pos.slice(1),opt,kit);
+  if (mode==='post') return require('./music-post.js')(pos.slice(1),opt,kit);
+  if (mode==='editorial') return require('./music-editorial.js')(pos.slice(1),opt,kit);
+  if (mode==='groove') return require('./music-groove.js')(pos.slice(1),opt,kit);
   if (mode==='soundfont') return require('./music-soundfont.js')(file,editFile,opt);
   if (!file) throw new TypeError('Use music with a JSON file for arrange, revise, reference, audition, analyze, suggest, or phrase');
   if (mode==='audition') return audition(file,opt,kit);

@@ -1,0 +1,195 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>North Lock · Tile color attributes</title>
+<style>
+  :root { color-scheme: dark; font: 15px/1.45 system-ui, sans-serif; background: #0d1721; color: #d7e7e8; }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  main { width: min(1240px, 100%); margin: 0 auto; padding: 34px clamp(16px, 4vw, 46px); }
+  h1, h2, p, figure, dl, dd { margin: 0; }
+  h1 { font: 600 clamp(38px, 5vw, 62px)/1.06 system-ui, sans-serif; letter-spacing: -.06em; }
+  .intro { margin: 8px 0 23px; color: #a7babe; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr) 260px; gap: 18px; align-items: start; }
+  figure, aside { background: #192a36; border: 1px solid #2e4650; border-radius: 8px; overflow: hidden; }
+  .viewport { position: relative; }
+  canvas { image-rendering: pixelated; display: block; }
+  #scene { width: 100%; height: auto; cursor: crosshair; }
+  #selection { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  .controls { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 12px; border-top: 1px solid #2e4650; }
+  .controls input[type=range] { flex: 1 1 110px; min-width: 0; }
+  .controls output { min-width: 6ch; }
+  input[type=range], input[type=checkbox] { accent-color: #fab2de; }
+  button, select, input[type=number] { font: inherit; color: inherit; background: #10212d; border: 1px solid #49606a; border-radius: 4px; padding: 6px 9px; }
+  button { cursor: pointer; }
+  :focus-visible { outline: 2px solid #edacd6; outline-offset: 2px; }
+  #play { min-width: 66px; }
+  aside { padding: 15px; }
+  h2 { font-size: 17px; }
+  .tile { display: grid; grid-template-columns: 64px 1fr; align-items: center; gap: 11px; margin: 13px 0; }
+  .tile p { color: #b2c4c8; font-size: 13px; }
+  #detail { width: 64px; height: 64px; outline: 1px solid #4f686e; }
+  #cell { color: #a8eedf; }
+  .editor { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 9px; }
+  .editor label { font-size: 13px; display: grid; gap: 4px; color: #b2c4c8; }
+  .editor input, .editor select { width: 100%; min-width: 0; }
+  .editor .priority { grid-column: 1 / -1; }
+  .editor button { margin-top: 2px; }
+  #paint { background: #eab5d6; color: #291b2f; border-color: #eab5d6; font-weight: 600; }
+  .tip { color: #a6b8bc; font-size: 13px; margin-top: 12px; }
+  [hidden] { display: none !important; }
+  @media (max-width: 820px) { main { padding-top: 20px; } .layout { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>North Lock</h1>
+  <p class="intro">A station sign with paintable 8×8 color tiles.</p>
+  <p id="loading" role="status">Loading the sign…</p>
+  <div class="layout" id="demo" hidden>
+    <figure>
+      <div class="viewport">
+        <canvas id="scene" width="240" height="128" tabindex="0" aria-label="North Lock station display" aria-describedby="tile-tip"></canvas>
+        <canvas id="selection" width="240" height="128" aria-hidden="true"></canvas>
+      </div>
+      <div class="controls">
+        <button type="button" id="play">Pause</button>
+        <input type="range" min="0" max="4.79" step=".01" id="time" aria-label="Scanner time">
+        <output for="time" id="seconds"></output>
+        <label><input type="checkbox" id="grid"> Tile grid</label>
+      </div>
+    </figure>
+    <aside aria-labelledby="attributes">
+      <h2 id="attributes">Tile attributes</h2>
+      <div class="tile">
+        <canvas id="detail" width="8" height="8" aria-label="Selected tile at 8× zoom"></canvas>
+        <div><p id="cell"></p><p id="winner"></p></div>
+      </div>
+      <div class="editor">
+        <label>Painted ink<select id="ink"></select></label>
+        <label>Painted paper<select id="paper"></select></label>
+        <label class="priority">Paint priority<input type="number" step="1" id="priority"></label>
+        <button type="button" id="paint">Paint tile</button>
+        <button type="button" id="reset">Restore</button>
+      </div>
+      <p class="tip" id="tile-tip">Click a tile or use the arrow keys to select it. Set priority above 6 to keep your painted colors through the sweep.</p>
+    </aside>
+  </div>
+</main>
+<script type="module">
+  const el = id => document.getElementById(id);
+  try {
+    /* STUDIO */
+    const canvas = el('scene'), ctx = canvas.getContext('2d'), guides = el('selection').getContext('2d');
+    const detail = el('detail').getContext('2d');
+    const slider = el('time');
+    const choices = Object.keys(demo.palette.roles);
+    for (const id of ['ink', 'paper']) {
+      el(id).add(new Option('Clear', ''));
+      for (const name of choices) el(id).add(new Option(name.replace(/[A-Z]/g, c => ' ' + c.toLowerCase()), name));
+    }
+    const original = new Map(demo.initial.tileMap().map(edit => [edit.cell.toString(), edit.attributes]));
+    let surface = demo.initial, cell = [10, 3], time = 0, current;
+    let playing = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+    let showSelection = false;
+    function updatePlay() {
+      el('play').textContent = playing ? 'Pause' : 'Play';
+    }
+    function updateControls() {
+      const { painted } = current.panel.inspect(cell);
+      el('ink').value = painted.ink ?? '';
+      el('paper').value = painted.paper ?? '';
+      el('priority').value = painted.priority;
+    }
+    function select(next) {
+      cell = next;
+      showSelection = true;
+      draw();
+      updateControls();
+    }
+    function draw() {
+      current = demo.frame(surface, time);
+      const { width, height, data } = current.value;
+      ctx.putImageData(new ImageData(new Uint8ClampedArray(data), width, height), 0, 0);
+      const px = demo.x + cell[0] * 8, py = demo.y + cell[1] * 8;
+      detail.clearRect(0, 0, 8, 8);
+      detail.drawImage(canvas, px, py, 8, 8, 0, 0, 8, 8);
+      el('cell').textContent = 'Column ' + (cell[0] + 1) + ' · Row ' + (cell[1] + 1);
+      const { winner, attributes } = current.panel.inspect(cell);
+      el('winner').textContent = (winner ?? 'Painted') + ' · priority ' + attributes.priority;
+      slider.value = time;
+      el('seconds').value = time.toFixed(2) + ' s';
+      guides.clearRect(0, 0, width, height);
+      if (el('grid').checked) {
+        guides.fillStyle = '#cbffec40';
+        for (let col = 0; col <= surface.cols; col++)
+          guides.fillRect(demo.x + col * 8, demo.y, 1, surface.height);
+        for (let row = 0; row <= surface.rows; row++)
+          guides.fillRect(demo.x, demo.y + row * 8, surface.width, 1);
+      }
+      if (showSelection || el('grid').checked) {
+        guides.strokeStyle = '#ffffff';
+        guides.strokeRect(px + .5, py + .5, 8, 8);
+      }
+    }
+    el('play').addEventListener('click', () => {
+      playing = !playing;
+      updatePlay();
+    });
+    slider.addEventListener('input', () => {
+      playing = false;
+      time = slider.valueAsNumber;
+      updatePlay();
+      draw();
+    });
+    el('grid').addEventListener('change', draw);
+    canvas.addEventListener('pointerdown', event => {
+      const bounds = canvas.getBoundingClientRect();
+      const col = Math.floor(((event.clientX - bounds.left) * canvas.width / bounds.width - demo.x) / 8);
+      const row = Math.floor(((event.clientY - bounds.top) * canvas.height / bounds.height - demo.y) / 8);
+      if (col >= 0 && col < surface.cols && row >= 0 && row < surface.rows) select([col, row]);
+    });
+    canvas.addEventListener('keydown', event => {
+      const step = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[event.key];
+      if (!step) return;
+      event.preventDefault();
+      select(cell.map((n, axis) => Math.max(0, Math.min((axis ? surface.rows : surface.cols) - 1, n + step[axis]))));
+    });
+    el('paint').addEventListener('click', () => {
+      const priority = el('priority').valueAsNumber;
+      if (!Number.isFinite(priority)) return;
+      const attributes = { ink: el('ink').value || null, paper: el('paper').value || null, priority };
+      surface = surface.paint([{ cell, attributes }]);
+      draw();
+    });
+    el('reset').addEventListener('click', () => {
+      surface = surface.paint([{ cell, attributes: original.get(cell.toString()) ?? null }]);
+      draw();
+      updateControls();
+    });
+    let last = performance.now();
+    function animate(now) {
+      if (now - last >= 50) {
+        if (playing) {
+          time = (time + Math.min(.1, (now - last) / 1000)) % demo.duration;
+          draw();
+        }
+        last = now;
+      }
+      requestAnimationFrame(animate);
+    }
+    updatePlay();
+    draw();
+    updateControls();
+    el('loading').hidden = true;
+    el('demo').hidden = false;
+    requestAnimationFrame(animate);
+  } catch (error) {
+    el('loading').textContent = 'The demo could not load. ' + error.message;
+    console.error(error);
+  }
+</script>
+</body>
+</html>

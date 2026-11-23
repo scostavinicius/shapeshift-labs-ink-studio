@@ -1,0 +1,68 @@
+{
+  "format": "ink-studio/reference-experiment-suite",
+  "version": 1,
+  "id": "standard-reference-experiments",
+  "experiments": {
+    "open-tube": {
+      "kind": "tube",
+      "title": "Open tube",
+      "source": "open-tube.wave.json",
+      "end": "open"
+    },
+    "closed-tube": {
+      "kind": "tube",
+      "title": "Closed tube",
+      "source": "closed-tube.wave.json",
+      "end": "sealed"
+    },
+    "damped-oscillator": {
+      "kind": "oscillator",
+      "title": "Damped oscillator",
+      "source": "damped-oscillator.run.json"
+    },
+    "membrane": {
+      "kind": "membrane",
+      "title": "Pinned membrane",
+      "source": "membrane.bake.json",
+      "size": [
+        0.9,
+        0.7
+      ],
+      "playback": {
+        "sampleRate": 24000,
+        "samples": 28800,
+        "impulses": [
+          {
+            "excitation": "strike",
+            "sample": 600,
+            "value": 0.11
+          }
+        ]
+      }
+    },
+    "tank-drain": {
+      "kind": "tank",
+      "title": "Tank drain",
+      "source": "tank-drain.world.json",
+      "steps": 500,
+      "every": 5
+    },
+    "heat-slab": {
+      "kind": "heat",
+      "title": "Heat slab",
+      "source": "heat-slab.transport.json",
+      "steps": 500,
+      "every": 5,
+      "mean": 40,
+      "amplitude": 22,
+      "arealHeatCapacity": 25000
+    },
+    "two-body-impact": {
+      "kind": "impact",
+      "title": "Two-body impact",
+      "source": "two-body-impact.world.json",
+      "steps": 32,
+      "every": 1
+    }
+  }
+}

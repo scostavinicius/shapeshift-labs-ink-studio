@@ -237,6 +237,9 @@ ink-studio clip examples/palette-cycling.js --from 0 --to 6 --fps 12 \
   --w 216 --h 144 --px 1 --out fernfall.png
 ```
 
+Use [shoreline foam](shore-foam.md) to add cels that catch and break around
+the two rocks at the lower falls.
+
 ### Hue–brightness fields
 
 Set `pattern: 'hue-brightness'` and give the layer a `hueBrightness` definition. The lower-left corner comes from the projection origin. Hue increases along `along` and brightness increases along `across`. Use rest space to keep the field attached to an object.

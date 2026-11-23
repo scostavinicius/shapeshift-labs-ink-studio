@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pose corrective review · Ink Studio</title>
+<style>
+:root {color-scheme:dark;--bg:#141f28;--card:#202c36;--line:#3d5059;--ink:#f4ead9;--muted:#b5c5c9;--mint:#a1dfca;--warm:#ffbd88}
+* {box-sizing:border-box}
+body {margin:0;background:var(--bg);color:var(--ink);font:15px/1.5 system-ui,sans-serif}
+main {max-width:1150px;margin:auto;padding:clamp(18px,4vw,53px)}
+header {display:flex;align-items:end;justify-content:space-between;gap:13px;flex-wrap:wrap;margin-bottom:21px}
+header p {margin:0;color:var(--mint);font:600 .78rem/1.4 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase}
+h1 {margin:10px 0 0;font:500 clamp(2.35rem,6vw,4.2rem)/.98 Georgia,serif;letter-spacing:-.042em}
+a {color:var(--mint);text-underline-offset:4px}
+#controls {display:flex;gap:8px 13px;flex-wrap:wrap;align-items:center;margin:0 0 14px}
+button {font:inherit;color:var(--ink);background:var(--card);border:1px solid var(--line);border-radius:5px;padding:7px 12px;cursor:pointer}
+input {accent-color:var(--mint)}
+input[type="range"] {width:clamp(105px,24vw,322px);margin:0}
+output {font:600 .88rem/1.35 ui-monospace,monospace;min-width:6ch}
+#controls label {display:flex;align-items:center;gap:6px}
+:focus-visible {outline:2px solid var(--warm);outline-offset:3px}
+#panels {display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+figure {margin:0;border:1px solid var(--line);background:var(--card);border-radius:6px;overflow:hidden}
+figure:nth-child(2) {border-color:#72a99a}
+figcaption,.meta {padding:8px 11px;color:var(--muted)}
+figure:nth-child(2) figcaption {color:var(--mint)}
+picture {position:relative;display:block;background:radial-gradient(ellipse at 48% 38%,#2b4053,#1b2a36 76%)}
+img {display:block;width:100%;height:auto;image-rendering:pixelated}
+#overlay {position:absolute;inset:0}
+.meta {font:600 .76rem/1.4 ui-monospace,monospace}
+#weight {display:block;width:100%;height:52px;border-bottom:1px solid var(--line);margin-top:15px;background:#1a2833}
+#current {color:var(--muted);margin:8px 0 0;font-size:.88rem}
+[hidden] {display:none!important}
+@media(max-width:660px) {#panels {grid-template-columns:1fr}}
+</style>
+</head>
+<body><main>
+<header><div><p>Ink Studio / Pose-space sculpting</p><h1 id="title"></h1></div>
+<a id="download" download="review.json">Download pose measurements</a></header>
+<div id="controls">
+  <button id="play" type="button" aria-label="Play pose comparison">Play</button>
+  <input id="seek" type="range" min="0" step="1" value="0" aria-label="Pose frame">
+  <output id="time" for="seek"></output>
+  <label><input id="mark" type="checkbox">Show sculpt changes</label>
+</div>
+<section id="panels" aria-label="Synchronized pose comparison"></section>
+<canvas id="weight" width="960" height="52" role="img" aria-label="Corrective weights across the movement"></canvas>
+<p id="current"></p>
+</main>
+<script>
+const {report,pictures}=/*POSE_CORRECTIVE_DATA*/;
+const at=id=>document.getElementById(id);
+const seek=at('seek'),play=at('play'),mark=at('mark'),chart=at('weight');
+const labels={before:'Uncorrected rig',corrected:'Corrective on rig',sprite:'Baked sprite'};
+const views={};
+for (const [id,label] of Object.entries(labels)) {
+  const figure=document.createElement('figure'),caption=document.createElement('figcaption'),picture=document.createElement('picture');
+  const image=document.createElement('img'),meta=document.createElement('div');
+  caption.textContent=label;image.alt=label;image.width=report.width;image.height=report.height;
+  picture.append(image);
+  if (id==='corrected') {
+    const overlay=document.createElement('img');overlay.alt='';overlay.id='overlay';overlay.width=report.width;
+    overlay.height=report.height;overlay.hidden=true;picture.append(overlay);
+  }
+  meta.className='meta';figure.append(caption,picture,meta);at('panels').append(figure);views[id]={image,meta};
+}
+const largestWeight=sample=>Math.round(10000*Math.max(...sample.weights.map(layer=>layer.weight)));
+const peak=report.samples.reduce((best,sample)=>{
+  const difference=largestWeight(sample)-largestWeight(best);
+  return difference>0 || difference===0 && sample.changed>best.changed ? sample : best;
+});
+let frame=peak.frame,timer=null;
+seek.max=String(report.samples.length-1);
+at('title').textContent=report.title;
+document.title=report.title+' · Ink Studio pose comparison';
+at('download').href=URL.createObjectURL(new Blob([JSON.stringify(report,null,2)+'\n'],{type:'application/json'}));
+const colors=['#a1dfca','#ffbd88','#d9a8ed','#9ebce6'];
+function drawWeights() {
+  const ctx=chart.getContext('2d'),w=chart.width,h=chart.height;
+  const x=i=>2+i*(w-4)/(report.samples.length-1), y=weight=>h-5-(h-10)*weight;
+  ctx.clearRect(0,0,w,h);ctx.lineWidth=1;
+  for (const gain of [0,.5,1]) {
+    ctx.beginPath(); ctx.strokeStyle='#3d5059';ctx.moveTo(0,y(gain));ctx.lineTo(w,y(gain));ctx.stroke();
+  }
+  for (let i=0;i<report.samples[0].weights.length;i++) {
+    ctx.beginPath();ctx.strokeStyle=colors[i%colors.length];ctx.lineWidth=2.5;
+    report.samples.forEach((sample,j)=>ctx.lineTo(x(j),y(sample.weights[i].weight)));
+    ctx.stroke();
+  }
+  ctx.beginPath();ctx.strokeStyle='#f4ead9';ctx.lineWidth=1.5;ctx.moveTo(x(frame),0);ctx.lineTo(x(frame),h);ctx.stroke();
+}
+function update() {
+  const sample=report.samples[frame],picture=pictures[frame],overlay=at('overlay');
+  seek.value=String(frame);at('time').value=sample.time.toFixed(2)+' s';
+  for (const [id,view] of Object.entries(views)) view.image.src=picture[id];
+  overlay.hidden=!mark.checked;
+  if(mark.checked) overlay.src=picture.marks;
+  views.before.meta.textContent=report.width+' × '+report.height+' art pixels';
+  views.corrected.meta.textContent=sample.changed.toLocaleString()+' art pixels changed';
+  views.sprite.meta.textContent=sample.spriteDifference ? sample.spriteDifference.toLocaleString()+' pixels differ from rig' : 'Matches corrected render';
+  at('current').textContent=sample.weights.map(({id,weight})=>id+' '+Math.round(weight*100)+'%').join(' · ');
+  drawWeights();
+}
+function stop() {
+  if(timer!==null)clearInterval(timer);
+  timer=null;play.textContent='Play';play.setAttribute('aria-label','Play pose comparison');
+}
+seek.addEventListener('input',()=>{stop();frame=Number(seek.value);update();});
+mark.addEventListener('change',update);
+play.addEventListener('click',()=>{
+  if(timer!==null){stop();return;}
+  play.textContent='Pause';play.setAttribute('aria-label','Pause pose comparison');
+  timer=setInterval(()=>{frame=(frame+1)%pictures.length;update();},1000/report.fps);
+});
+update();
+</script>
+</body>
+</html>

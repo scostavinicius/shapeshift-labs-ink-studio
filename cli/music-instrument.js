@@ -1,0 +1,223 @@
+const fs=require('node:fs'),path=require('node:path'),WAV=require('./wav.js');
+const {json,write}=require('./asset-files.js');
+const {openSampleLibrary}=require('./sample-library.js');
+const {resolveSampleAssets}=require('./music-sample-assets.js');
+const {readAudioSource}=require('./sound-source.js');
+
+module.exports=function instrumentCommand([mode,file,config],opt,kit) {
+  if (['analyze-session','build-session','audition-session','audition-session-takes'].includes(mode))
+    return recordingSession(mode,file,config,opt,kit);
+  if (['discover','keep-discovery'].includes(mode)) return discovery(mode,file,config,opt,kit);
+  if (['workshop','audition-workshop','keep-workshop'].includes(mode)) {
+    return workshop(mode,file,config,opt,kit);
+  }
+  if (!file || !['analyze','audition','build','fit','audition-fit'].includes(mode) || (mode!=='analyze' && typeof opt.out!=='string'))
+    throw new TypeError('Use music instrument analyze, audition, build, fit, or audition-fit with a recipe and --out');
+  const P=kit.KIT.procedural,{fields,check,record}=P.musicInstruments, A=P.mediaGraph.sampleInstrument;
+  const recipe=JSON.parse(fs.readFileSync(file,'utf8'));
+  const send=result=>{process.stdout.write(JSON.stringify(result)+'\n');return result;};
+  if (mode==='audition-fit') {
+    check(fields(recipe,['fit','assets','reference','audition']) && record(recipe.assets) &&
+      Object.keys(recipe.assets).length<=24 &&
+      (recipe.reference===undefined || typeof recipe.reference==='string'),'Expected an editable instrument fit manifest');
+    const {assets}=resolveSampleAssets(recipe.assets,file,undefined,kit,{allowWav:true});
+    const source=recipe.reference===undefined ? undefined : readAudioSource(path.resolve(path.dirname(file),recipe.reference),P);
+    const result=P.mediaGraph.instrumentFit.audition(recipe.fit,assets,recipe.audition,source);
+    const audio=path.resolve(opt.out,'fit-audition.wav'), report=path.resolve(opt.out,'report.json');
+    write(audio,WAV.encode(result.value,{encoding:'pcm24'}));
+    json(report,result.report);
+    return send({audio,report});
+  }
+  check(fields(recipe,mode==='fit' ? ['assets','library','options'] : ['assets','library','analysis','audition','zones','env']) &&
+    record(recipe.assets) &&
+    Object.keys(recipe.assets).length<=24 && (recipe.library===undefined || typeof recipe.library==='string'),
+  'Instrument recipes need named audio files, samples, edits, or prints');
+  const library=recipe.library===undefined ? undefined : openSampleLibrary(path.resolve(path.dirname(file),recipe.library),{kit});
+  const {assets,sources}=resolveSampleAssets(recipe.assets,file,library,kit,{allowWav:true});
+  if (mode==='fit') {
+    const names=Object.keys(assets);
+    check(names.length===1,'Fit one selected recording, sample or slice per recipe');
+    const name=names[0], result=P.mediaGraph.instrumentFit.fit(assets[name],recipe.options);
+    const dir=path.resolve(opt.out), instrument=path.join(dir,'instrument-fit.json'), report=path.join(dir,'report.json');
+    const baked=writeAssets(dir,result.assets);
+    write(path.join(dir,'reference.wav'),WAV.encode(result.reference,{encoding:'float32'}));
+    json(instrument,{fit:result.value,assets:baked,reference:'reference.wav'});
+    json(report,{...result.report,source:sources[name]});
+    return send({instrument,report});
+  }
+  if (mode==='analyze') {
+    const result={...A.analyze(assets,recipe.analysis),sources};
+    if (typeof opt.out==='string') json(path.resolve(opt.out),result);
+    return send(result);
+  }
+  const dir=path.resolve(opt.out), report=path.join(dir,'report.json');
+  if (mode==='audition') {
+    check(record(recipe.audition ?? {}),'Invalid range audition settings');
+    const result=A.audition(assets,{analysis:recipe.analysis,...recipe.audition});
+    const audio=path.join(dir,'range.wav');
+    write(audio,WAV.encode(result.value,{encoding:'pcm24'}));
+    json(report,{...result.report,sources});
+    return send({audio,report});
+  }
+  const result=A.build(assets,{analysis:recipe.analysis,zones:recipe.zones,env:recipe.env});
+  const baked=writeAssets(dir,result.assets);
+  const instrument=path.join(dir,'instrument.json');
+  json(instrument,{patch:result.value,assets:baked,zones:result.report.zones});
+  json(report,{...result.report,sources});
+  return send({instrument,report});
+};
+
+function writeAssets(dir,assets) {
+  return Object.fromEntries(Object.entries(assets).map(([name,value])=>{
+    const file='samples/'+name+'.wav';
+    write(path.join(dir,file),WAV.encode(value,{encoding:'float32'}));
+    return [name,file];
+  }));
+}
+
+function recordingSession(mode,file,config,opt,kit) {
+  const P=kit.KIT.procedural,{check,fields,record}=P.musicInstruments, A=P.mediaGraph.instrumentSession;
+  check(file && typeof opt.out==='string','Use an instrument recording session recipe and --out');
+  const read=name=>JSON.parse(fs.readFileSync(name,'utf8'));
+  const recipe=read(file), dir=path.resolve(opt.out), report=path.join(dir,'report.json');
+  const settings=config===undefined ? undefined : read(config);
+  const playback=mode==='audition-session';
+  check(fields(recipe,playback ? ['instrument','assets'] : ['session','assets','library']) &&
+    record(recipe.assets) && Object.keys(recipe.assets).length<=(playback ? 128 : 32) &&
+    (recipe.library===undefined || typeof recipe.library==='string'),'Expected a recording session or built instrument recipe');
+  const library=recipe.library===undefined ? undefined : openSampleLibrary(path.resolve(path.dirname(file),recipe.library),{kit});
+  const {assets,sources}=resolveSampleAssets(recipe.assets,file,library,kit,{allowWav:true});
+  const relative=ref=>path.relative(dir,path.resolve(path.dirname(path.resolve(file)),ref));
+  const relocated=()=>Object.fromEntries(Object.entries(recipe.assets).map(([id,ref])=>[id,typeof ref==='string' ?
+    relative(ref) : Object.fromEntries(Object.entries(ref).map(([key,value])=>
+      [key,['wav','edit','print'].includes(key) ? relative(value) : value]))]));
+  let output;
+  if (mode==='analyze-session' || mode==='build-session') {
+    const result=mode==='analyze-session' ? A.analyze(recipe.session,assets):A.build(recipe.session,assets,settings);
+    const plan=path.join(dir,'session.json');
+    json(plan,{session:result.session ?? result.value,assets:relocated(),
+      ...(recipe.library!==undefined && {library:relative(recipe.library)})});
+    json(report,{...result.report,sources});
+    output={session:plan,report};
+    if (result.assets) {
+      const instrument=path.join(dir,'instrument.json');
+      json(instrument,{instrument:result.value,assets:writeAssets(dir,result.assets)});
+      output.instrument=instrument;
+    }
+  } else {
+    const result=playback ? A.audition(recipe.instrument,assets,settings) : A.auditionTakes(recipe.session,assets,settings);
+    const audio=path.join(dir,playback ? 'coverage.wav' : 'takes.wav');
+    write(audio,WAV.encode(result.value,{encoding:'pcm24'}));
+    json(report,result.report);
+    output={audio,report};
+    if (result.production) {
+      output.production=path.join(dir,'production.json');
+      json(output.production,{production:result.production,assets:relocated(),options:{sampleRate:result.report.sampleRate}});
+    }
+  }
+  process.stdout.write(JSON.stringify(output)+'\n');
+  return output;
+}
+
+function workshop(mode,file,config,opt,kit) {
+  const P=kit.KIT.procedural,{fields,check,record}=P.musicInstruments, lab=P.mediaGraph.playableSound;
+  check(file && typeof opt.out==='string','Use a playable sound recipe or manifest and --out');
+  const read=name=>JSON.parse(fs.readFileSync(name,'utf8'));
+  const recipe=read(file), dir=path.resolve(opt.out), report=path.join(dir,'report.json');
+  const send=value=>{process.stdout.write(JSON.stringify(value)+'\n');return value;};
+  if (mode==='workshop') {
+    check(fields(recipe,['source','library','options']) && recipe.source!==undefined &&
+      (recipe.library===undefined || typeof recipe.library==='string'),'Choose a workshop source');
+    const library=recipe.library===undefined ? undefined :
+      openSampleLibrary(path.resolve(path.dirname(file),recipe.library),{kit});
+    const ref=recipe.source;
+    let source, provenance;
+    if (fields(ref,['gesture']) && record(ref.gesture)) {
+      const generated=P.mediaGraph.synthesizeGesture(ref.gesture);
+      source=generated.value;
+      provenance={gesture:generated.report};
+    } else {
+      const {assets,sources}=resolveSampleAssets({source:ref},file,library,kit,{allowWav:true});
+      source=assets.source;
+      provenance=sources.source;
+    }
+    const built=lab.build(source,recipe.options), manifest=path.join(dir,'workshop.json');
+    json(manifest,{workshop:built.value,assets:writeAssets(dir,built.assets),source:provenance});
+    json(report,{...built.report,provenance});
+    return send({workshop:manifest,report});
+  }
+  check(fields(recipe,['workshop','assets','source']) && record(recipe.assets) &&
+    Object.keys(recipe.assets).length<=128,'Use a saved playable sound workshop manifest');
+  const {assets}=resolveSampleAssets(recipe.assets,file,undefined,kit,{allowWav:true});
+  if (mode==='audition-workshop') {
+    const result=lab.audition(recipe.workshop,assets,config===undefined ? {} : read(config));
+    const audio=path.join(dir,'audition.wav'), takes={};
+    write(audio,WAV.encode(result.value,{encoding:'pcm24'}));
+    for (const [build,cells] of Object.entries(result.clips)) {
+      takes[build]=Object.fromEntries(Object.entries(cells).map(([id,clip])=>{
+        const name='takes/'+build+'/'+id+'.wav';
+        write(path.join(dir,name),WAV.encode(clip,{encoding:'pcm24'}));
+        return [id,name];
+      }));
+    }
+    json(report,{...result.report,takes});
+    return send({audio,report});
+  }
+  check(config,'Give keep-workshop an editable selection JSON');
+  const selection=lab.keep(recipe.workshop,assets,read(config)), instrument=path.join(dir,'instrument.json');
+  const motif=path.join(dir,'motif.json'), audio=path.join(dir,'motif-source.wav');
+  write(audio,WAV.encode(selection.reference,{encoding:'pcm24'}));
+  const {patch,zones}=selection.value;
+  json(instrument,{patch,zones,assets:writeAssets(dir,selection.assets),motif:'motif.json'});
+  json(motif,selection.value.motif);
+  json(report,{...selection.report,source:recipe.source});
+  return send({instrument,motif,audio,report});
+}
+
+function discovery(mode,file,config,opt,kit) {
+  const P=kit.KIT.procedural, {fields,check,record,id}=P.musicInstruments, tool=P.mediaGraph.soundDiscovery;
+  check(file && typeof opt.out==='string','Supply a source discovery recipe or bank and --out');
+  const read=name=>JSON.parse(fs.readFileSync(name,'utf8'));
+  const recipe=read(file), dir=path.resolve(opt.out), report=path.join(dir,'report.json');
+  const send=value=>{process.stdout.write(JSON.stringify(value)+'\n');return value;};
+  if (mode==='discover') {
+    check(fields(recipe,['discovery','assets','library']) && record(recipe.assets ?? {}) &&
+      Object.keys(recipe.assets ?? {}).length<=128 && (recipe.library===undefined || typeof recipe.library==='string'),
+    'Use a discovery specification with optional named sample sources');
+    const library=recipe.library===undefined ? undefined :
+      openSampleLibrary(path.resolve(path.dirname(file),recipe.library),{kit});
+    const {assets,sources}=resolveSampleAssets(recipe.assets ?? {},file,library,kit,{allowWav:true});
+    const result=tool.audition(recipe.discovery,assets), manifest=path.join(dir,'bank.json'), audio=path.join(dir,'audition.wav');
+    const libraries=Object.fromEntries(Object.entries(result.libraries).map(([key,{source,assets}])=>{
+      const relative='instruments/'+key, folder=path.join(dir,relative);
+      write(path.join(folder,'source.wav'),WAV.encode(source,{encoding:'float32'}));
+      return [key,{source:relative+'/source.wav',assets:Object.fromEntries(Object.entries(writeAssets(folder,assets))
+        .map(([id,name])=>[id,relative+'/'+name]))}];
+    }));
+    const takes=Object.fromEntries(Object.entries(result.clips).map(([key,cells])=>[key,
+      Object.fromEntries(Object.entries(cells).map(([id,value])=>{
+        const name='takes/'+key+'/'+id+'.wav';
+        write(path.join(dir,name),WAV.encode(value,{encoding:'pcm24'}));
+        return [id,name];
+      }))]));
+    write(audio,WAV.encode(result.value,{encoding:'pcm24'}));
+    json(manifest,{bank:result.bank,libraries,sources});
+    json(report,{...result.report,takes});
+    return send({audio,report,bank:manifest});
+  }
+  check(config && fields(recipe,['bank','libraries','sources']) && record(recipe.libraries),'Supply a bank and a selection');
+  const selection=read(config), key=selection.candidate, row=id(key) && Object.hasOwn(recipe.libraries,key) && recipe.libraries[key];
+  check(fields(row,['source','assets']) && typeof row.source==='string' && record(row.assets) &&
+    Object.keys(row.assets).length<=128,'The selection needs a saved source and patch assets');
+  const {assets}=resolveSampleAssets(row.assets,file,undefined,kit,{allowWav:true});
+  const source=WAV.read(path.resolve(path.dirname(file),row.source));
+  const kept=tool.keep(recipe.bank,{[key]:{source,assets}},selection);
+  const instrument=path.join(dir,'instrument.json'), motif=path.join(dir,'motif.json'), audio=path.join(dir,'gesture.wav');
+  json(instrument,{patch:kept.patch,assets:writeAssets(dir,kept.assets),motif:'motif.json'});
+  json(motif,kept.motif);
+  write(audio,WAV.encode(kept.reference,{encoding:'pcm24'}));
+  const origin=kept.report.origin;
+  json(report,{...kept.report,...(origin.kind==='asset' && recipe.sources?.[origin.asset] &&
+    {source:recipe.sources[origin.asset]})});
+  return send({instrument,motif,audio,report});
+}

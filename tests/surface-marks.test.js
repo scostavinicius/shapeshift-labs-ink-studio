@@ -109,3 +109,56 @@ test('paint cause saves editable layers beside existing paint and requires expli
   run('cause',recipe,'--replace');
   assert.equal(fs.readFileSync(saved,'utf8'),before);
 });
+
+test('a recorded impact becomes persistent paint with the same source after pixel edits', t=>{
+  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ink-event-marks-'));
+  t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
+  const file=path.join(dir,'scene.js'), recipeFile=path.join(dir,'recipe.json'),
+    recording=path.join(dir,'run.json'), saved=path.join(dir,'paint','decals.json');
+  fs.writeFileSync(file,`const make=${fixture.toString()}; module.exports=kit=>({id:'test-marks',seed:13,build:()=>make(kit)});`);
+  const recipe={run:'yard',rules:{
+    impact:{on:{kind:'material-sound',system:'fx',where:{path:['interaction'],value:'impact'}},
+      pattern:'scuff',point:[0,0,0],bindings:{'/point':'/at'},
+      heading:[1,0,0],select:{object:'floor'},color:4,spacing:.03}
+  }};
+  const {world}=kit.KIT;
+  const run=world.runtime.create({dt:.1,history:{enabled:false},systems:{fx:{kind:'contact-effects',config:{}}}});
+  function hit(tick,x) {
+    return {tick,action:'fx/impact',args:{point:[x,0,1],normal:[0,1,0],speed:4,load:14,cue:'yard/thud'}};
+  }
+  run.schedule([hit(1,-.5),hit(2,.6)]);
+  run.step();
+  const [first]=run.events, baked=surfaceMarks.bakeEvents(fixture(kit),[first,first],recipe);
+  assert.equal(baked.layers.length,1);
+  assert(baked.layers[0].decals.every(row=>Math.abs(row[0]+.5)<.20));
+  assert.throws(()=>surfaceMarks.bakeEvents(fixture(kit),[first,{...first,speed:99}],recipe), /Conflicting records/);
+  run.advance(4);
+  assert.deepEqual(run.history,[]);
+  assert.deepEqual(run.events,[]);
+  fs.writeFileSync(recording,JSON.stringify(run.recording()));
+  fs.writeFileSync(recipeFile,JSON.stringify(recipe));
+
+  const args=(sub,...opts)=>[path.resolve(__dirname,'../cli/ink-studio.js'),'paint',sub,file,...opts,'--dir',path.dirname(saved)];
+  const cli=(sub,...opts)=>execFileSync(process.execPath,args(sub,...opts),{encoding:'utf8'});
+  const id=baked.layers[0].id;
+  const source={run:'yard',rule:'impact',id:first.id,tick:first.tick,system:first.system,kind:first.kind};
+  const added=JSON.parse(cli('cause',recipeFile,'--events',recording));
+  assert.deepEqual(added.layers.map(layer=>layer.sourceEvent.id),['1.0','2.0']);
+  assert.deepEqual(added.layers[0].sourceEvent,source);
+  cli('tune','--layer',id,'--opacity','.35');
+  cli('export','--layer',id,'--w','96','--h','64','--px','1');
+  const image=path.join(dir,'paint','layers',id,'paint.png');
+  const {w,h,rgb}=PNG.read(image);
+  for (let y=24;y<30;y++) for (let x=40;x<46;x++) rgb.set([245,210,145],3*(y*w+x));
+  PNG.write(image,w,h,rgb);
+  cli('absorb','--layer',id);
+  const edited=fs.readFileSync(saved,'utf8'), changed=JSON.parse(edited).layers[0];
+  assert.deepEqual(changed.sourceEvent,source);
+  assert.equal(changed.opacity,.35);
+  assert.notDeepEqual(changed.decals,baked.layers[0].decals);
+  assert.deepEqual(JSON.parse(cli('layers')).layers[0].sourceEvent,source);
+  assert.equal(JSON.parse(cli('cause',recipeFile,'--events',recording)).kept.length,2);
+  assert.equal(fs.readFileSync(saved,'utf8'),edited);
+  cli('cause',recipeFile,'--events',recording,'--replace');
+  assert.deepEqual(JSON.parse(fs.readFileSync(saved,'utf8')).layers[0],baked.layers[0]);
+});

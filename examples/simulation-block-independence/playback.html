@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Block-size independence · Ink Studio</title>
+<style>
+  :root { color-scheme: dark; font: 16px/1.5 system-ui, sans-serif; background: #101a22; color: #eef5ef }
+  body { margin: 0 }
+  main { max-width: 900px; margin: auto; padding: 42px 24px }
+  h1 { font-size: clamp(2rem, 5vw, 3.5rem); line-height: 1.1; margin: 0 }
+  p,small { color: #aec2cc }
+  section { background: #192d37; border: 1px solid #355360; border-radius: 8px; margin-top: 24px; padding: 20px }
+  canvas { display: block; width: 100%; height: auto; margin: 18px 0 }
+  dl { display: grid; grid-template-columns: repeat(auto-fit,minmax(175px,1fr)); gap: 14px; margin: 0 }
+  dt { color: #aec2cc; font-size: .9rem }
+  dd { margin: 0; font: 1.2rem ui-monospace, monospace; color: #a1ebc6 }
+  .controls { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 15px }
+  button,a { font: inherit; border: 1px solid #527b7b; background: #234049; color: #eafaee;
+    border-radius: 4px; padding: 8px 14px; cursor: pointer; text-decoration: none }
+  button:focus-visible,a:focus-visible { outline: 3px solid #ffc589 }
+  #status { color: #a1ebc6 }
+</style>
+<main>
+  <h1>Block-size independence</h1>
+  <p>The CLI requests 512 pressure samples at once. The browser repeats requests of 7, 23, 11, and 32 samples against the same authored controls.</p>
+  <section>
+    <strong id="status" role="status"></strong>
+    <canvas id="wave" width="850" height="205" aria-label="Overlay of offline and browser outlet pressure"></canvas>
+    <dl>
+      <div><dt>Samples compared</dt><dd id="sample-count"></dd></div>
+      <div><dt>Browser requests</dt><dd id="request-count"></dd></div>
+      <div><dt>Max absolute error</dt><dd id="max-error"></dd></div>
+      <div><dt>Backend precision</dt><dd id="precision"></dd></div>
+    </dl>
+    <p id="tolerance"></p>
+    <div class="controls">
+      <button id="replay">Run again</button>
+      <button id="download">Download trace JSON</button>
+      <a id="other" href="?precision=float32">Try Float32 backend</a>
+    </div>
+  </section>
+</main>
+<script>/*__INK_KIT__*/</script>
+<script>/*__VENT_NETWORK__*/</script>
+<script>
+  const model=/*__MODEL__*/null;
+  const reference=/*__REFERENCE__*/null;
+  const isFloat32=new URLSearchParams(location.search).get('precision')==='float32';
+  registerPreparedVentNetwork(KIT,isFloat32?'float32':'float64');
+  const API=KIT.world.blockReview, $=id=>document.getElementById(id);
+  const ctx=$('wave').getContext('2d'), waveform=$('wave');
+  const tolerance=isFloat32?{absolute:2e-6,relative:1e-6}:{absolute:0,relative:0};
+  let collected;
+  if(isFloat32) {
+    $('other').textContent='Try Float64 backend';
+    $('other').href='?precision=float64';
+  }
+  function draw(a,b) {
+    const {width,height}=waveform, max=Math.max(...a,...b), min=Math.min(...a,...b);
+    const x=i=>i*(width-24)/(a.length-1)+12;
+    const y=n=>height-16-(height-34)*(n-min)/(max-min);
+    ctx.fillStyle='#10212a';
+    ctx.fillRect(0,0,width,height);
+    ctx.strokeStyle='#3c5963';
+    for(const cmd of reference.identity.commands) {
+      ctx.beginPath();
+      ctx.moveTo(x(cmd.sample),0);
+      ctx.lineTo(x(cmd.sample),height);
+      ctx.stroke();
+    }
+    for(const [data,color,line] of [[a,'#ffc589',4],[b,'#a1ebc6',2]]) {
+      ctx.strokeStyle=color;
+      ctx.lineWidth=line;
+      ctx.beginPath();
+      data.forEach((n,i)=>i?ctx.lineTo(x(i),y(n)):ctx.moveTo(x(i),y(n)));
+      ctx.stroke();
+    }
+  }
+  function run() {
+    collected=API.capture(model,{samples:512,buffers:['trace'],path:'live',blocks:[7,23,11,32]});
+    const exact=API.compare(reference,collected), report=API.compare(reference,collected,{tolerance});
+    $('status').textContent=report.status==='exact'?'Exact match':
+      report.status==='within-tolerance'?'Matched within tolerance':'Diverged';
+    $('sample-count').textContent=collected.samples;
+    $('request-count').textContent=collected.request.requested;
+    $('max-error').textContent=report.maxAbsoluteError===0?'0':report.maxAbsoluteError.toExponential(3);
+    $('precision').textContent=isFloat32?'Float32':'Float64';
+    $('tolerance').textContent=isFloat32 ?
+      'Exact comparison found differences. Absolute tolerance 0.000002 and relative tolerance 0.000001.' :
+      'Absolute and relative tolerances are both zero. The two pressure traces overlap.';
+    draw(reference.tracks.trace.values,collected.tracks.trace.values);
+    $('live-trace').textContent=JSON.stringify(collected);
+    $('live-proof').textContent=JSON.stringify({status:report.status,exactStatus:exact.status,
+      samples:collected.samples,requests:collected.request.requested,maxError:report.maxAbsoluteError});
+    document.documentElement.dataset.verified=String(isFloat32 ?
+      exact.status==='diverged'&&report.status==='within-tolerance' : report.status==='exact');
+  }
+  $('replay').addEventListener('click',run);
+  $('download').addEventListener('click',()=>{
+    const href=URL.createObjectURL(new Blob([JSON.stringify(collected)],{type:'application/json'}));
+    const a=document.createElement('a');
+    a.href=href;
+    a.download=isFloat32?'browser-float32.trace.json':'browser.trace.json';
+    a.click();
+    setTimeout(()=>URL.revokeObjectURL(href),1000);
+  });
+  document.addEventListener('DOMContentLoaded',run);
+</script>
+<script type="application/json" id="live-trace"></script>
+<script type="application/json" id="live-proof"></script>
+</html>

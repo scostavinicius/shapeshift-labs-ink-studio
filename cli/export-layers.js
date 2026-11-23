@@ -2,8 +2,12 @@ const fs = require('node:fs');
 const path = require('node:path');
 const PNG = require('./png.js');
 const { json } = require('./asset-files.js');
-const { render, cameraCapture, pixelIndex } = require('./render.js');
-const { depthRange } = require('./pass-preview.js');
+const { render, cameraCapture, pixelIndex, sequenceOutput } = require('./render.js');
+const { depthRange, writeStrandData } = require('./pass-preview.js');
+const ArtPasses = require('../src/art-passes.js');
+const PartMotion = require('./part-motion.js');
+const ObjectMattes = require('./object-mattes.js');
+const LightGroups = require('./light-groups.js');
 
 const passes = ['depth', 'normal', 'objectId', 'materialId'];
 const encodings = {
@@ -15,6 +19,25 @@ const encodings = {
   materialId: { format: 'rgb24-png', decode: '65536 * R + 256 * G + B', empty: 0 },
   materialMasks: { format: 'gray8-png', kind: 'visible-surface', foreground: 255, background: 0 }
 };
+const motionEncodings = {
+  partId: encodings.objectId,
+  partMotion: { format:'float32-le', components:['x','y'], units:'native art pixels', direction:'current minus previous', empty:0 },
+  previousDepth: encodings.depthFloat,
+  partMotionValid: { format:'gray8-png', valid:255, invalid:0 }
+};
+const compEncodings = {
+  objectMattes: {format:'gray16-png', range:[0,1], background:0},
+  lightGroups: {format:'float32-le', components:['r','g','b','a'], colorSpace:'srgb-linear',
+    alpha:'premultiplied', signed:true, headerBytes:0, method:'ordered-difference'}
+};
+
+function compositingSettings(value) {
+  if (value === undefined || value === false) return {mattes:null,groups:[]};
+  if (!value || Object.getPrototypeOf(value) !== Object.prototype ||
+      Object.keys(value).some(key=>!['objectMattes','lightGroups'].includes(key)))
+    throw new TypeError('Compositing export accepts objectMattes and lightGroups');
+  return { mattes:ObjectMattes.settings(value.objectMattes), groups:LightGroups.settings(value.lightGroups) };
+}
 
 function packId(image, at, id) {
   if (id > 0xffffff) throw new RangeError('Layered export IDs must fit in 24 bits');
@@ -23,7 +46,54 @@ function packId(image, at, id) {
   image[at + 2] = id & 255;
 }
 
-function writeFrame(frame, camera, w, h, write) {
+function writePartMotion(data, w, h, surfaceAt, write) {
+  const size = w*h, ids = new Uint8Array(size*3), valid = new Uint8Array(size);
+  const motion = Buffer.alloc(size*8), depth = Buffer.alloc(size*4);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const p = y*w+x, source = surfaceAt(x,y);
+    packId(ids,p*3,data.partId[source]);
+    valid[p] = data.partMotionValid[source];
+    motion.writeFloatLE(data.partMotion[source*2],p*8);
+    motion.writeFloatLE(data.partMotion[source*2+1],p*8+4);
+    depth.writeFloatLE(data.previousDepth[source],p*4);
+  }
+  return {
+    partId:write('part-id','png',PNG.encode(w,h,ids)),
+    partMotion:write('part-motion','f32le',motion),
+    previousDepth:write('previous-depth','f32le',depth),
+    partMotionValid:write('part-motion-valid','png',PNG.encodeGray(w,h,valid))
+  };
+}
+
+function writeCompositing(frame, lighting, w, h, write) {
+  const output = {};
+  const mats = frame.objectMattes;
+  if (mats) {
+    const at = pixelIndex(w,h,mats.width,mats.height), count = mats.objects.length;
+    output.objectMattes = mats.objects.map((object,index) => {
+      const files = {};
+      for (const view of ObjectMattes.views) {
+        const gray = Uint16Array.from({length:w*h},(_,p)=>
+          Math.round(65535*mats[view][at(p%w,Math.floor(p/w))*count+index]));
+        files[view] = write('object-mattes/'+(index+1)+'/'+view,'png',PNG.encodeGray(w,h,gray));
+      }
+      return {object,files};
+    });
+  }
+  if (lighting) {
+    function floatFile(id, raster) {
+      const {width,height,data} = raster;
+      const bytes = Buffer.alloc(data.length*4);
+      for (let i=0;i<data.length;i++) bytes.writeFloatLE(data[i],i*4);
+      return {file:write('lighting/'+id,'f32le',bytes), width, height};
+    }
+    output.lighting = { base:floatFile('base',lighting.base), reference:floatFile('reference',lighting.reference),
+      groups:lighting.groups.map(({id,lights,value})=>({id,lights,...floatFile(id,value)})) };
+  }
+  return output;
+}
+
+function writeFrame(frame, camera, w, h, write, lighting) {
   const data = frame.passes;
   if (!frame.alpha || !camera || passes.some(name => !data?.[name]))
     throw new Error('The renderer did not supply a transparent frame and all surface passes');
@@ -62,6 +132,7 @@ function writeFrame(frame, camera, w, h, write) {
     objectId: write('object-id', 'png', PNG.encode(w, h, objectIds)),
     materialId: write('material-id', 'png', PNG.encode(w, h, materialIds))
   };
+  if (data.partMotion) Object.assign(files,writePartMotion(data,w,h,surfaceAt,write));
   const matte = new Uint8Array(count), materialMasks = [];
   for (const [id, pixels] of [...masks].sort(([a], [b]) => a - b)) {
     for (const pixel of pixels) matte[pixel] = 255;
@@ -70,11 +141,14 @@ function writeFrame(frame, camera, w, h, write) {
     for (const pixel of pixels) matte[pixel] = 0;
   }
   return { width: w, height: h, surfaceSize: [data.w, data.h], camera: { ...camera, view: Array.from(camera.view) },
-    files, depthRange: range, objects: data.objects.slice(), materials: data.materials.slice(), materialMasks };
+    files, depthRange: range, objects: data.objects.slice(), materials: data.materials.slice(), materialMasks,
+    ...(data.strands && { strands:data.strands, strandData:writeStrandData(data, (channel, ext, bytes) =>
+      write('strands/' + channel, ext, bytes)) }),
+    ...(data.parts && {parts:data.parts}), ...writeCompositing(frame,lighting,w,h,write) };
 }
 
 function exportLayers(world, { out, view = {}, times = [view.time ?? view.t ?? world?.lookSnapshot?.time ?? 0],
-  native = false, pose, replay } = {}) {
+  native = false, pose, replay, partMotion = false, strandPasses = false, compositing } = {}) {
   if (typeof out !== 'string' || !out.trim()) throw new TypeError('Layered exports need an output directory');
   if (!Array.isArray(times) || !times.length || !Array.from(times).every((t, i) =>
       Number.isFinite(t) && (!i || t >= times[i - 1])))
@@ -82,20 +156,33 @@ function exportLayers(world, { out, view = {}, times = [view.time ?? view.t ?? w
   const width = view.w ?? view.width ?? 900, height = view.h ?? view.height ?? 620;
   if (![width, height].every(n => Number.isSafeInteger(n) && n > 0) || width * height > 16777216)
     throw new RangeError('Layered export dimensions must fit within 16,777,216 pixels');
+  const { mattes, groups } = compositingSettings(compositing);
   const directory = path.resolve(out);
   fs.mkdirSync(directory, { recursive: true });
   const take = fs.mkdtempSync(path.join(directory, 'take-')), prefix = path.basename(take);
-  const manifest = { version: 1, rows: 'top-down', encodings: structuredClone(encodings), frames: [] };
+  const histories = { partMotionHistory:PartMotion.history(), strandMotionHistory:PartMotion.history() };
+  const requested = [...passes, ...(partMotion ? ArtPasses.partMotion : []), ...(strandPasses ? ArtPasses.strands : [])];
+  const manifest = { version: 1, rows: 'top-down',
+    encodings: structuredClone({ ...encodings, ...(partMotion && motionEncodings),
+      ...(mattes && {objectMattes:compEncodings.objectMattes}), ...(groups.length && {lightGroups:compEncodings.lightGroups}) }), frames: [] };
   function draw(time, resetRenderHistory) {
     pose?.(world, time);
     let camera;
     const frame = render(world, { ...view, w: width, h: height, time, t: time, transparent: true,
-      passes, resetRenderHistory, ...cameraCapture(view, result => { camera ??= result; }) });
-    return { frame, camera };
+      passes:requested, resetRenderHistory, ...histories, objectMattes:mattes?.objects,
+      ...cameraCapture(view, result => { camera ??= result; }) });
+    return { frame, camera, sampledTime:time };
   }
   try {
     for (const [index, time] of times.entries()) {
-      const { frame, camera } = replay ? replay.sample(time, draw) : draw(time, view.resetRenderHistory);
+      const sample = () => replay.sample(time,draw);
+      const { frame, camera, sampledTime } = replay ? sequenceOutput(histories, sample) :
+        draw(time, view.resetRenderHistory);
+      const deep = view.deepComposite ?? world.look?.deepComposite;
+      const lighting = groups.length ? LightGroups.captureLightGroups(world,{groups,view:{
+        ...view,w:width,h:height,px:view.px ?? frame.px,time:sampledTime,t:sampledTime,transparent:true,
+        deepComposite:(mattes && !deep ? {layers:1} : deep) ?? false
+      }}) : undefined;
       const name = 'frame-' + String(index).padStart(6, '0');
       const write = (channel, extension, bytes) => {
         const relative = channel + '/' + name + '.' + extension;
@@ -103,7 +190,7 @@ function exportLayers(world, { out, view = {}, times = [view.time ?? view.t ?? w
         fs.writeFileSync(path.join(take, relative), bytes);
         return prefix + '/' + relative;
       };
-      manifest.frames.push({ index, time, ...writeFrame(frame, camera, native ? frame.w : width, native ? frame.h : height, write) });
+      manifest.frames.push({ index, time, ...writeFrame(frame, camera, native ? frame.w : width, native ? frame.h : height, write, lighting) });
     }
     const file = path.join(directory, 'layers.json');
     json(file, manifest);

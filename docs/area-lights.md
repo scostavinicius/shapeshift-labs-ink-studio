@@ -37,11 +37,14 @@ number of bands. Omit it for the sampled visibility. `shadows: false` skips
 occlusion and keeps the light and its shape. `bias` offsets shadow rays from
 the receiving surface and defaults to 0.025 world units.
 
-Shadow casters use retained static sculpts. JSON dioramas retain these
+Sculpt shadow casters use retained static sculpts. JSON dioramas retain these
 automatically. In JavaScript, set `S.keepRenderSdf = true` before baking the
 static casters. Bake moving geometry separately. Scenes without a retained
 static caster still receive the shaped light. A pool uses its existing
 planar reflection binding to capture the visible emitter.
+
+Planar painted faces and scenery cards can also cast shadows when they set
+`castsShadow: true`. [Shadows from painted cutouts](painted-cutout-shadows.md)
 
 ```sh
 node cli/ink-studio.js render examples/shaped-lights.js \

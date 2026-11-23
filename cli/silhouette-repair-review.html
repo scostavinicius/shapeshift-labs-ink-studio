@@ -1,0 +1,181 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Silhouette collision repair · Ink Studio</title>
+<style>
+:root { color-scheme:dark; color:#f2eee9; background:#13191b; font:15px/1.48 system-ui,sans-serif; --line:#374344; --muted:#b9c5c5; --clear:#9ff0d2; --hit:#ff80a5; --gold:#ffd195; }
+* { box-sizing:border-box; }
+body { margin:0; }
+main { width:min(1210px,100% - 48px); margin:38px auto; }
+header { display:flex; justify-content:space-between; align-items:end; flex-wrap:wrap; gap:12px; margin-bottom:23px; }
+h1 { letter-spacing:-.065em; font-size:clamp(39px,5vw,70px); font-weight:680; line-height:1; margin:4px 0 11px; }
+p,h2 { margin:0; }
+h2 { font-size:.95rem; }
+.product { font-size:.75rem; font-weight:750; text-transform:uppercase; letter-spacing:.15em; color:var(--gold); }
+.meta,label { color:var(--muted); }
+button { font:inherit; color:inherit; border:1px solid #4a5758; padding:7px 12px; background:#283536; border-radius:7px; cursor:pointer; }
+button:hover { border-color:var(--gold); }
+button:focus-visible,input:focus-visible { outline:2px solid var(--clear); outline-offset:2px; }
+input { accent-color:var(--gold); }
+.layout { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.layout.single { grid-template-columns:minmax(0,680px); }
+.panel { border:1px solid var(--line); border-radius:11px; overflow:hidden; min-width:0; background:#202a2b; }
+.panel-heading { display:flex; flex-wrap:wrap; align-items:baseline; justify-content:space-between; gap:3px 8px; padding:10px 12px; }
+.framestat { color:var(--muted); font:.77rem ui-monospace,monospace; }
+.framestat[data-state=collision] { color:var(--hit); }
+.framestat[data-state=clear] { color:var(--clear); }
+.screen { position:relative; background:#0b1215; }
+.picture,.mask { display:block; width:100%; height:100%; image-rendering:pixelated; }
+.mask { position:absolute; inset:0; pointer-events:none; }
+.transport { display:grid; align-items:center; grid-template-columns:auto minmax(60px,1fr) auto; gap:10px; margin:16px 0 8px; }
+#play { min-width:76px; color:#211d17; background:var(--gold); border-color:var(--gold); font-weight:730; }
+#time { color:var(--muted); text-align:right; font:.8rem ui-monospace,monospace; }
+.range { position:relative; display:grid; min-width:0; }
+.range input { width:100%; min-width:0; margin:0; }
+#ranges { position:relative; height:5px; margin:0 7px 4px; }
+#ranges span { position:absolute; height:5px; min-width:2px; background:var(--hit); border-radius:2px; }
+.footer { display:flex; justify-content:space-between; flex-wrap:wrap; align-items:center; gap:7px 14px; margin-top:11px; border-top:1px solid var(--line); padding-top:12px; }
+.tools,.legend { display:flex; gap:7px 13px; align-items:center; flex-wrap:wrap; }
+.legend { color:var(--muted); font-size:.82rem; }
+.legend span { white-space:nowrap; }
+.legend i { display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:5px; background:var(--swatch); }
+[hidden] { display:none !important; }
+@media(max-width:740px) {
+  main { width:calc(100% - 28px); margin:24px auto; }
+  header { margin-bottom:16px; }
+  .layout { grid-template-columns:minmax(0,1fr); }
+  .transport { margin-top:12px; }
+}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <div>
+    <p class="product">Ink Studio · Silhouette collision repair</p>
+    <h1 id="title"></h1>
+    <p class="meta" id="summary"></p>
+  </div>
+  <button id="download" type="button">Download repair report</button>
+</header>
+<div class="layout" id="layout">
+  <section class="panel" id="before">
+    <div class="panel-heading"><h2>Original camera</h2><span class="framestat"></span></div>
+    <div class="screen"><img class="picture" alt="Original shot"><img class="mask" alt="" hidden></div>
+  </section>
+  <section class="panel" id="after">
+    <div class="panel-heading"><h2>Repaired camera</h2><span class="framestat"></span></div>
+    <div class="screen"><img class="picture" alt="Shot with the verified camera repair"><img class="mask" alt="" hidden></div>
+  </section>
+</div>
+<div class="transport">
+  <button id="play" type="button">Play</button>
+  <div class="range"><div id="ranges" aria-hidden="true"></div><input id="seek" type="range" min="0" step="1" aria-label="Shot frame"></div>
+  <output id="time" for="seek"></output>
+</div>
+<div class="footer">
+  <div class="tools">
+    <button id="jump" type="button">Jump to collision</button>
+    <label><input id="guides" type="checkbox"> Show silhouettes</label>
+  </div>
+  <div class="legend" id="legend"></div>
+</div>
+</main>
+<script type="application/json" id="silhouette-data">/*SILHOUETTE_DATA*/</script>
+<script>
+const get = id => document.getElementById(id);
+const {report, previews} = JSON.parse(get('silhouette-data').textContent);
+const {width, height, fps, intervals, repair} = report;
+const [start, end] = report.preview, count = end - start;
+const seek = get('seek'), play = get('play'), guides = get('guides');
+const first = intervals.reduce((peak, item) => !peak || item.peakOverlapPixels > peak.peakOverlapPixels ? item : peak, null);
+const panels = Object.entries(previews).map(([side, sequence]) => {
+  const panel = get(side), screen = panel.querySelector('.screen');
+  screen.style.aspectRatio = width + ' / ' + height;
+  return {
+    stat: panel.querySelector('.framestat'), picture: screen.querySelector('.picture'), mask: screen.querySelector('.mask'),
+    sequence: sequence.map(value => Object.fromEntries(Object.entries(value).map(([key, url]) => {
+      const image = new Image();
+      image.src = url;
+      return [key, image];
+    }))), metrics: report[side]
+  };
+});
+let current = first ? first.peakFrame - start : 0, timer = 0;
+get('title').textContent = report.title;
+document.title = report.title + ' · Ink Studio';
+get('after').hidden = !repair;
+get('layout').classList.toggle('single', !repair);
+get('jump').hidden = !first;
+seek.max = count - 1;
+
+const collisions = report.before.filter(frame => frame.status === 'collision').length;
+const descriptions = {
+  clear: 'The silhouettes stayed separate throughout this handle.',
+  unverified: 'Some frames could not be verified. Check whether both actors are visible and inside the shot.',
+  unresolved: 'No camera offset cleared the full handle within the search budget.',
+  'unsupported-camera': 'Orbit offsets require an orbit-authored camera.'
+};
+function angle(value) { return (value > 0 ? '+' : '') + value + '°'; }
+get('summary').textContent = repair ?
+  collisions + ' collision frames cleared · yaw ' + angle(repair.offsetDegrees[0]) + ' · pitch ' +
+  angle(repair.offsetDegrees[1]) + ' · ' + repair.checkedFrames + ' frames verified' : descriptions[report.status];
+for (const span of intervals) {
+  const node = document.createElement('span');
+  node.style.left = 100 * (span.fromFrame - start) / count + '%';
+  node.style.width = 100 * (span.toFrame - span.fromFrame) / count + '%';
+  get('ranges').append(node);
+}
+for (const [i, label] of [...report.subjects.map(subject => subject.label), 'Projected overlap'].entries()) {
+  const node = document.createElement('span'), swatch = document.createElement('i');
+  swatch.style.setProperty('--swatch', ['#67efd6', '#ffc76e', '#ff497a'][i]);
+  node.append(swatch, document.createTextNode(label));
+  get('legend').append(node);
+}
+
+function draw() {
+  const frame = start + current;
+  seek.value = current;
+  get('time').value = 'Frame ' + frame + ' · ' + (frame / fps).toFixed(2) + ' s';
+  panels.forEach(panel => {
+    panel.picture.src = panel.sequence[current].picture.src;
+    panel.mask.hidden = !guides.checked;
+    if (guides.checked) panel.mask.src = panel.sequence[current].mask.src;
+    const row = panel.metrics[frame - report.fromFrame];
+    panel.stat.dataset.state = row.status;
+    panel.stat.textContent = row.status === 'clear' ? 'Silhouettes separate' :
+      row.status === 'unverified' ? 'Visibility unverified' :
+      row.overlapPixels ? row.overlapPixels + ' overlapping px' : 'Silhouettes touch';
+  });
+}
+
+function pause() {
+  clearInterval(timer);
+  timer = 0;
+  play.textContent = 'Play';
+}
+play.addEventListener('click', () => {
+  if (timer) return pause();
+  play.textContent = 'Pause';
+  const at = performance.now(), frame = current;
+  timer = setInterval(() => {
+    const next = (frame + Math.floor((performance.now() - at) * fps / 1000)) % count;
+    if (next !== current) { current = next; draw(); }
+  }, 1000 / (fps * 2));
+});
+seek.addEventListener('input', () => { pause(); current = Number(seek.value); draw(); });
+get('jump').addEventListener('click', () => { pause(); current = first.peakFrame - start; draw(); });
+guides.addEventListener('change', draw);
+get('download').addEventListener('click', () => {
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([JSON.stringify(report, null, 2) + '\n'], { type: 'application/json' }));
+  link.download = 'repair.json';
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+});
+draw();
+</script>
+</body>
+</html>

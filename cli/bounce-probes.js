@@ -6,7 +6,7 @@ const linear = ColorSpace.prepare('srgb','srgb-linear');
 const srgb = ColorSpace.prepare('srgb-linear','srgb');
 const bakes = new WeakMap();
 
-function create(world, override, sky, sun, source = world) {
+function create(world, override, sky, sun, source = world, options = {}) {
   const authored = world.bounceProbes ?? source.bounceProbes;
   const value = override === true ? authored : override ?? authored;
   let settings = BounceProbes.prepare(value);
@@ -17,8 +17,11 @@ function create(world, override, sky, sun, source = world) {
     bakes.set(source,{ key,bake:settings });
   }
 
-  const receive = ShadowArt.bind(settings,world,'receive');
-  const { pointIndex } = require('../index.js').load().KIT.procedural.spatial;
+  const kit = require('../index.js').load().KIT;
+  const receive = ShadowArt.bind(settings, world, 'receive');
+  const { pointIndex } = kit.procedural.spatial;
+  const update = settings.dynamic && options.dynamic !== false ? kit.bounceProbes.update(world, settings, options) : null;
+  const sites = update?.probes ?? settings.probes;
   const { samples,strength,bounceStrength,skyStrength } = settings;
   const weight = 4*Math.PI/samples;
   const skySamples = BounceProbes.directions(samples).map(({direction,basis})=>{
@@ -27,7 +30,7 @@ function create(world, override, sky, sun, source = world) {
       upper ? sun?.sky : sun?.ground;
     return { basis,color:skyStrength && incoming?.some(Boolean) ? incoming.map(n=>n*skyStrength) : null };
   });
-  const index = pointIndex(settings.probes.map(probe=>{
+  const index = pointIndex(sites.map(probe=>{
     const coefficients=probe.coefficients.map(n=>n*bounceStrength), { at,radius,bounds } = probe;
     for (let i=0;i<samples;i++) {
       const {basis,color}=skySamples[i];
@@ -63,7 +66,8 @@ function create(world, override, sky, sun, source = world) {
     return fogMix ? shaded.map((n,k)=>n+(fog[k]-n)*fogMix) : shaded;
   }
 
-  return { sample,shade, receives:i=>!receive || receive(i) };
+  return { sample, shade, receives: i => !receive || receive(i),
+    ...(settings.dynamic && { stats: { sites: sites.length, updated: update?.updated ?? [], rays: update?.rays ?? 0 } }) };
 }
 
 module.exports = { create };

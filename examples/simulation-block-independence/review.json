@@ -1,0 +1,12 @@
+{
+  "format": "ink-studio/block-review",
+  "version": 1,
+  "samples": 512,
+  "buffers": ["trace"],
+  "tolerance": { "absolute": 0, "relative": 0 },
+  "cases": [
+    { "id": "cli-long", "path": "offline", "blocks": [512] },
+    { "id": "live-small", "path": "live", "blocks": [7, 23, 11, 32] },
+    { "id": "offline-single", "path": "offline", "blocks": [1] }
+  ]
+}

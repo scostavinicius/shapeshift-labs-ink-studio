@@ -1,0 +1,65 @@
+{
+  "format": "ink-studio/branched-domain",
+  "version": 1,
+  "id": "manifold-bench",
+  "revision": 2,
+  "nodes": {
+    "supply": { "kind": "reservoir", "at": { "entity": "feed-tank" }, "volume": 16, "geometry": "feed-vessel",
+      "sockets": { "neck": { "at": { "entity": "feed-tank", "socket": "neck" } },
+        "fill": { "at": { "entity": "feed-tank", "socket": "fill" } } } },
+    "tee": { "kind": "junction", "at": { "entity": "t-piece" },
+      "sockets": { "feed": { "at": { "entity": "t-piece", "socket": "in" } },
+        "upper": { "at": { "entity": "t-piece", "socket": "up" } },
+        "lower": { "at": { "entity": "t-piece", "socket": "down" } } } },
+    "high": { "kind": "terminal", "at": { "entity": "upper-nozzle" },
+      "sockets": { "base": { "at": { "entity": "upper-nozzle", "socket": "base" } },
+        "mouth": { "at": { "entity": "upper-nozzle", "socket": "mouth" } } } },
+    "cavity": { "kind": "cavity", "at": { "entity": "chamber" }, "volume": 2.85, "geometry": "hold-chamber",
+      "sockets": { "take": { "at": { "entity": "chamber", "socket": "take" } },
+        "release": { "at": { "entity": "chamber", "socket": "release" } },
+        "tap": { "at": { "entity": "chamber", "socket": "tap" } } } },
+    "tail": { "kind": "reservoir", "at": { "entity": "return-tank" }, "volume": 4.5, "geometry": "tail-vessel",
+      "sockets": { "accept": { "at": { "entity": "return-tank", "socket": "accept" } },
+        "drain": { "at": { "entity": "return-tank", "socket": "drain" } } } }
+  },
+  "paths": {
+    "supply-route": { "revision": 2,
+      "points": [{ "entity": "feed-tank", "socket": "neck" }, [-3.85, 0.42, -0.87],
+        [-2.35, 0.45, -0.84], [-1.2, 0.45, -0.38], { "entity": "t-piece", "socket": "in" }] },
+    "upper-route": { "revision": 3, "guides": [[1.25, 0.51, -0.48], [2.45, 0.52, -1.07], [3.57, 0.55, -2.05], [4.45, 0.55, -2.48]] },
+    "chamber-route": { "guides": [[0.87, 0.43, 0.47], [1.50, 0.45, 1.05], [2.10, 0.48, 1.58]] },
+    "return-route": { "guides": [[3.88, 0.46, 2.73], [4.86, 0.38, 2.89]] }
+  },
+  "geometries": {
+    "feed-vessel": { "revision": 2, "asset": "bench/feed-tank" },
+    "hold-chamber": { "revision": 4, "asset": "bench/chamber" },
+    "tail-vessel": { "revision": 1, "asset": "bench/return-tank" },
+    "supply-bore": { "revision": 2, "asset": "bench/supply-bore", "source": { "kind": "contours",
+      "banks": { "left": [[0, -0.43], [1, -0.35]], "right": [[0, 0.43], [1, 0.35]], "depth": 0.48 } } },
+    "throat-bore": { "revision": 4, "asset": "bench/upper-nozzle", "source": { "kind": "contours", "profiles": [
+      { "at": 0, "loops": [[[-0.46, -0.20], [-0.30, -0.33], [0.30, -0.33], [0.46, -0.20], [0.46, 0.20], [0.30, 0.33], [-0.30, 0.33], [-0.46, 0.20]]] },
+      { "at": 0.5, "loops": [[[-0.21, -0.09], [-0.13, -0.17], [0.13, -0.17], [0.21, -0.09], [0.21, 0.09], [0.13, 0.17], [-0.13, 0.17], [-0.21, 0.09]]] },
+      { "at": 1, "loops": [[[-0.39, -0.17], [-0.25, -0.27], [0.25, -0.27], [0.39, -0.17], [0.39, 0.17], [0.25, 0.27], [-0.25, 0.27], [-0.39, 0.17]]] }
+    ] } },
+    "return-bore": { "revision": 2, "asset": "bench/return-pipe", "source": { "kind": "contours", "profiles": [
+      { "at": 0, "loops": [[[-0.28, -0.14], [-0.17, -0.23], [0.17, -0.23], [0.28, -0.14], [0.28, 0.14], [0.17, 0.23], [-0.17, 0.23], [-0.28, 0.14]]] }
+    ] } }
+  },
+  "tubes": {
+    "feed": { "from": "supply/neck", "to": "tee/feed", "path": "supply-route", "geometry": "supply-bore", "sampling": { "samples": 10, "contours": true } },
+    "upper": { "from": "tee/upper", "to": "high/base", "path": "upper-route", "geometry": "throat-bore", "sampling": { "samples": 9, "contours": true } },
+    "lower": { "from": "tee/lower", "to": "cavity/take", "path": "chamber-route", "geometry": "return-bore", "sampling": { "samples": 8, "contours": true } },
+    "return": { "from": "cavity/release", "to": "tail/accept", "path": "return-route", "geometry": "return-bore", "sampling": { "samples": 8, "contours": true } }
+  },
+  "ports": {
+    "feed-in": { "kind": "inlet", "socket": "supply/fill" },
+    "upper-exhaust": { "kind": "outlet", "socket": "high/mouth" },
+    "return-exhaust": { "kind": "outlet", "socket": "tail/drain" }
+  },
+  "observations": {
+    "manifold-pressure": { "socket": "tee/center" },
+    "outlet-throat": { "tube": "upper", "section": 4 },
+    "chamber-pressure": { "socket": "cavity/tap" },
+    "return-approach": { "tube": "return", "t": 0.65 }
+  }
+}

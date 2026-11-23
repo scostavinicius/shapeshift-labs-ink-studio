@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cinder Foundry · Staged Fracture</title>
+<style>
+:root{color-scheme:dark;--bg:#17242f;--panel:#20313c;--line:#48616a;--ink:#f3e7c9;--muted:#acc2bf;--heat:#ffb478;--ice:#a5d9c8}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:14px system-ui,sans-serif}
+main{max-width:1044px;margin:auto;padding:21px 24px}
+header{display:flex;justify-content:space-between;align-items:end;gap:12px;margin-bottom:15px}
+h1,h2,p{margin:0}h1{font:normal 39px/1 Georgia,serif;letter-spacing:-.02em;margin-bottom:6px}header p{color:var(--muted)}
+button{font:inherit;color:inherit;cursor:pointer;background:#2c454e;border:1px solid #5b7580;border-radius:4px;padding:7px 10px}
+button:hover{background:#3c555e}button:focus-visible,input:focus-visible{outline:2px solid var(--heat);outline-offset:2px}
+.layout{display:grid;grid-template-columns:minmax(0,682px) minmax(230px,1fr);gap:14px;align-items:start}
+figure{margin:0;min-width:0}.viewport{position:relative;overflow:hidden;border-radius:5px;border:1px solid #608194}
+#scene{display:block;width:100%;height:auto;aspect-ratio:340/184;image-rendering:pixelated}
+#box{position:absolute;border:1px solid var(--ice);box-shadow:0 0 0 1px #1f343c;pointer-events:none}
+.scrub{display:flex;align-items:center;margin-top:11px;gap:10px}
+.scrub input{flex:1;min-width:55px;accent-color:var(--heat);margin:0}output{font:11px ui-monospace,monospace;color:var(--heat)}
+.stages{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}.stage{font-size:12px;padding:5px 7px;background:#263b46}.stage[aria-current=true]{color:#ffddab;border-color:#c3845d;background:#574438}
+aside{border:1px solid var(--line);border-radius:5px;background:var(--panel);padding:13px;overflow:hidden}
+h2{font-size:11px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);margin-bottom:7px}
+#detail{display:block;box-sizing:content-box;width:min(100% - 2px,256px);height:auto;aspect-ratio:64/52;image-rendering:pixelated;border:1px solid #536f79;background:#3f5458}
+#status{font:normal 22px/1.18 Georgia,serif;margin:10px 0 4px}
+#story{font-size:12px;line-height:1.35;min-height:33px;color:var(--muted)}
+.bonds{border-top:1px solid var(--line);margin-top:9px;padding-top:9px}
+.track{display:grid;grid-template-columns:1fr auto;gap:4px;margin-top:7px;font:11px ui-monospace,monospace}
+.track output{color:var(--ice)}.track i{grid-column:1/-1;height:3px;background:#142a34;border-radius:3px;overflow:hidden}
+.track b{height:100%;display:block;background:var(--ice)}.track[data-broken=true] b{background:var(--heat)}.track[data-broken=true] output{color:var(--heat)}
+#ledger{margin-top:10px;border-top:1px solid var(--line);padding-top:8px;color:var(--ice);font-size:11px;line-height:1.4}
+@media(max-width:760px){main{padding:16px}.layout{grid-template-columns:1fr}h1{font-size:32px}aside{max-width:420px}header p{font-size:13px}}
+</style>
+</head>
+<body>
+<main>
+<header><div><h1>Cinder Foundry</h1><p>A quench cracks the glaze. An impact sheds one glowing corner.</p></div><button id="play" type="button">Play fracture</button></header>
+<div class="layout">
+  <figure>
+    <div class="viewport"><img id="scene" width="340" height="184" alt="A hot glazed charge moving through the foundry"><div id="box"></div></div>
+    <figcaption>
+      <div class="scrub"><input id="time" type="range" min="0" step="1" aria-label="Fracture simulation tick"><output id="timecode" for="time"></output></div>
+      <nav id="stages" class="stages" aria-label="Recorded fracture stages"></nav>
+    </figcaption>
+  </figure>
+  <aside>
+    <h2>Native-pixel close-up</h2>
+    <canvas id="detail" width="64" height="52" aria-label="Magnified view of the charge"></canvas>
+    <div id="status"></div><p id="story"></p>
+    <div class="bonds"><h2>Authored seams</h2><div id="bonds"></div></div>
+    <p id="ledger" aria-live="polite"></p>
+  </aside>
+</div>
+</main>
+<script>
+/* STUDY */
+const el=id=>document.getElementById(id), img=el('scene'), range=el('time'), detail=el('detail'),
+  ctx=detail.getContext('2d'), last=frames.length-1;
+const moments=[
+  [0,'In the kiln'],[stages.quench.tick,'First crack'],[stages.impact.tick,'Corner impact'],[stages.loose.tick+5,'After the split']
+];
+const story={
+  kiln:['Seven bonded parcels','The charge holds together before release.'],
+  flying:['One rotating compound','The glaze and hot core travel as a single rigid piece.'],
+  cracked:['Hairline in the glaze','Rapid cooling breaks a seam. The remaining bonds still carry all seven parcels.'],
+  split:['Corner detached','The surviving bonds keep the main piece together.'],
+  loose:['Six cells still turning','The glowing corner dropped into the lattice. The remaining compound keeps rotating.']
+};
+let tick=stages.impact.tick+4, revision=0, timer;
+const buttons=moments.map(([at,label])=>{
+  const button=document.createElement('button');button.type='button';button.className='stage';button.textContent=label;
+  button.onclick=()=>{stop();show(at)};el('stages').append(button);return {at,button};
+});
+range.max=last;
+async function show(i){
+  tick=i;
+  const frame=frames[i], request=++revision, [x,y]=frame.crop;
+  img.src=images[i];
+  Object.assign(el('box').style,{left:x/340*100+'%',top:y/184*100+'%',width:64/340*100+'%',height:52/184*100+'%'});
+  range.value=i;
+  el('timecode').value='TICK '+String(i).padStart(2,'0');
+  const [title,body]=i===stages.impact.tick?
+    ['Impact sheds the corner','The seam fails at '+stages.impact.speed.toFixed(1)+' world units/s. One parcel deposits as a loose cell.']:
+    story[frame.phase];
+  el('status').textContent=title;
+  el('story').textContent=body;
+  for(const {at,button} of buttons)button.setAttribute('aria-current',String(at===i));
+  const tracks=frame.seams.map(({name,damage})=>{
+    const track=document.createElement('div'),label=document.createElement('span'),value=document.createElement('output'),
+      lane=document.createElement('i'), fill=document.createElement('b');
+    track.className='track';track.dataset.broken=String(damage===1);label.textContent=name;
+    value.textContent=damage===1?'BROKEN':Math.round(damage*100)+'%';
+    fill.style.width=(damage*100)+'%';lane.append(fill);track.append(label,value,lane);
+    return track;
+  });
+  el('bonds').replaceChildren(...tracks);
+  el('ledger').textContent='Corner #'+frame.chipId+' · '+Math.round(frame.chip)+' °C · '+
+    (Math.abs(frame.massError)<1e-5&&Math.abs(frame.energyError)<1e-5?'ledger balanced':'ledger residual');
+  await img.decode().catch(()=>{});
+  if(revision!==request)return;
+  ctx.imageSmoothingEnabled=false;
+  ctx.drawImage(img,x,y,64,52,0,0,64,52);
+}
+function stop(){clearInterval(timer);timer=undefined;el('play').textContent='Play fracture'}
+range.oninput=()=>{stop();show(Number(range.value))};
+el('play').onclick=()=>{
+  if(timer){stop();return}
+  show(0);el('play').textContent='Pause';
+  timer=setInterval(()=>{if(tick===last)stop();else show(tick+1)},1000/24);
+};
+show(tick);
+</script>
+</body>
+</html>

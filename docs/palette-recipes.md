@@ -1089,3 +1089,129 @@ for failures at each view and state. Exit status is 0 when every check
 passes, 2 when any check fails, and 1 for invalid input or a render or
 I/O error. In Node, call `ink.checkPaletteShot(world, { plan, view, width,
 height, columns, pose })` and read `report.passed`.
+
+## Allocate a palette across a sequence
+
+`palette sequence` fits one limited palette to native art frames from several
+shots. It gives each shot equal weight by default, then divides that weight
+among the shot's samples. Within a sample, visible pixel coverage drives the
+fit. Materials that occupy little of the frame can share swatches with more
+prominent materials, freeing slots for colors that do more work elsewhere.
+The report shows screen coverage, color error, and exclusive swatch counts
+before and after allocation.
+
+```sh
+ink-studio palette sequence examples/sequence-palette/courier.json --out courier-palette
+```
+
+Open `courier-palette/index.html` to compare the shots and alternate budgets.
+The fitted palette is in `palette.json`. `palette-policy.json` includes its
+perceptual matching policy and signature pins. Use the same policy on every
+final still or clip to enforce the budget after compositing and effects.
+
+```sh
+ink-studio render examples/courier-shot-lighting.js --w 160 --h 112 --px 1 \
+  --shot-lighting examples/courier-shot-lighting.json \
+  --output-palette courier-palette/palette-policy.json --out courier.png
+```
+
+The final resolve uses solid matching and preserves alpha. A pin reserves
+one slot and retains exact occurrences of its hex value. It does not replace
+nearby colors unless you set `match: true` on that pin. Leave a general
+matching slot or enable matching on one of the pins.
+
+```json
+{
+  "format": "ink-studio/palette-sequence",
+  "version": 1,
+  "title": "The night courier",
+  "width": 160,
+  "height": 112,
+  "budget": 12,
+  "previewBudgets": [8, 16],
+  "pins": [{ "color": "#ffffdb", "label": "Lantern flame" }],
+  "materialWeights": { "skin": 2 },
+  "shots": [
+    { "id": "wide", "scene": "courier.js", "times": [0, 1.5] },
+    { "id": "insert", "scene": "courier.js", "times": [0], "weight": 1.5,
+      "camera": { "target": [0.47, 1.27, 0.63], "dist": 1.75 } }
+  ]
+}
+```
+
+Scene and `shotLighting` file paths are relative to the plan. Built-in scene
+IDs also work. A shot can set `label`, `seed`, `transparent`, and a camera
+with `target`, `yaw`, `pitch`, `dist`, `zoom`, or `ortho`. Supply up to 24
+shots and 96 samples across them. The native scene capture preserves the
+shot's look and material IDs and samples before screen compositing and render
+graphs. The final output policy can also be applied to fully composited shots.
+
+For Node, pass captured frames to `ink.allocateSequencePalette(shots,
+{ budget, pins, materialWeights })`. Each shot has an `id` and `frames` of
+`{ w, h, rgb, alpha?, time?, materialId?, materials? }`. Material IDs use the
+top-down `Uint32Array` and name table from the renderer's material pass.
+
+## Repair palette separation for color-vision deficiencies
+
+Choose the objects or materials whose silhouettes must read against their
+surroundings. Ink captures the native art frame and finds the opaque
+horizontal and vertical contacts between the selected subjects and their
+backgrounds. It measures perceptual separation in each requested simulation
+and proposes exact swatch edits. The review uses the unsimulated frame and
+full-severity protanopia, deuteranopia, and tritanopia by default.
+[Machado, Oliveira and Fernandes simulation matrices](https://www.inf.ufrgs.br/~oliveira/pubs_files/CVD_Simulation/CVD_Simulation.html)
+
+```sh
+ink-studio palette cvd-repair examples/color-vision-palette-repair/crossing.js \
+  examples/color-vision-palette-repair/crossing.json --out crossing-repair
+```
+
+Open `crossing-repair/index.html` to switch simulations, inspect the measured
+subject edges, and compare the original and repaired frames. `report.json`
+lists the exact swatch pairs, contact counts, before and after distances, and
+whether the minimum edit count was established. Apply the exported repair
+as an ordinary output grade on a still or clip.
+
+```sh
+ink-studio render examples/color-vision-palette-repair/crossing.js \
+  --w 168 --h 108 --px 1 --output-grade crossing-repair/repair.json --out crossing.png
+```
+
+```json
+{
+  "format": "ink-studio/color-vision-palette-repair",
+  "version": 1,
+  "minDistance": 0.105,
+  "minEdges": 2,
+  "locked": ["#9eece1"],
+  "pairs": [
+    { "id": "west", "label": "West arrow", "subject": { "object": "west-signal" },
+      "background": { "object": "west-plate" } }
+  ]
+}
+```
+
+Each pair takes an `object`, a `material`, or both on either side. Without an
+explicit background, Ink measures opaque pixels outside the subject along its
+boundary. `minEdges` filters swatch pairs by their contact count per named
+relationship. `minDistance` is an OKLab distance. Optional `minLightness`
+adds a minimum absolute OKLab lightness gap. The command captures the native
+scene frame before screen composites and render graphs. Match the sample
+frame's camera, seed, time, and art size when applying the repair.
+
+`locked` protects exact swatches. `editable` can restrict changes to a list
+of specific swatches. The solver generates alternatives by varying lightness
+and hue, or uses the given `candidates` list for a swatch, as in
+`{ "#cd5357": ["#ffa19f", "#782e36"] }`. `maxShift` limits the OKLab change
+from the original. Alternatives are distinct from existing visible colors and
+locked swatches. Ink searches by increasing edit count within `maxChanges`
+and the evaluation budget. It prefers a smaller total color shift among
+solutions of the same size. Unmeasured or unsolved pairs stay visible in the
+report. Two sides that use exactly the same source color share one swatch
+assignment and need an authored separation before this global repair can
+separate them.
+
+The `swatchReplace` step applies to every final pixel with a changed source
+swatch, including its use on other objects. Use `locked` or `editable` to
+scope the approved changes. For Node, pass a native frame with `objectId`
+and `materialId` passes to `ink.repairColorVisionPalette(frame, options)`.

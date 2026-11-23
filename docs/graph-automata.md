@@ -91,3 +91,6 @@ glyph that lights its middle strokes when two branches arrive together.
 node cli/ink-studio.js clip examples/graph-automata-studies.js --w 850 --h 540 --to 6.4 --fps 10 --out skybridge-relay.png
 node cli/ink-studio.js clip examples/graph-automata-studies.js --params '{"study":"glyphs"}' --w 850 --h 540 --to 6.4 --fps 10 --out glyph-loom.png
 ```
+
+Use [rule boards](rule-board.md) to compile these graph connections from
+an arrangement of socket tiles and directional glyphs.

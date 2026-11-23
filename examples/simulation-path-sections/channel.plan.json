@@ -1,0 +1,15 @@
+{
+  "format": "ink-studio/path-section-plan",
+  "version": 1,
+  "path": [[0, 0, 0], [0, 0, 2], [0.7, 0, 4], [2, 0, 6]],
+  "samples": 21,
+  "contours": true,
+  "source": {
+    "kind": "contours",
+    "banks": {
+      "left": [[0, -1.5], [0.55, -0.4], [1, -1.25]],
+      "right": [[0, 1.3], [0.55, 0.55], [1, 1.5]],
+      "depth": 1
+    }
+  }
+}

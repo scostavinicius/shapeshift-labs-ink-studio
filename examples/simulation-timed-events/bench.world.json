@@ -1,0 +1,27 @@
+{
+  "format": "ink-studio/world",
+  "version": 1,
+  "id": "timed-event-bench",
+  "dt": 0.016666666666666666,
+  "entities": { "puck": { "position": [0, 0.125, 0] } },
+  "modules": { "clock": { "file": "note.model.json", "revision": 1 } },
+  "instances": { "score": { "module": "clock" } },
+  "systems": {
+    "fall": {
+      "kind": "mechanics",
+      "config": { "ground": 0, "gravity": [0, 0, 0], "drag": 0,
+        "impactEvents": "timed",
+        "bodies": { "puck": { "entity": "puck", "position": [0, 0.125, 0],
+          "half": [0.1, 0.1, 0.1], "velocity": [0, -4, 0] } }
+      }
+    },
+    "precise": { "kind": "event-marker-receiver" },
+    "coarse": { "kind": "event-marker-receiver", "config": { "precise": false } }
+  },
+  "connections": [
+    { "from": "fall/impacts", "to": "precise/impact", "signal": "event" },
+    { "from": "score/note", "to": "precise/note", "signal": "event" },
+    { "from": "fall/impacts", "to": "coarse/impact", "signal": "event" },
+    { "from": "score/note", "to": "coarse/note", "signal": "event" }
+  ]
+}

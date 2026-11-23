@@ -24,10 +24,42 @@
     return freeze({ origin: point(origin), normal: n, right, up: V.cross(n, right) });
   }
 
-  function doorway({ from, to, halfWidth, halfHeight, shape = 'rect' } = {}) {
+  function paintMask(source, threshold) {
+    if (!Number.isFinite(threshold) || threshold <= 0 || threshold > 255)
+      throw new RangeError('Portal mask threshold must be above 0 and at most 255');
+    if (!Number.isSafeInteger(source?.width) || !Number.isSafeInteger(source?.height) ||
+        source.width < 1 || source.height < 1 || source.width > 1024 || source.height > 1024)
+      throw new RangeError('A portal mask needs a raster up to 1024 × 1024 art pixels');
+    const { width, height, channels = source.data?.length / (width * height) } = source;
+    const channel = channels === 2 || channels === 4 ? 'alpha' : channels === 1 ? 0 : 'luma';
+    const { data } = K.procedural.raster.channel(source, { channel });
+    return freeze({ width, height, channels: 1, data: Array.from(data, sample =>
+      sample > 0 && sample >= threshold - 1e-12 ? 255 : 0) });
+  }
+
+  function clearedMask(mask, x, y, halfWidth, halfHeight, radius) {
+    const { width, height, data } = mask;
+    const dx = 2 * halfWidth / width, dy = 2 * halfHeight / height;
+    const px = x + halfWidth, py = halfHeight - y;
+    const column = at => Math.min(width - 1, Math.max(0, Math.floor(at / dx)));
+    const row = at => Math.min(height - 1, Math.max(0, Math.floor(at / dy)));
+    if (!data[row(py) * width + column(px)]) return false;
+    if (!radius) return true;
+    for (let j = row(py - radius); j <= row(py + radius); j++)
+      for (let i = column(px - radius); i <= column(px + radius); i++) {
+        if (data[j * width + i]) continue;
+        const u = Math.max(i * dx - px, px - (i + 1) * dx, 0);
+        const v = Math.max(j * dy - py, py - (j + 1) * dy, 0);
+        if (u * u + v * v < radius * radius) return false;
+      }
+    return true;
+  }
+
+  function doorway({ from, to, halfWidth, halfHeight, shape = 'rect', mask, maskThreshold = 128 } = {}) {
     if (!positive(halfWidth) || !positive(halfHeight) || !['rect', 'ellipse'].includes(shape))
       throw new RangeError('A doorway needs positive half extents and a rectangular or elliptical aperture');
     const a = anchor(from), b = anchor(to);
+    const painted = mask === undefined ? undefined : paintMask(mask, maskThreshold);
     const project = (p, basis) => [V.dot(p, basis.right), V.dot(p, basis.up), V.dot(p, basis.normal)];
     const direction = value => {
       const [x, y, z] = project(point(value), a);
@@ -50,10 +82,10 @@
       const fits = shape === 'ellipse' ?
         Math.hypot(x / halfWidth, y / halfHeight) + radius / Math.min(halfWidth, halfHeight) <= 1 :
         Math.abs(x) + radius <= halfWidth && Math.abs(y) + radius <= halfHeight;
-      if (!fits) return null;
+      if (!fits || painted && !clearedMask(painted, x, y, halfWidth, halfHeight, radius)) return null;
       return freeze({ fraction, point: V.add(a.origin, at) });
     }
-    return Object.freeze({ from: a, to: b, halfWidth, halfHeight, shape,
+    return Object.freeze({ from: a, to: b, halfWidth, halfHeight, shape, ...(painted && { mask: painted }),
       point: transformPoint, direction, camera: mapCamera, hit });
   }
 
@@ -181,13 +213,19 @@
       const entry = makeLink(inId, {
         aperture, open: () => !visits.has(target.place)
       }, from, target, id);
+      const { halfWidth, halfHeight, shape, mask } = entry.opening;
+      const savedAperture = { halfWidth, halfHeight, shape, ...(mask && { mask }) };
+      const reflectedMask = mask && { ...mask, data: mask.data.map((_, i) => {
+        const col = i % mask.width;
+        return mask.data[i + mask.width - 1 - 2 * col];
+      }) };
       const exit = makeLink(outId, {
-        aperture, transfer: ({ arrival }) => arrival.velocity ? { ...arrival, ...pose, velocity: [0, 0, 0] } : { ...arrival, ...pose }
+        aperture: { ...savedAperture, ...(mask && { mask: reflectedMask }) },
+        transfer: ({ arrival }) => arrival.velocity ? { ...arrival, ...pose, velocity: [0, 0, 0] } : { ...arrival, ...pose }
       }, target, landing, id);
       const args = freeze({ id, source, to: { place: target.place, anchor: target.anchor },
         at: { origin: point(at.origin), normal: point(at.normal ?? [0, 0, 1]), up: point(at.up ?? [0, 1, 0]) },
-        aperture: { halfWidth: entry.opening.halfWidth, halfHeight: entry.opening.halfHeight,
-          shape: entry.opening.shape }, returnTo: pose });
+        aperture: savedAperture, returnTo: pose });
       return { args, entry, exit, open, entered };
     }
     function installEntrance(row) {

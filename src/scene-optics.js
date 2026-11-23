@@ -266,7 +266,7 @@ const SceneOptics = (() => {
     hits.sort((a, b) => a[0] - b[0]);
     if (options?.cloudShadow || options?.flash || options?.exposure?.fog || options?.cutouts?.fog || hits.some(([, volume]) =>
       volume.type === 'field' || volume.densityField || volume.depthBand?.sample || volume.paletteField ||
-      (volume.lit && options?.media?.paletteLocals)))
+      (volume.lit && options?.media)))
       return volumeLight.integrate(hits, origin, direction, stop, result, options);
     result[0] = result[1] = result[2] = 0;
     result[3] = 1;

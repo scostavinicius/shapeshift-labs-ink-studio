@@ -1,15 +1,40 @@
 # Music production
 
+[Dance drop studies](music-drop-studies.md) ships editable drum & bass, dubstep and rave sessions with in-context drum auditions and measured kick–bass timing.
+
 Use a phrase arrangement as the shared score and scene cue source. A production
 adds instrument patches, performed note timing, voicing, mixing, and playback
 rules. The [Relay Glass cue](../examples/music-production/relay-glass.json)
 includes a playable kit, an authored hook, a bass line, a polyphonic pad,
 and an eight-bar arc. Its recorded drum assets are credited with their source
 and license in the [sample directory](../examples/music-production/samples/CREDITS.md).
+Use [recorded gesture orchestration](timbre-composition.md) to place a recording’s
+contour, accents and tail in different instruments.
 Use [theme development](music-themes.md) to carry a motif between roles
 and make adaptive returns depend on what has already played.
+Use a [cue map](music-cue-map.md) to shape density, register, chord pace,
+silence, and room across the whole production.
+Use [note clips and voice-leading search](music-voice-leading.md) to
+try independent inner lines around a locked melody and bass.
 Use [patch gestures](music-gestures.md) to rehearse different performances
 of the written notes.
+Use [arrangement search with locks](music-locked-arrangement.md) to replace
+a passage while keeping selected lines and the rest of the render fixed.
+Start with [whole-piece composition](music-whole-piece.md) to generate
+competing full-length scores around a shared hook from an empty brief.
+Load the [stock performance instruments](music-playable-instruments.md)
+for a breath-and-resonance flute, prepared metal, and electric bass.
+Use [modular instruments](music-instrument-graphs.md) to combine samples,
+oscillators, resonators, filters and feedback in a per-note signal graph.
+Use [instrument performance maps](music-instrument-performance.md) for
+compensated attacks, interval-aware joins, key-up samples and independent
+rhythm and microtiming auditions.
+
+The [sample instrument builder](sample-instrument-builder.md) creates a
+portable sampler patch and its WAV assets from a bank of recorded gestures.
+
+Run the [production benchmark](production-benchmark.md) to compare a full cue,
+a dialogue recut, and three routes through a playable adaptive score.
 
 ## Instruments and performance
 
@@ -22,9 +47,13 @@ Degree-based events still follow the part's pitch mapping.
 | --- | --- |
 | `analog` | Harmonic body, color, detuned width in cents, grain, drive, and an attack/decay/sustain/release envelope |
 | `fm` | The same envelope and texture controls, plus modulator ratio, index, and index decay |
+| `subtractive` | Band-limited saw and pulse, a sine sub, pulse-width LFO, and a resonant low-pass with note-local envelope and key follow |
 | `keys` | Tine and strike synthesis with velocity-dependent bite, dust, wear, and an amplitude envelope |
 | `drum` | Kick, snare, hat, rim, metal, or brush synthesis with pitch, decay, and transient controls |
 | `sample` | Ordered zones with list of asset names, optional root pitch and key range, velocity interval, named articulation, gain in dB, tuning in cents, one-shot playback or a gated loop |
+
+See [subtractive synth voices](subtractive-synth.md) for the oscillator,
+filter, and articulation controls and an audible workshop.
 
 Pass WAV assets by name in the CLI recipe's `assets` record. Graph and JavaScript
 callers pass decoded audio buffers. Exact articulations take precedence over a
@@ -99,7 +128,28 @@ the comparison window and level. For revision documents, an array holds the
 named revisions directly. A suggestion report includes the reference in the
 comparison by default.
 
+[Run a producer audition](music-producer.md) to compare contrasting musical
+decisions, hear focused bars and stems in context, and keep individual
+choices with a reusable listening rationale.
+
+[Transfer groove from a performance](performance-groove.md) to borrow
+timing, accents and note lengths from an audio break or MIDI take.
+
+[Route and automate a mix](audio-mixer.md) using rendered stems, sample
+clips, or audio from graph nodes. The mixer supplies groups, returns,
+parallel inserts, and sidechain compression on the same sample grid.
+
 ## Assemble adaptive transitions
+
+Use [persistent performers and adaptive phrases](music-persistent-performers.md)
+to carry voices and their room through a scene change, and choose phrases from
+the player's route and prior listening.
+
+[Rehearse adaptive joins](music-adaptive-rehearsal.md) against recorded world
+paths and audition edits at the same sample addresses.
+
+[Run the score live](music-live-adaptive.md) with causal exits, persistent DSP,
+streamed cues, and a sample-addressed explanation of each join.
 
 Pass the `music-transition` and `music-cue` intents from Ink's
 [adaptive music clock](adaptive-music.md) to `music.renderTransitions`.
@@ -120,6 +170,15 @@ runs a standalone score with timestamped updates. Scene exports also accept
 instrument keys to named soundtrack assets. The score is replayed through
 the end of the production timeline so that a trimmed take includes any
 bridge scheduled just after its endpoint.
+
+[Arrange scene sound with the score](music-world-score.md) to turn world
+cues into percussion phrases and reserve space in the music for effects
+or silence.
+
+## Capture new samples
+
+[Capture and catalog audio](sample-capture.md) to make new sample sources
+from a recording, live bus, instrument, graph, or scene.
 
 ## Import a SoundFont patch
 

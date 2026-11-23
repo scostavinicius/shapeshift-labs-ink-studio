@@ -87,7 +87,7 @@ function plate() {
 
 test('forced anchors change authored palette rules while preserving each pattern cell setting', () => {
   const world=plate();
-  for (const space of ['screen','world','object']) {
+  for (const space of ['screen','world','object','view']) {
     const forced=ink.render(world,{...view,ditherSpaceOverride:space});
     const authored=ink.render(world,{...view,renderStages:stagedAnchor(space),stable:{dither:space,targets:[]}});
     assert.deepEqual(forced.rgb,authored.rgb);
@@ -127,14 +127,15 @@ test('a matched sequence samples pose once and marks a lightness reversal before
   assert(image.rgb.some((value,i)=>i%3===0 && value===246));
 });
 
-test('palette shimmer CLI exports JSON, a still, and native animated evidence', t => {
+test('palette shimmer CLI can include view direction in its JSON, still, and animation', t => {
   const dir=fs.mkdtempSync(path.join(os.tmpdir(),'ink-palette-shimmer-'));
   t.after(()=>fs.rmSync(dir,{recursive:true,force:true}));
   const cli=path.resolve(__dirname,'../cli/ink-studio.js'), scene=path.resolve(__dirname,'../examples/palette-remap.json');
   execFileSync(process.execPath,[cli,'palette','shimmer',scene,'--from','0','--to','.75','--fps','4',
-    '--camera-pan','.1,0,0','--w','60','--h','40','--px','2','--animate','--out',dir]);
+    '--camera-pan','.1,0,0','--w','60','--h','40','--px','2','--include-view','--animate','--out',dir]);
   const report=JSON.parse(fs.readFileSync(path.join(dir,'review.json')));
   assert.deepEqual([report.width,report.height,report.frameCount],[30,20,3]);
+  assert.deepEqual(report.variants.map(row=>row.space),['screen','world','object','view']);
   const still=PNG.raster(path.join(dir,report.files.comparison));
   const playback=fs.readFileSync(path.join(dir,report.files.playback));
   const first=PNG.raster(playback);

@@ -1,0 +1,32 @@
+{
+  "format": "ink-studio/audio-rack",
+  "version": 1,
+  "id": "porcelain-room",
+  "revision": 1,
+  "title": "Porcelain Room",
+  "description": "Keep the played notes clear while alternating echoes open into a dark stereo room.",
+  "inputs": {"main": "input"},
+  "output": "master",
+  "strips": {
+    "input": {"fader": 0.87, "sends": {"reflections": {"tap": "post", "level": 0.42}}},
+    "reflections": {"inserts": ["echo", "room", "shade"], "fader": 0.84},
+    "master": {}
+  },
+  "processors": {
+    "echo": {"type": "tempo-delay", "beats": {"numerator": 3, "denominator": 4}, "feedback": 0.49, "driveDb": 8,
+      "lowHz": 260, "highHz": 3600, "crossfeed": 0.75, "wet": 0.73},
+    "room": {"type": "reverb", "size": 1.18, "decay": 1.72, "damping": 0.53, "wet": 0.57},
+    "shade": {"type": "eq", "bands": [{"mode": "highpass", "hz": 225}, {"mode": "lowpass", "hz": 4200}]}
+  },
+  "taps": {"room": {"strip": "reflections"}},
+  "macros": {
+    "distance": {"label": "Distance", "default": 0.59, "targets": [
+      {"path": ["strips", "input", "sends", "reflections", "level"], "range": [0.1, 1.05]},
+      {"path": ["processors", "room", "wet"], "range": [0.22, 0.78]}
+    ]},
+    "shade": {"label": "Shade", "default": 0.48, "targets": [
+      {"path": ["processors", "echo", "highHz"], "range": [6500, 1400]},
+      {"path": ["processors", "shade", "bands", 1, "hz"], "range": [3500, 1400]}
+    ]}
+  }
+}

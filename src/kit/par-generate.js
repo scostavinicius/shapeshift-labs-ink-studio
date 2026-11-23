@@ -6,6 +6,8 @@
   const value = (type, generate) => ({ outputs: { value: type }, run: (inputs, context) => ({ value: generate(inputs, context) }) });
   const seeded = (options, context) => ({ seed: context.seed, ...options });
   const timed = (options, context) => ({ time: context.time, ...seeded(options, context) });
+  const fieldMaterials=input('array<fieldSpriteMaterial>',[]);
+  const fieldPaint={value:'raster',materialId:'raster'};
 
   G.operations = Object.freeze({
     'proc.noise': {
@@ -37,6 +39,56 @@
       inputs: { steps: input('number', 400), options },
       outputs: { value: 'raster', u: 'raster', report: 'record' },
       run: ({ steps, options }, context) => G.reaction({ ...seeded(options, context), steps })
+    },
+    'proc.fieldSprite': {
+      description: 'Trace a signed field with editable materials and expose native-grid position, normal, depth, light and coverage.',
+      inputs:{source:'field',materials:fieldMaterials,options},
+      outputs:{...fieldPaint,depth:'raster',normal:'raster',position:'raster',
+        illumination:'raster',coverage:'raster',surface:'fieldSpriteSurface'},time:true,
+      run({source,materials,options},{time}){return G.fieldSprite(source,{time,...options,materials});}
+    },
+    'proc.fieldMaterial': {
+      description:'Prepare a reusable field-sprite material with object-space texture, optional masks and a light ramp.',
+      inputs:{texture:input('raster',P.generatorSupport.fieldMaterialTexture),
+        mask:input('any',null),maskTexture:input('any',null),ramp:input('any',null),options},
+      ...value('fieldSpriteMaterial',({texture,mask,maskTexture,ramp,options})=>
+        G.fieldMaterial({...options,texture,mask,maskTexture,ramp}))
+    },
+    'proc.fieldSpriteShade': {
+      description:'Repaint an existing field-sprite trace without evaluating the signed field again.',
+      inputs:{surface:'fieldSpriteSurface',materials:fieldMaterials,options},outputs:fieldPaint,time:true,
+      run({surface,materials,options},{time}){return G.shadeFieldSprite(surface,materials,{time,...options});}
+    },
+    'proc.sphereMap': {
+      description: 'Project an orthographic sphere into a UV atlas, with view normals, depth and banded light.',
+      inputs: { options }, outputs:{ value:'raster', normal:'raster', depth:'raster', illumination:'raster' },
+      run: ({ options }) => G.sphereMap(options)
+    },
+    'proc.projectSphere': {
+      description: 'Rotate and light a equirectangular source on the native pixel grid.',
+      inputs: { source:'raster', options }, outputs:{ value:'raster', uv:'raster', normal:'raster', depth:'raster', illumination:'raster' },
+      run: ({ source, options }) => G.projectSphere(source, options)
+    },
+    'proc.discharge': {
+      description: 'Trace a seeded looping discharge along a path and return independently composable core, edge and halo rasters.',
+      seed:'options', time:true, inputs: { options },
+      outputs:{ value:'raster', filament:'raster', fringe:'raster', halo:'raster', paths:'array<record>' },
+      run: ({ options }, context) => G.discharge(timed(options, context))
+    },
+    'proc.cellEdges': {
+      description: 'Sample seeded Voronoi boundary distances, center distances and stable cell addresses.',
+      seed:'options', inputs:{ options }, outputs:{ value:'raster', center:'raster', index:'raster' },
+      run: ({ options }, context) => G.cellEdges(seeded(options, context))
+    },
+    'proc.flowPlume': {
+      description: 'Draw an oriented, shaped plume with looping turbulence, pressure bands and separate heat and coverage.',
+      seed:'options', time:true, inputs:{ options }, outputs:{ value:'raster', heat:'raster', coverage:'raster' },
+      run: ({ options }, context) => G.flowPlume(timed(options, context))
+    },
+    'proc.vortex': {
+      description: 'Advect a layer of shaded looped contours around a tapered vortex, with reusable near and far passes.',
+      seed:'options', time:true, inputs:{ options }, outputs:{ value:'raster', back:'raster', front:'raster', paths:'array<record>' },
+      run: ({ options }, context) => G.vortex(timed(options, context))
     },
     'proc.repeat': {
       inputs: { source: 'raster', options },

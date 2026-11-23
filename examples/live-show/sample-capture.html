@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Sample capture · Ink Studio</title>
+  <link rel="stylesheet" href="./style.css">
+  <style>
+    body { max-width:780px }
+    section { padding:1rem }
+    canvas { display:block; margin:1rem 0; width:100%; background:#15131a }
+    a { color:var(--accent) }
+    #save[hidden] { display:none }
+    #status { margin:.8rem 0 0 }
+  </style>
+</head>
+<body>
+  <header>
+    <p class="studio">INK STUDIO</p>
+    <h1>Sample capture</h1>
+    <p>Keep a rolling recording of a test instrument or microphone. Recover the last 1.6 seconds and save it to the sample library.</p>
+  </header>
+  <section aria-label="Recording controls">
+    <div class="toolbar">
+      <button id="bench" class="primary">Start test instrument</button>
+      <button id="mic">Use microphone</button>
+      <button id="strike" disabled>Strike</button>
+      <button id="recover" disabled>Recover last 1.6 s</button>
+      <button id="stop" disabled>Stop capture</button>
+    </div>
+    <p class="status" id="status" role="status">Capture stopped</p>
+    <canvas id="wave" width="720" height="104" aria-label="Recovered waveform"></canvas>
+    <div class="toolbar" id="save" hidden>
+      <button id="audition">Play recovered take</button>
+      <a id="wav" download="capture.wav">Download WAV</a>
+      <a id="recipe" download="capture.json">Download catalog recipe</a>
+    </div>
+  </section>
+  <script type="module" src="./sample-capture-demo.mjs"></script>
+</body>
+</html>

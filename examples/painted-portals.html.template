@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rain Between Rooms</title>
+<style>
+  :root { color-scheme:dark; font:15px/1.45 system-ui,sans-serif; color:#e4dbd5; background:#171722; }
+  * { box-sizing:border-box; }
+  body,h1,h2,figure,p { margin:0; }
+  main { max-width:1260px; margin:auto; padding:32px clamp(16px,4vw,48px); }
+  h1 { font:500 clamp(40px,5.1vw,66px)/1.04 Georgia,serif; letter-spacing:-.04em; color:#f4dcbf; }
+  .subtitle { margin:9px 0 22px; color:#bfb3bc; }
+  [hidden] { display:none!important; }
+  .layout { display:grid; grid-template-columns:minmax(0,1fr) 216px; gap:16px; align-items:start; }
+  figure,aside { overflow:hidden; border:1px solid #4d4051; border-radius:8px; background:#262331; }
+  canvas { display:block; image-rendering:pixelated; }
+  #scene { width:100%; height:auto; background:#26202c; }
+  .controls { display:flex; align-items:center; flex-wrap:wrap; gap:12px; padding:12px; border-top:1px solid #4d4051; }
+  button,input { accent-color:#edbd8c; }
+  button { min-width:68px; font:inherit; color:#eed4bd; background:#332831; border:1px solid #745665; border-radius:4px; padding:6px 10px; cursor:pointer; }
+  input[type=range] { flex:1 1 120px; min-width:0; }
+  #seconds { min-width:6ch; font-variant-numeric:tabular-nums; }
+  :focus-visible { outline:2px solid #f2c28c; outline-offset:2px; }
+  aside { padding:14px; }
+  h2 { font-size:16px; color:#f2dfcb; margin:0 0 10px; }
+  label.option { display:flex; align-items:center; gap:5px; margin:10px 0; }
+  .maps { display:grid; grid-template-columns:1fr 1fr; gap:7px; align-items:end; margin-top:13px; }
+  .maps canvas { width:100%; height:auto; border:1px solid #5b5161; border-radius:2px; }
+  .mask-label { font-size:12px; color:#baacb9; margin-top:4px; }
+  .hint { margin-top:12px; font-size:13px; color:#bfb3bc; }
+  @media(max-width:840px) { main { padding-top:18px; } .layout { grid-template-columns:1fr; } .maps { max-width:210px; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Rain Between Rooms</h1>
+  <p class="subtitle">A torn shrine screen looks into a rain garden. Beyond the garden gate, the moon is out.</p>
+  <p id="loading" role="status">Opening the shrine…</p>
+  <div class="layout" id="study" hidden>
+    <figure>
+      <canvas id="scene" width="256" height="160" aria-label="A swinging lantern passing in front of a torn shrine screen, with a rain garden and a moonlit court visible through it"></canvas>
+      <div class="controls">
+        <button type="button" id="play">Pause</button>
+        <input id="time" type="range" min="0" max="5.99" step=".01" aria-label="Scene time">
+        <output id="seconds" for="time"></output>
+      </div>
+    </figure>
+    <aside>
+      <h2>Portal views</h2>
+      <label class="option"><input id="painted" type="checkbox" checked> Painted apertures</label>
+      <label class="option"><input id="nested" type="checkbox" checked> Second doorway</label>
+      <div class="maps">
+        <div><canvas id="paper" aria-label="Painted shrine mask"></canvas><div class="mask-label">Shrine screen</div></div>
+        <div><canvas id="gate" aria-label="Painted garden gate mask"></canvas><div class="mask-label">Garden gate</div></div>
+      </div>
+      <p class="hint">The light pixels open each view. Scrub the lantern across the paper to see its silhouette cover both views.</p>
+    </aside>
+  </div>
+</main>
+<script type="module">
+  const el = id => document.getElementById(id);
+  async function unpack(data) {
+    const bytes = Uint8Array.from(atob(data), c => c.charCodeAt(0));
+    const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return new Response(stream).text();
+  }
+  try {
+    /* STUDIO */
+    const renderer = createRenderer(el('scene'), { toolkit, contextAttributes: { preserveDrawingBuffer: true } });
+    function mask(id, { width, height, data }) {
+      const canvas = el(id);
+      canvas.width = width;
+      canvas.height = height;
+      const pixels = new Uint8ClampedArray(width * height * 4);
+      for (let i = 0; i < data.length; i++) pixels.set(data[i] ? [218,187,152,255] : [40,34,48,255], i * 4);
+      canvas.getContext('2d').putImageData(new ImageData(pixels, width, height), 0, 0);
+    }
+    mask('paper',demo.outerMask);
+    mask('gate',demo.innerMask);
+    const slider = el('time');
+    let playing = !matchMedia('(prefers-reduced-motion: reduce)').matches, time = .5;
+    function draw() {
+      demo.frame(renderer, time, { painted: el('painted').checked, nested: el('nested').checked });
+      slider.value = time;
+      el('seconds').value = time.toFixed(2) + ' s';
+    }
+    function updatePlay() { el('play').textContent = playing ? 'Pause' : 'Play'; }
+    el('play').addEventListener('click', () => { playing = !playing; updatePlay(); });
+    slider.addEventListener('input', () => { playing = false; updatePlay(); time = slider.valueAsNumber; draw(); });
+    el('painted').addEventListener('change', draw);
+    el('nested').addEventListener('change', draw);
+    let last = performance.now();
+    function animate(now) {
+      if (now - last >= 60) {
+        if (playing) {
+          time = (time + Math.min(.15, (now - last) / 1000)) % demo.duration;
+          draw();
+        }
+        last = now;
+      }
+      requestAnimationFrame(animate);
+    }
+    updatePlay();
+    draw();
+    el('loading').hidden = true;
+    el('study').hidden = false;
+    requestAnimationFrame(animate);
+  } catch (error) {
+    el('loading').textContent = 'The demo could not open. ' + error.message;
+    console.error(error);
+  }
+</script>
+</body>
+</html>

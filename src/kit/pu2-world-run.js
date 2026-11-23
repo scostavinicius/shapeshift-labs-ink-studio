@@ -1,16 +1,31 @@
 /* A fixed-tick simulation host with registered systems and portable run state. */
 (function (K) {
-  const W = K.world, P = K.procedural, Q = W.query, freeze = P.data.freeze;
+  const W = K.world, P = K.procedural, Q = W.query, U = K.quantities, freeze = P.data.freeze;
   const {check,record,id,vector,own,copy,equal,endpoint,portOf} = W.data;
   const factories = new Map();
-  const bundledPartitions = new Set();
   const clock = () => typeof performance === 'undefined' ? Date.now() : performance.now();
-  const maxTick = 10000000;
+  const maxTick = 10000000, maxPendingCommands=100000;
   const tickOK = value => Number.isSafeInteger(value) && value >= 0 && value <= maxTick;
   const ordered = value => Object.keys(value).sort();
   const worldActions = ['input','patch','event','transfer'];
+  const worldAction = (plan, name) => worldActions.includes(name) || plan.chunks?.actions.includes(name) ||
+    plan.worldFacts && name===W.worldFacts.action ||
+    plan.worldKnowledge && name===W.worldKnowledge.action ||
+    plan.worldBeliefs && W.worldBeliefs.actions.includes(name) ||
+    plan.worldMemories && name===W.worldMemories.action ||
+    plan.worldCustody && W.worldCustody.actions.includes(name) ||
+    plan.worldSiteHistory && W.worldSiteHistory.actions.includes(name) ||
+    plan.storyLifecycle && W.storyLifecycle.actions.includes(name) ||
+    plan.incidentCandidates && name===W.incidentCandidates.action;
   const checkpointFormat = 'ink-studio/checkpoint', runFormat = 'ink-studio/run';
   const savedCheckpoints=new WeakSet(), branchToken=Symbol('live checkpoint');
+  const typedFact=Symbol('typed fact event');
+  const typedLearning=Symbol('knowledge event');
+  const typedBelief=Symbol('belief event');
+  const typedMemory=Symbol('memory event');
+  const typedCustody=Symbol('custody event');
+  const typedSite=Symbol('site history event');
+  const typedConsequences=Symbol('story consequence event');
 
   function stepTiming(world,at,timing) {
     const baseDt=world.dt, substeps=timing?.substeps??1, detail=timing?.detail;
@@ -23,8 +38,14 @@
       ...(lod&&{simulationLOD:lod})};
   }
   function randomSource(seed,name,at,timing){
-    const randomTick=timing?.substeps>1?at+'.'+timing.substep:at;
+    const base=timing?.substeps>1?at+'.'+timing.substep:at;
+    const randomTick=timing?.segment===undefined ? base : base+'.segment.'+timing.segment;
     return key=>P.data.hash(name+'/'+randomTick+'/'+String(key),seed)/4294967296;
+  }
+  function eventContext(ctx,start) {
+    const eventAt = (fraction,event) => W.timedEvents.within(start,ctx.time,fraction,event);
+    return Object.freeze({...ctx,eventAt,
+      emitAt:(fraction,kind,event={},parents)=>ctx.emit(kind,eventAt(fraction,event),parents)});
   }
   function* partitionGroups(names,barriers){
     let start=0;
@@ -43,7 +64,7 @@
       let provider=providers.get(name);
       if(!provider){
         const spec=world.systems[name];
-        const factory=own(implementations,spec.kind)?implementations[spec.kind]:factories.get(spec.kind);
+        const factory=factoryFor(spec,implementations);
         provider=factory?.(spec.config??{},{world,id:name,catalog});
         check(provider?.partitionStep===true,'System cannot run in a worker partition: '+name);
         providers.set(name,provider);
@@ -62,8 +83,10 @@
       const spatial=provider.dependencies&&Object.freeze({write:note('write'),rebuilt:note('rebuilt'),
         changes(){throw Error('Partition solvers cannot read spatial invalidations');}});
       const contracted=provider.contract!==undefined||world.systems[name].contract!==undefined;
-      const ctx=Object.freeze(Object.defineProperties({id:name,...stepTiming(world,at,freeze(timing)),input:freeze(input),query,
-        emit:note('emit'),...(spatial&&{spatial}),random:randomSource(world.seed,name,at,timing),
+      const step=stepTiming(world,at,freeze(timing)), emit=note('emit');
+      const stamps=eventContext({time:step.time,emit},Math.max(0,step.time-step.dt));
+      const ctx=Object.freeze(Object.defineProperties({id:name,...step,input:freeze(input),query,
+        emit,eventAt:stamps.eventAt,emitAt:stamps.emitAt,...(spatial&&{spatial}),random:randomSource(world.seed,name,at,timing),
         ...(contracted&&{read(alias){throw Error('Undeclared system state read '+name+'/'+String(alias));}})},restricted));
       const start=profile?clock():0, saved=freeze(state);
       const next=adapter?W.simulationAggregate.advance(adapter,saved,ctx):provider.step(saved,ctx);
@@ -71,10 +94,23 @@
     };
   }
 
-  function register(kind, factory, { worker = false } = {}) {
-    check(id(kind) && typeof factory === 'function' && !factories.has(kind), 'Invalid or duplicate system kind ' + kind);
-    factories.set(kind,factory);
-    if(worker)bundledPartitions.add(kind);
+  function register(kind, factory, { worker = false, revision = 1 } = {}) {
+    const versions = factories.get(kind) ?? new Map();
+    check(id(kind) && typeof factory === 'function' && Number.isSafeInteger(revision) && revision > 0 &&
+      !versions.has(revision), 'Invalid or duplicate system kind ' + kind + ' revision ' + revision);
+    versions.set(revision, {factory, worker});
+    factories.set(kind, versions);
+  }
+  function registration(spec) {
+    const versions = factories.get(spec.kind);
+    return spec.operatorRevision === undefined ? versions?.values().next().value : versions?.get(spec.operatorRevision);
+  }
+  function factoryFor(spec, implementations) {
+    if (spec.operatorRevision === undefined && own(implementations, spec.kind)) return implementations[spec.kind];
+    const resolved = registration(spec);
+    check(spec.operatorRevision === undefined || resolved,
+      'Unregistered simulation operator ' + spec.kind + ' revision ' + spec.operatorRevision);
+    return resolved?.factory;
   }
   const types = {
     bool:value => typeof value === 'boolean',
@@ -86,25 +122,69 @@
   const defaults = {bool:false,number:0,event:[],vec3:[0,0,0],record:{}};
   function portValue(descriptor,value,name) {
     check(descriptor && types[descriptor.type]?.(value), 'Invalid value for ' + name);
+    if (descriptor.type==='event') for (const event of value) W.timedEvents.timeOf(event);
     return freeze(copy(value));
   }
-  function compile(world, implementations = {}, interfacesOnly = false) {
+  function portDeclarations(spec, system, name) {
+    const declarations = spec.portQuantities === undefined ? {} : spec.portQuantities;
+    check(record(declarations) && Object.entries(declarations).every(([direction, table]) =>
+      ['inputs','outputs'].includes(direction) && record(table) &&
+      Object.keys(table).every(port => own(system[direction],port))),
+    'Unknown port in physical quantity declarations for ' + name);
+    return declarations;
+  }
+  function physicalPort(descriptor, override, path) {
+    if (descriptor.quantity === undefined && override === undefined) return descriptor;
+    check(['number','vec3'].includes(descriptor.type), 'Physical world port ' + path + ' needs number or vec3');
+    const inherited = U.normalize(descriptor.quantity,path), added = U.normalize(override,path);
+    const quantity = {...inherited,...added};
+    U.assertLink(quantity,inherited,path,path);
+    return {...descriptor,quantity};
+  }
+  function physicalRates(world, ports, schedule) {
+    const T = P.takeTime;
+    const rate = world.takeClock?.simulationRate;
+    let base;
+    for (const table of Object.values(ports)) for (const [path, descriptor] of Object.entries(table)) {
+      if (!descriptor.quantity) continue;
+      base ??= rate === undefined ? T.div(T.read(1),T.period(world.dt)) : T.read(rate);
+      const [name] = endpoint(path);
+      const cadences = schedule.chunks?.rates(name) ?? [schedule.rates[name]];
+      const rates = [];
+      for (const {every,substeps} of cadences) {
+        const value = U.rateValue(T.mul(base,[BigInt(substeps),BigInt(every)]));
+        if (!rates.some(rate => U.equalRate(rate,value))) rates.push(value);
+      }
+      const {sampleRate, ...physical} = descriptor.quantity;
+      check(sampleRate === undefined || rates.length === 1 && U.equalRate(sampleRate,rates[0]),
+        'Declared sample rate ' + (sampleRate === undefined ? '' : U.rateText(sampleRate)) +
+        ' on ' + path + ' does not match its schedule (' + rates.map(U.rateText).join(', ') + ')');
+      table[path] = freeze({...descriptor, quantity:{...physical,...(rates.length === 1 && {sampleRate:rates[0]})},
+        ...(rates.length > 1 && {sampleRates:rates})});
+    }
+  }
+  function compile(world, implementations = {}, interfacesOnly = false, reportRequirements = false) {
     const systems = {};
     const catalog = W.materials.catalog(world);
     const ports = {inputs:{},outputs:{}};
     for (const name of ordered(world.systems)) {
-      const spec = world.systems[name], factory = own(implementations,spec.kind) ? implementations[spec.kind] : factories.get(spec.kind);
+      const spec = world.systems[name], factory = factoryFor(spec,implementations);
       check(name !== 'world' && id(spec.kind) && typeof factory === 'function', 'Unknown or reserved system ' + name + ' (' + spec.kind + ')');
       check(record(spec.config??{}),'Invalid config for '+name);
       const system = factory(spec.config ?? {},{world,id:name,catalog});
       check(record(system) && typeof system.initial === 'function', 'System needs an initial state: ' + name);
+      const declarations = portDeclarations(spec,system,name);
       for (const direction of ['inputs','outputs']) {
         for (const [key,raw] of Object.entries(system[direction] ?? {})) {
           const path = name + '/' + key;
           const descriptor = typeof raw === 'string' ? {type:raw} : raw;
           check(id(key) && record(descriptor) && own(types,descriptor.type), 'Invalid port ' + path);
+          check(descriptor.timing===undefined || direction==='inputs' && descriptor.type==='event' &&
+            (descriptor.timing==='split' && typeof system.react==='function' && typeof system.step==='function' ||
+              descriptor.timing==='forward' && system.timedForward===true),
+          'Invalid timed event input '+path);
           const value = portValue(descriptor,descriptor.default ?? defaults[descriptor.type],path);
-          ports[direction][path] = freeze({...descriptor,default:value});
+          ports[direction][path] = freeze({...physicalPort(descriptor,declarations[direction]?.[key],path),default:value});
         }
       }
       for (const [key,handler] of Object.entries(system.actions ?? {}))
@@ -184,10 +264,29 @@
     })),{relays});
     const transfers = W.transfers.bind(systems);
     for (const name of transfers.producers) systems[name].checkTransfers?.(transfers.validate);
-    const schedule = W.rates.schedules(world,systems,chunks);
+    const timedInputs = Object.entries(ports.inputs).filter(([,port])=>port.timing!==undefined);
+    const timedSolvers = new Map();
+    for (const [port,descriptor] of timedInputs) {
+      const [name,key] = endpoint(port);
+      check(!chunks?.managed.has(name), 'Timed event input needs a fixed receiving schedule: '+port);
+      if (descriptor.timing==='split') {
+        if (!timedSolvers.has(name)) timedSolvers.set(name,[]);
+        timedSolvers.get(name).push(key);
+      }
+    }
+    const schedule = W.rates.schedules(world,systems,chunks,timedInputs.length>0);
+    const couplings = W.transferCoupling.bind(systems,transfers,schedule);
+    for (const [name,system] of Object.entries(systems)) if (system.processingLimit) {
+      const {every,substeps}=schedule.rates[name];
+      check(every===1 && substeps===1 && !chunks?.managed.has(name),
+        'Prepared kernel needs a fixed sample clock: '+name);
+    }
+    physicalRates(world,ports,schedule);
     const incoming = new Map(), edges = new Map(), indegree = new Map();
+    let filters;
     const {contracts,edges:phaseEdges} = W.systemComposition.compile(world,systems);
-    for (const name of ordered(systems)) {
+    const names = ordered(systems);
+    for (const name of names) {
       edges.set(name,[]);
       indegree.set(name,0);
     }
@@ -198,19 +297,36 @@
       const source = ports.outputs[edge.from], target = ports.inputs[edge.to];
       check(source && target && source.type === target.type, 'Incompatible or missing ports: ' + edge.from + ' -> ' + edge.to);
       const delay = edge.delay ?? 0;
-      check(Number.isSafeInteger(delay) && delay >= 0 && delay <= 3600, 'Invalid connection delay');
+      const {sample,signal} = W.rates.policy(edge,source.type,schedule.active);
+      const advanced = W.signalCrossings.isAdvanced(sample);
+      if (!advanced) check(Number.isSafeInteger(delay) && delay >= 0 && delay <= 3600, 'Invalid connection delay');
       check(!incoming.has(edge.to), 'More than one connection feeds ' + edge.to);
-      const sample = W.rates.policy(edge,source.type,schedule.active);
-      incoming.set(edge.to,{from:edge.from,to:edge.to,delay,sample});
-      if (delay === 0 && sample !== 'average' && systems[from].combinational)
+      const crossing = advanced ? W.signalCrossings.compile({...edge,sample},schedule,from,to,systems[from].combinational,filters ??= W.signalCrossings.filterBank()) : undefined;
+      const varying = source.sampleRates || target.sampleRates;
+      U.assertLink(source.quantity,target.quantity,edge.from,edge.to,{sampled:edge.sample !== undefined || edge.signal==='accumulated' || !!varying});
+      if (target.quantity && varying && edge.sample === undefined && edge.signal!=='accumulated')
+        throw Error('Incompatible physical ports ' + edge.from + ' -> ' + edge.to +
+          ': variable sample rates need an explicit world sampling policy');
+      const earlyEvent = sample==='events' && delay===0 && target.timing!==undefined && !systems[from].combinational;
+      incoming.set(edge.to,{from:edge.from,to:edge.to,delay,sample,signal,...(crossing && {crossing}),
+        ...(earlyEvent && {earlyEvent:true})});
+      if (earlyEvent || crossing?.immediate || !crossing && delay === 0 && sample !== 'average' && systems[from].combinational)
         phaseEdges.push({kind:'signal',from,to,output:edge.from,input:edge.to});
+    }
+    if (world.simulationModel) W.models.checkInterface(world,ports,incoming,systems);
+    const blockSize = world.simulationModel?.blockSize, blockSystem = names[0];
+    if (blockSize !== undefined) {
+      check(Number.isSafeInteger(blockSize) && blockSize >= 1 && blockSize <= W.kernels.maxBlockSize &&
+        names.length === 1 && systems[blockSystem].kernel?.block === true &&
+        typeof systems[blockSystem].stepBlock === 'function' && !incoming.size && !schedule.active &&
+        !contracts.size, 'Block models need one block kernel on the model clock without connections or system contracts');
     }
     for (const {from,to} of phaseEdges) {
       indegree.set(to,indegree.get(to)+1);
       edges.get(from).push(to);
     }
     if (contracts.size) for (const targets of edges.values()) targets.sort();
-    const names = ordered(systems), ready = names.filter(name => indegree.get(name) === 0), order = [];
+    const ready = names.filter(name => indegree.get(name) === 0), order = [];
     for (let i=0;i<ready.length;i++) {
       const name = ready[i];
       order.push(name);
@@ -224,26 +340,68 @@
       'Same-phase simulation dependency cycle prevents scheduling: '+names.filter(name=>indegree.get(name)>0).join(', ') :
       'Instantaneous signal cycle; use a delay or a stateful system');
     const causePolicy = W.causality.policy(world.causality);
-    const rates = schedule.active ? W.rates.bind(schedule,systems,ports,incoming,order) : null;
+    const rates = schedule.active ? W.rates.bind(schedule,systems,ports,incoming,order,Boolean(causePolicy)) : null;
     const interactions = W.interactionRuntime.bind({world,systems,chunks,transfers,ports,incoming,portValue});
     const influence = W.influenceRuntime.bind({systems,transfers,chunks});
     const population = W.populationRuntime.bind({systems,transfers,chunks});
-    const plan = {world,systems,ports,incoming,order,names,transfers,dependencies,rates,chunks,aggregates,reservations,worksites,
+    const plan = {world,systems,ports,incoming,order,names,transfers,couplings,dependencies,schedule,rates,timedSolvers,chunks,aggregates,reservations,worksites,
       interactions,influence,population,causePolicy,contracts,phaseEdges,navigationSources};
-    if (world.eventActions !== undefined) plan.eventActions = K.eventActions.compile(world.eventActions, {
-      dt: world.dt, validateAction: command => actionCheck(command, plan),
-      validateSource: ({ system }) => check(system === undefined || system === 'world' || own(systems, system),
-        'Unknown event action source ' + system)
-    });
+    plan.storyteller = W.storyteller.compile(world.storyteller,world.dt,world.seed);
+    plan.worldFacts = W.worldFacts.compile(world.facts,world.dt);
+    plan.worldKnowledge = W.worldKnowledge.compile(world.knowledge,plan.worldFacts?.policy);
+    plan.worldBeliefs = W.worldBeliefs.compile(world.beliefs,plan.worldFacts?.policy,plan.worldKnowledge?.policy);
+    plan.worldMemories = W.worldMemories.compile(world.memories);
+    plan.worldCustody = W.worldCustody.compile(world.custody);
+    plan.worldSiteHistory = W.worldSiteHistory.compile(world.siteHistory);
+    plan.storyCallbacks = W.storyCallbacks.compile(world,systems);
+    const templates = world.storyTemplates === undefined ? undefined : W.storyTemplates.compile(world);
+    if (templates || world.storyDocuments !== undefined || world.storyBindings !== undefined) {
+      plan.storyRoles = W.storyRoles.compile(templates?.documents ?? (world.storyDocuments === undefined ? [] : world.storyDocuments),
+        templates?.bindings ?? world.storyBindings);
+      if (templates) plan.storyTemplates = templates.instances;
+      const { documents } = plan.storyRoles;
+      plan.storyTriggers = W.storyTriggers.compile(documents, world, systems);
+      plan.incidentCatalog = W.incidentCatalog.compile(documents,plan.storyTemplates);
+      plan.incidentVariety = W.incidentVariety.compile(documents);
+      plan.storyReferences = W.storyReferences.compile(documents, world, systems);
+      plan.storyCommitments = W.storyCommitments.compile(documents,systems,plan.storyCallbacks);
+      plan.storyHandoffs = W.storyHandoffs.compile(documents,systems,plan.storyCallbacks);
+      plan.storySettlement = W.storySettlement.compile(documents, systems, transfers);
+      plan.storyLifecycle = W.storyLifecycle.compile(documents, world, systems);
+      plan.incidentCooldowns = W.incidentCooldowns.compile(documents,world.dt);
+      plan.incidentCandidates = W.incidentCandidates.compile(documents,world,systems,plan.storyLifecycle?.feasibility,
+        plan.incidentCooldowns,plan.storyteller,plan.incidentVariety);
+      plan.storyDiagnostics = freeze(documents.flatMap(document =>
+        StoryAnalysis.analyze(document).diagnostics.map(issue => ({document:document.id, ...issue}))));
+    }
+    plan.incidentPressure = plan.incidentCandidates?.pressure??W.incidentPressure.compile(world.incidentPressure,{});
+    plan.regionContinuity = W.regionContinuity.compile(world,systems,transfers,plan.storyLifecycle);
+    const eventActions = templates ? templates.eventActions : world.eventActions;
+    if (eventActions !== undefined) {
+      plan.storyEventActions = plan.storyRoles ? plan.storyRoles.resolve(eventActions,'world.eventActions') : eventActions;
+      plan.eventActions = K.eventActions.compile(plan.storyEventActions,{
+        dt: world.dt, validateAction: command => actionCheck(command, plan, 1, false),
+        validateSource: ({ system }) => check(system === undefined || system === 'world' || own(systems, system),
+          'Unknown event action source ' + system)
+      });
+    }
+    if (W.storyInventory.hasRequirements(plan)) {
+      plan.storyRequirementIssues = W.storyInventory.create(plan,worldAction).audit();
+      if (!reportRequirements) check(!plan.storyRequirementIssues.length,
+        plan.storyRequirementIssues.map(({message,document,path})=>message+' in '+document+' at '+path).join('\n'));
+    }
     return plan;
   }
-  function actionCheck(raw, plan, min = 1) {
+  function actionCheck(raw, plan, min = 1, resolveRoles = true) {
+    if (resolveRoles && plan.storyRoles) raw = plan.storyRoles.command(raw);
     check(record(raw) && tickOK(raw.tick) && raw.tick >= min && record(raw.args ?? {}) &&
       (raw.id === undefined || id(raw.id)), 'Invalid scheduled command or command tick');
     const [system,key] = endpoint(raw.action);
     let args = raw.args ?? {};
+    check(raw.eventCause===undefined||W.committedEvents.eventId(raw.eventCause)&&
+      W.committedEvents.tickOf(raw.eventCause)<raw.tick,'Invalid scheduled event cause');
     if (system === 'world') {
-      check(worldActions.includes(key)||plan.chunks?.actions.includes(key), 'Unknown world action ' + key);
+      check(worldAction(plan,key), 'Unknown world action ' + key);
       if (key === 'input') {
         args={...args,port:portOf(plan.world,args.port)};
         check(!plan.incoming.has(args.port), 'A connected input is driven by its source: ' + args.port);
@@ -255,7 +413,32 @@
         'Live patches may change entities and metadata');
       } else if(plan.chunks?.actions.includes(key))plan.chunks.checkAction(key,args);
       else if (key === 'transfer') plan.transfers.validate(args);
-      else check(id(args.kind), 'An event needs a kind');
+      else if (key===W.worldFacts.action) {
+        plan.worldFacts.checkAction(args);
+        if (own(args,'witnesses')) {
+          check(plan.worldKnowledge,'Enable world knowledge to record fact witnesses');
+          plan.worldKnowledge.checkWitnesses(args.type,args.witnesses);
+        }
+      }
+      else if (key===W.worldKnowledge.action) plan.worldKnowledge.checkAction(args);
+      else if (W.worldBeliefs.actions.includes(key)) plan.worldBeliefs.checkAction(key,args);
+      else if (key===W.worldMemories.action) plan.worldMemories.checkAction(args);
+      else if (W.worldCustody.actions.includes(key)) plan.worldCustody.checkAction(key,args);
+      else if (W.worldSiteHistory.actions.includes(key)) plan.worldSiteHistory.checkAction(key,args);
+      else if (key===W.incidentCandidates.action) plan.incidentCandidates.checkAction(args);
+      else if (W.storyLifecycle.actions.includes(key)) plan.storyLifecycle.checkAction(key,args);
+      else {
+        check(id(args.kind), 'An event needs a kind');
+        check(!plan.worldFacts||args.kind!==W.worldFacts.kind,'Use world/fact to publish a typed world fact');
+        check(!plan.worldKnowledge||args.kind!==W.worldKnowledge.kind,'Use fact witnessing or world/share-fact to record learning');
+        check(!plan.worldBeliefs||!W.worldBeliefs.eventKinds.includes(args.kind),'Use world belief actions to publish belief events');
+        check(!plan.worldMemories||!W.worldMemories.eventKinds.includes(args.kind),'Use world/remember to publish memory events');
+        check(!plan.worldCustody||!W.worldCustody.eventKinds.includes(args.kind),'Use world custody actions to publish custody events');
+        check(!plan.worldSiteHistory||!W.worldSiteHistory.eventKinds.includes(args.kind),'Use site history actions to publish site events');
+        check(!plan.storyLifecycle?.hasConsequences||args.kind!==W.storyConsequences.kind,'Story consequences are published at closure');
+        W.timedEvents.timeOf(args);
+        if(args.kind===W.soundEvents.kind)W.soundEvents.validate(args);
+      }
     } else {
       check(own(plan.systems[system]?.actions,key), 'Unknown action ' + raw.action);
       plan.systems[system].checkAction?.(key,args);
@@ -270,7 +453,7 @@
       (scenario.until === undefined || tickOK(scenario.until)), 'Invalid scenario specification');
     for (const name of scenario.allow ?? []) {
       const [system,action] = endpoint(name);
-      check(system === 'world' ? worldActions.includes(action)||plan.chunks?.actions.includes(action) : own(plan.systems[system]?.actions,action),
+      check(system === 'world' ? worldAction(plan,action) : own(plan.systems[system]?.actions,action),
         'Unknown allowed action ' + name);
     }
     const ids = new Set();
@@ -300,8 +483,9 @@
       return { tick, action: 'world/event', args: { ...detail, kind, timeline: { id, path, time } } };
     });
   }
-  function prepare(source,{implementations} = {}) {
-    const world = W.manifest(source), plan = compile(world,implementations);
+  function prepare(source,{implementations,reportRequirements=false} = {}) {
+    const world = source?.format === W.models.format ? W.models.compile(source) : W.manifest(W.models.expand(source));
+    const plan = compile(world,implementations,false,reportRequirements);
     for (const command of world.commands) actionCheck(command,plan);
     scenarioCheck(world.scenario,plan);
     const catalog = W.materials.catalog(world);
@@ -321,7 +505,7 @@
     for (const [name,prefab] of Object.entries(world.prefabs)) {
       const sandbox = W.manifest({id:'prefab-check',prefabs:{[name]:prefab},assetPacks:world.assetPacks});
       const stamped = W.stamp(sandbox,name,'instance').world;
-      W.validateLooks({...stamped,visual,dataInputs:world.dataInputs}, catalog);
+      W.validateLooks({...stamped,visual,dataInputs:world.dataInputs,siteHistory:world.siteHistory}, catalog);
       const prefabPlan = compile(stamped,implementations);
       for (const port of Object.values(stamped.entities.instance.ports))
         check(own(prefabPlan.ports.inputs,port) || own(prefabPlan.ports.outputs,port), 'Invalid public prefab port ' + port);
@@ -332,11 +516,53 @@
     {...workerPool.implementations,...implementations}:implementations;
   const validate=(source,{implementations,workerPool}={})=>
     prepare(source,{implementations:implementationsFor(implementations,workerPool)}).world;
+  function storyPreflight(source,{implementations,workerPool}={}) {
+    const options = {implementations:implementationsFor(implementations,workerPool),reportRequirements:true};
+    let {world,plan} = prepare(source,options);
+    if (world.scenario?.start?.length) ({world,plan} = prepare(W.apply(world,world.scenario.start).world,options));
+    const requirementIssues = plan.storyRequirementIssues??[];
+    return freeze({format:'ink-studio/story-preflight',version:1,world:world.id,valid:requirementIssues.length===0,
+      documents:plan.storyRoles?.documents.map(document => document.id) ?? [],
+      diagnostics:[...(plan.storyDiagnostics??[]),...requirementIssues],inventory:W.storyInventory.create(plan,worldAction).inspect(),
+      ...(plan.storyTemplates && {templates:plan.storyTemplates}),
+      ...(plan.incidentCatalog?.length && {incidentCatalog:W.incidentCatalog.find(plan.incidentCatalog)}),
+      ...(plan.worldFacts && {facts:plan.worldFacts.policy}),
+      ...(plan.worldKnowledge && {knowledge:plan.worldKnowledge.policy}),
+      ...(plan.worldBeliefs && {beliefs:plan.worldBeliefs.policy}),
+      ...(plan.worldMemories && {memories:plan.worldMemories.policy}),
+      ...(plan.worldCustody && {custody:plan.worldCustody.policy}),
+      ...(plan.worldSiteHistory && {siteHistory:plan.worldSiteHistory.policy}),
+      ...(plan.regionContinuity && {regionContinuity:plan.world.regionContinuity}),
+      ...(plan.storyCallbacks && {callbacks:plan.storyCallbacks.definitions}),
+      ...(plan.incidentCandidates && {incidentCandidates:plan.incidentCandidates.policies}),
+      ...(plan.incidentCandidates?.anchors && {incidentAnchors:plan.incidentCandidates.anchors}),
+      ...(plan.incidentPressure && {incidentPressure:plan.incidentPressure}),
+      ...(plan.incidentCooldowns && {incidentCooldowns:plan.incidentCooldowns}),
+      ...(plan.incidentVariety && {incidentVariety:plan.incidentVariety}),
+      ...(plan.storyteller && {storyteller:{active:plan.storyteller.active,profiles:plan.storyteller.profiles,
+        candidates:plan.incidentCandidates?.direction??{}}}),
+      ...(plan.storyLifecycle?.feasibility && {feasibility:plan.storyLifecycle.feasibility}),
+      ...(plan.storyLifecycle?.decisions && {decisions:plan.storyLifecycle.decisions}),
+      ...(plan.storyLifecycle?.beats && {beats:plan.storyLifecycle.beats}),
+      ...(plan.storyReferences && {liveReferences:plan.storyReferences.definitions}),
+      ...(plan.storyCommitments && {commitments:plan.storyCommitments}),
+      ...(plan.storyHandoffs && {handoffs:plan.storyHandoffs}),
+      ...(plan.storySettlement && {settlements:plan.storySettlement}),
+      ...(plan.storyRoles && Object.keys(plan.storyRoles.roles).length > 0 && {roles:plan.storyRoles.roles})});
+  }
+  function modelInterface(source) {
+    const {world,plan:{systems,ports}} = prepare(source);
+    return {world,systems,ports};
+  }
   function create(source, {checkpoint,implementations,profile = false,validated = false,workerPool,regionRevisions,traceSteps,
-    recordRun,playback,skipInitialSubmission=false,validateEntities} = {}, token) {
+    recordRun,playback,skipInitialSubmission=false,validateEntities,storyClock,branch:branchId,legacyEvents=false} = {}, token) {
     check(workerPool===undefined||typeof workerPool?.solve==='function'&&
       (workerPool.async===undefined||typeof workerPool.async==='boolean'),'Invalid simulation worker pool');
     check(validateEntities===undefined||typeof validateEntities==='function','Invalid entity validation callback');
+    check(storyClock===undefined||typeof storyClock==='function','Invalid story evaluation clock');
+    const E=W.committedEvents, eventStream=legacyEvents?undefined:E.stream(checkpoint?.eventStream,checkpoint?.tick??0,branchId);
+    const eventBranch=eventStream?.lineage.at(-1).branch;
+    let checkpointStream=checkpoint&&branchId!==undefined?checkpoint.eventStream:eventStream;
     const modules=workerPool?.implementations;
     const installed=implementationsFor(implementations,workerPool);
     let result=validated?{world:source,plan:compile(source,installed)}:prepare(source,{implementations:installed});
@@ -347,16 +573,20 @@
       world=result.world;
     }
     const {plan, weather = weatherProgram(world), timeline = W.sceneTimeline(world)}=result;
-    const {systems,ports,incoming,order,names,transfers,dependencies,rates,chunks,aggregates,reservations,worksites,
-      interactions,influence,population,causePolicy,contracts,phaseEdges,eventActions,navigationSources} = plan;
-    let composition;
+    const {systems,ports,incoming,order,names,transfers,couplings,dependencies,rates,chunks,aggregates,reservations,worksites,
+      interactions,influence,population,causePolicy,contracts,phaseEdges,eventActions,storyTriggers,storyLifecycle,storyReferences,storyCommitments,storyHandoffs,storySettlement,storyRoles,storyTemplates,incidentCatalog,incidentCandidates,incidentPressure,incidentCooldowns,incidentVariety,storyteller,worldFacts,worldKnowledge,worldBeliefs,worldMemories,worldCustody,worldSiteHistory,regionContinuity,storyCallbacks,navigationSources} = plan;
+    const schedulerSource = Object.freeze({preview:incidentCandidates?.preview,triggers:storyTriggers?.advance,
+      documents:storyRoles?.documents??[]});
+    let composition, inspection;
     const regions=regionRevisions===undefined?null:W.regionRevisions.capture(world,regionRevisions,systems);
     const debug=traceSteps===undefined?null:W.stepDebug.capture(traceSteps);
     const observers=names.filter(name=>systems[name].afterStep);
+    const socialObservers=names.filter(name=>systems[name].storySocial?.observe);
     const partitioned=workerPool&&new Set(names.filter(name=>{
-      const {kind}=world.systems[name];
-      return systems[name].partitionStep===true&&!Object.keys(contracts.get(name)?.reads??{}).length&&(own(installed,kind)?
-        own(modules,kind)&&installed[kind]===modules[kind]:bundledPartitions.has(kind));
+      const spec=world.systems[name], {kind}=spec;
+      return systems[name].partitionStep===true&&!plan.timedSolvers.has(name)&&!Object.keys(contracts.get(name)?.reads??{}).length&&
+        (spec.operatorRevision===undefined&&own(installed,kind)?
+          own(modules,kind)&&installed[kind]===modules[kind]:registration(spec)?.worker);
     }));
     const partitionBarriers=workerPool&&new Set();
     if(partitioned?.size)for(const {from,to} of phaseEdges)
@@ -369,18 +599,30 @@
       .map(({id})=>[id,rates.rates[id].every]) : []);
     const rootInputs = Object.fromEntries(Object.entries(ports.inputs).map(([name,port]) => [name,port.default]));
     const rootOutputs = Object.fromEntries(Object.entries(ports.outputs).map(([name,port]) => [name,port.default]));
-    const rootDelays = Object.fromEntries([...incoming.values()].filter(edge => edge.delay).map(edge =>
+    const rootDelays = Object.fromEntries([...incoming.values()].filter(edge => edge.delay && !edge.crossing).map(edge =>
       [edge.to,Array(edge.delay).fill(W.rates.buffered(edge)?W.rates.zero(ports.outputs[edge.from].type):rootOutputs[edge.from])]));
     const metrics = new Map();
+    let lastStoryTiming;
     const scheduled = new Map();
+    let eventInputs;
+    let commandTicks;
     const added = [];
     const historyLimit = world.history?.limit ?? 10000;
     let tick = 0, states = {}, outputs = rootOutputs, manual = rootInputs, delays = rootDelays,
       history = [], dropped = 0, lastEvents = [], scenario = {status:'running',score:0,matched:{},metrics:{}};
-    let pendingWrites = [], lastDependencies = null, sampling = rates?.initial, spatialSampling = {};
+    let pendingWrites = [], lastDependencies = null, sampling, spatialSampling = {};
     let causalState, weatherTrackState, chunkState;
     let currentQuery, lastTransfers = [], lastSignals = {...rootInputs,...rootOutputs};
-    let lastCheckpoint, eventActionCounts = freeze({}), asyncActive=false, inFlightTick=0;
+    let lastCheckpoint, eventActionCounts = freeze({}), storyTriggerState, asyncActive=false, inFlightTick=0;
+    let storyLifecycleState = storyLifecycle?.initial();
+    let storyFeasibilityState = storyLifecycle?.initialFeasibility?.();
+    let storyReferenceState, incidentCandidateState = incidentCandidates?.initial();
+    let worldFactState = worldFacts?.initial();
+    let knowledgeState = worldKnowledge?.initial();
+    let beliefState = worldBeliefs?.initial();
+    let memoryState = worldMemories?.initial();
+    let custodyState = worldCustody?.initial();
+    let siteHistoryState = worldSiteHistory?.initial();
 
     const stateViews=names.filter(name=>systems[name].viewState), viewCache=new WeakMap();
     function visibleStates(values){
@@ -402,8 +644,37 @@
       causes = causalState, chunkView = chunkState) {
       return Object.freeze({world:worldValue,states:visibleStates(statesValue),
         ...((aggregates||stateViews.length)&&{[W.simulationAggregate.rawStates]:statesValue}),signals,tick:tickValue,time:tickValue*worldValue.dt,history,dropped,
+        events:lastEvents,
         ...(receipts.length && {transfers:receipts}),...(causes && {causality:causes}),
+        ...(eventStream&&{eventStream}),
+        ...(worldFactState && {worldFacts:worldFactState}),
+        ...(knowledgeState && {knowledge:knowledgeState,knowledgePolicy:worldKnowledge.policy}),
+        ...(beliefState && {beliefs:beliefState,beliefPolicy:worldBeliefs.policy}),
+        ...(memoryState && {memories:memoryState,memoryPolicy:worldMemories.policy}),
+        ...(custodyState && {custody:custodyState,custodyPolicy:worldCustody.policy}),
+        ...(siteHistoryState && {siteHistory:siteHistoryState,siteHistoryPolicy:worldSiteHistory.policy}),
+        ...(regionContinuity&&{regionContinuity}),
+        ...(storyCallbacks&&{storyCallbacks}),
         ...(chunkView&&{simulationChunks:chunkView}),
+        ...(storyTriggerState && {storyTriggers:storyTriggerState}),
+        ...(storyLifecycleState && {storyLifecycle:storyLifecycleState}),
+        ...(storyCommitments && {storyCommitmentDefinitions:storyCommitments}),
+        ...(storyHandoffs && {storyHandoffDefinitions:storyHandoffs}),
+        ...(storySettlement && {storySettlementDefinitions:storySettlement}),
+        ...(storyFeasibilityState && {storyFeasibility:storyFeasibilityState,storyFeasibilityRules:storyLifecycle.feasibility}),
+        ...(storyReferenceState && {storyReferences:storyReferenceState}),
+        ...(storyRoles && {storyRoles:storyRoles.roles}),
+        ...(incidentCatalog?.length && {incidentCatalog}),
+        ...(incidentPressure && {incidentPressure}),
+        ...(incidentCooldowns && {incidentCooldowns}),
+        ...(incidentVariety && {incidentVariety}),
+        ...(storyteller && {storyteller,storytellerCandidates:incidentCandidates?.direction}),
+        ...(incidentCandidates && {incidentCandidatePolicies:incidentCandidates.policies,incidentCandidates:incidentCandidateState}),
+        ...(incidentCandidates?.anchors && {incidentAnchors:incidentCandidates.anchors}),
+        ...(storyTemplates && {storyTemplates}),
+        ...(storyRoles && {storyDocuments:storyRoles.documents}),
+        ...(storyLifecycle?.decisions && {storyDecisions:storyLifecycle.decisions}),
+        ...(storyLifecycle?.beats && {storyBeats:storyLifecycle.beats}),
         ...(weatherTrackState && {weatherTrackState})});
     }
     function phaseReader(name,snapshot,staged) {
@@ -418,10 +689,11 @@
       };
     }
     function context(name, worldValue, statesValue, at, input, emit, query, spatial, timing, causal, read) {
-      return Object.freeze({world:worldValue,query,id:name,states:visibleStates(statesValue),
-        ...stepTiming(worldValue,at,timing),input,emit,
+      const step = stepTiming(worldValue,at,timing);
+      return eventContext({world:worldValue,query,id:name,states:visibleStates(statesValue),
+        ...step,input,emit,
         ...(spatial && {spatial}),...(causal && {causal}),...(read && {read}),
-        random:randomSource(worldValue.seed,name,at,timing)});
+        random:randomSource(worldValue.seed,name,at,timing)}, Math.max(0,step.time-step.dt));
     }
     function rootedState(value) {
       return P.data.isImmutable(value) ? value : freeze(copy(value));
@@ -430,7 +702,10 @@
       return [...scheduled.keys()].sort((a,b) => a-b).flatMap(key => scheduled.get(key));
     }
     function queue(entries,log) {
-      if(entries.length)lastCheckpoint=undefined;
+      if(entries.length) {
+        lastCheckpoint=undefined;
+        commandTicks=undefined;
+      }
       for (const item of entries) {
         let items = scheduled.get(item.tick);
         if (!items) scheduled.set(item.tick,items = []);
@@ -448,7 +723,7 @@
     }
     function enqueue(commands, log) {
       const entries=parseCommands(commands,log,Math.max(tick,inFlightTick)+1);
-      check(entries.length + packCommands().length <= 100000, 'Pending command budget exceeded');
+      check(entries.length + packCommands().length <= maxPendingCommands, 'Pending command budget exceeded');
       queue(entries,log);
       if(log)evidence?.submit(tick,entries.length);
     }
@@ -480,7 +755,19 @@
       if(lastCheckpoint)return lastCheckpoint;
       lastCheckpoint=freeze({format:checkpointFormat,version:1,tick,world,states,outputs,manual,delays,history,dropped,
         signals:lastSignals,events:lastEvents,pending:packCommands(),scenario,
+        ...(checkpointStream&&{eventStream:checkpointStream}),
         ...(eventActions && {eventActionCounts}),
+        ...(storyTriggers && {storyTriggerState}),
+        ...(storyLifecycle && {storyLifecycleState}),
+        ...(storyFeasibilityState && {storyFeasibilityState}),
+        ...(storyReferenceState && {storyReferenceState}),
+        ...(incidentCandidates && {incidentCandidateState}),
+        ...(worldFactState && {worldFactState}),
+        ...(knowledgeState && {knowledgeState}),
+        ...(beliefState && {beliefState}),
+        ...(memoryState && {memoryState}),
+        ...(custodyState && {custodyState}),
+        ...(siteHistoryState && {siteHistoryState}),
         ...(lastTransfers.length && {transfers:lastTransfers}),
         ...(weatherTrackState && {weatherTrackState}),
         ...(pendingWrites.length && {dependencyWrites:pendingWrites}),...(rates && {sampling}),
@@ -492,6 +779,17 @@
     function install(payload) {
       ({tick,states,outputs,manual,delays,history,dropped,scenario,signals:lastSignals,events:lastEvents}=payload);
       eventActionCounts = payload.eventActionCounts ?? freeze({});
+      storyTriggerState = payload.storyTriggerState;
+      storyLifecycleState = payload.storyLifecycleState;
+      storyFeasibilityState = payload.storyFeasibilityState;
+      storyReferenceState = payload.storyReferenceState;
+      incidentCandidateState = payload.incidentCandidateState;
+      worldFactState = payload.worldFactState;
+      knowledgeState = payload.knowledgeState;
+      beliefState = payload.beliefState;
+      memoryState = payload.memoryState;
+      custodyState = payload.custodyState;
+      siteHistoryState = payload.siteHistoryState;
       chunkState=payload.simulationChunks;
       sampling=payload.sampling;
       lastTransfers=payload.transfers??[];
@@ -508,7 +806,7 @@
         install(payload);
         weatherTrackState=payload.weatherTrackState;
         queue(payload.pending,false);
-        lastCheckpoint=payload;
+        if (payload.eventStream===checkpointStream) lastCheckpoint=payload;
         return;
       }
       check(record(payload.states) && equal(ordered(payload.states),names) && record(payload.scenario) &&
@@ -532,6 +830,28 @@
       for (const name of names) systems[name].validateState?.(payload.states[name]);
       if (eventActions) eventActions.validate(payload.eventActionCounts);
       else check(!own(payload, 'eventActionCounts'), 'Unexpected event action checkpoint data');
+      if (storyTriggers) storyTriggers.validate(payload.storyTriggerState,payload.tick);
+      else check(!own(payload, 'storyTriggerState'), 'Unexpected story trigger checkpoint data');
+      if (storyLifecycle) storyLifecycle.validate(payload.storyLifecycleState,payload.tick,payload.storyFeasibilityState,payload.storyTriggerState);
+      else check(!own(payload, 'storyLifecycleState'), 'Unexpected story lifecycle checkpoint data');
+      if (!storyLifecycle?.feasibility) check(!own(payload,'storyFeasibilityState'),'Unexpected story feasibility checkpoint data');
+      if (incidentCandidates) incidentCandidates.validate(payload.incidentCandidateState,payload.tick,payload.storyTriggerState,
+        payload.storyLifecycleState,payload.storyFeasibilityState);
+      else check(!own(payload,'incidentCandidateState'),'Unexpected incident candidate checkpoint data');
+      if (worldFacts) worldFacts.validate(payload.worldFactState,payload.tick,Boolean(causePolicy),payload.events);
+      else check(!own(payload,'worldFactState'),'Unexpected world fact checkpoint data');
+      if (worldKnowledge) worldKnowledge.validate(payload.knowledgeState,payload.tick,payload.worldFactState,payload.events);
+      else check(!own(payload,'knowledgeState'),'Unexpected knowledge checkpoint data');
+      if (worldBeliefs) worldBeliefs.validate(payload.beliefState,payload.tick,payload.worldFactState,payload.knowledgeState,payload.events);
+      else check(!own(payload,'beliefState'),'Unexpected belief checkpoint data');
+      if (worldMemories) worldMemories.validate(payload.memoryState,payload.tick,payload.events);
+      else check(!own(payload,'memoryState'),'Unexpected world memory checkpoint data');
+      if (worldCustody) worldCustody.validate(payload.custodyState,payload.tick,payload.events);
+      else check(!own(payload,'custodyState'),'Unexpected world custody checkpoint data');
+      if (worldSiteHistory) worldSiteHistory.validate(payload.siteHistoryState,payload.tick,payload.events);
+      else check(!own(payload,'siteHistoryState'),'Unexpected site history checkpoint data');
+      if (storyReferences) storyReferences.validate(payload.storyReferenceState,payload.tick,payload.storyLifecycleState);
+      else check(!own(payload,'storyReferenceState'),'Unexpected story live reference checkpoint data');
       transfers.validateBalances(payload.states);
       reservations?.validate(payload.states,payload.tick);
       if (own(payload,'transfers')) transfers.validateReceipts(payload.transfers,payload.tick);
@@ -583,6 +903,7 @@
         undefined,undefined,undefined,phaseReader(name,states)),initialOutputs);
       outputs = freeze(initialOutputs);
       if (causePolicy) causalState = W.causality.initial(ports,incoming,outputs,causePolicy);
+      sampling = rates?.seed(outputs,causalState?.outputs);
       lastSignals = freeze({...manual,...outputs});
       const past=world.history?.enabled===false?[]:(world.history?.past??[]).filter(event=>Q.condition(world.history?.where,event));
       history=freeze(copy(past.slice(-historyLimit)));
@@ -591,15 +912,23 @@
         const initialView = view();
         weatherTrackState = weather.step(undefined,{time:0,view:initialView,query:Q.create(initialView,systems,projection)});
       }
+      if (storyReferences) storyReferenceState = storyReferences.initial(Q.create(view(),systems,projection));
+      if (storyTriggers) storyTriggerState = storyTriggers.initial(Q.create(view(),systems,projection));
       enqueue([...world.commands,...(world.scenario?.commands ?? []),...timelineCommands(world,timeline)],false);
     }
     const origin = save();
     const evidence=recordRun===undefined||recordRun===false?null:W.runRecords.capture(recordRun,origin,rates,query);
+    const authoredBlockSize = world.simulationModel?.blockSize;
+    const blockSize = authoredBlockSize===undefined ? undefined :
+      Math.min(authoredBlockSize,systems[names[0]].processingLimit?.()??authoredBlockSize);
+    const blockSystem = blockSize !== undefined && !socialObservers.length && !world.scenario && !weather && !timeline && !eventActions && !storyTriggers &&
+      !storyLifecycle && !worldFacts && !worldMemories && !worldCustody && !worldSiteHistory && !causePolicy &&
+      !regions && !evidence && !playback && !debug ? names[0] : undefined;
     if(!skipInitialSubmission&&playback?.has(tick))enqueue(playback.get(tick),true);
     regions?.publish(view());
     debug?.publish(origin);
     function query() {
-      return currentQuery ?? (currentQuery = Q.create(view(),systems,projection));
+      return currentQuery ?? (currentQuery = Q.create({...view(),[W.schedulerInspector.source]:schedulerSource},systems,projection));
     }
     function projectEntities(overlay){
       if(!overlay||!Object.keys(overlay.entities).length)return Object.freeze({view:view(),query:query()});
@@ -634,7 +963,14 @@
       return freeze(next);
     }
     function* tickWork() {
-      const at = tick+1, commands = scheduled.get(at) ?? [], events = [];
+      const at = tick+1, commands = scheduled.get(at) ?? [], events = [], storyCommands = storyLifecycle && [];
+      const candidateCommands = incidentCandidates && [];
+      const storyTiming = storyClock&&{};
+      function finishStoryPhase(name,start) {
+        const elapsed = storyClock()-start;
+        check(Number.isFinite(elapsed)&&elapsed>=0,'Story evaluation clock must be finite and monotonic');
+        storyTiming[name] = elapsed;
+      }
       check(tickOK(at),'Tick budget exceeded');
       debug?.start();
       const observedSteps=debug?[]:null;
@@ -673,13 +1009,50 @@
         });
       }
       const causal = causePolicy && W.causality.begin(causalState,at,ports,incoming,causePolicy);
-      const makeEmit = (system,scope,root) => (kind,detail = {},parents) => {
+      const factLedger = worldFacts?.begin(worldFactState,at);
+      const knowledgeLedger = worldKnowledge?.begin(knowledgeState,at);
+      const beliefLedger = worldBeliefs?.begin(beliefState);
+      const memoryLedger = worldMemories?.begin(memoryState,at);
+      const custodyLedger = worldCustody?.begin(custodyState,at);
+      const siteLedger = worldSiteHistory?.begin(siteHistoryState,at);
+      const nativeTransfers = socialObservers.length?new Set():null;
+      const makeEmit = (system,scope,root,token,command) => (kind,detail = {},parents) => {
         check(id(kind) && record(detail) && events.length < 10000, 'Invalid event or per-tick event budget exceeded');
-        const row=freeze({...copy(detail),kind,system,tick:at,id:at+'.'+events.length});
+        const typed = token===typedFact;
+        check(!factLedger||kind!==W.worldFacts.kind||typed,'Use world/fact to publish a typed world fact');
+        check(!knowledgeLedger||kind!==W.worldKnowledge.kind||token===typedLearning,
+          'Use fact witnessing or world/share-fact to record learning');
+        check(!beliefLedger||!W.worldBeliefs.eventKinds.includes(kind)||token===typedBelief,
+          'Use world belief actions to publish belief events');
+        check(!memoryLedger||!W.worldMemories.eventKinds.includes(kind)||token===typedMemory,
+          'Use world/remember to publish memory events');
+        check(!custodyLedger||!W.worldCustody.eventKinds.includes(kind)||token===typedCustody,
+          'Use world custody actions to publish custody events');
+        check(!siteLedger||!W.worldSiteHistory.eventKinds.includes(kind)||token===typedSite,
+          'Use site history actions to publish site events');
+        check(!storyLifecycle?.hasConsequences||kind!==W.storyConsequences.kind||token===typedConsequences,
+          'Story consequences are published at closure');
+        W.timedEvents.timeOf(detail);
+        if(kind===W.soundEvents.kind)W.soundEvents.validate(detail);
+        const data=copy(detail), rowData={...data,kind,system,tick:at,id:at+'.'+events.length};
+        const causalParents=causal?(parents??scope?.emitParents()??(root?[root]:[])):[];
+        if (eventStream) rowData.eventContext=E.context(rowData,world.id,eventStream,
+          {detail:data,command,causalParents,lifecycle:storyLifecycleState});
+        const row=freeze(rowData);
         events.push(row);
-        if (causal) return causal.event(row,parents??scope?.emitParents()??(root?[root]:[]),scope?.location,
+        const ref = causal?.event(row,causalParents,scope?.location,
           parents?'declared':root?'command':'observed-inputs');
+        factLedger?.note(row,ref,typed);
+        return ref;
       };
+      function publishLearning(learning,root,command) {
+        const causes = [...new Set(Object.values(learning.via))].map(id=>causal?.eventReference(id)).filter(Boolean);
+        makeEmit('world',undefined,root,typedLearning,command)(W.worldKnowledge.kind,{learning},causes.length?[root,...causes]:undefined);
+      }
+      function retainedEvent(id) {
+        return factLedger?.receipt(id)??events.find(event=>event.id===id)??lastEvents.find(event=>event.id===id)??
+          history.findLast(event=>event.id===id);
+      }
       function setInput(port,next,root){
         const descriptor=ports.inputs[port];
         if (causal && (!rates || descriptor.type!=='event' || next.length))
@@ -687,18 +1060,45 @@
         nextManual[port] = rates && descriptor.type==='event' ?
           W.rates.add(nextManual[port],next,'event') : next;
       }
-      function systemEmit(name,scope,root) {
-        const emit=makeEmit(name,scope,root), allowed=contracts.get(name)?.emits;
+      function systemEmit(name,scope,root,command) {
+        const emit=makeEmit(name,scope,root,undefined,command), allowed=contracts.get(name)?.emits;
         if (!allowed) return emit;
         return (kind,detail,parents) => {
           check(allowed.includes(kind),'Undeclared simulation event '+String(kind)+' from '+name);
           return emit(kind,detail,parents);
         };
       }
-      for (const item of commands) {
+      const measuringMaintenance = storyClock&&(storyLifecycle?.cleanup||storyCommitments);
+      const maintenanceStarted = measuringMaintenance ? storyClock() : undefined;
+      const cleanedStories = storyLifecycle?.cleanup ? storyLifecycle.cleanup(storyLifecycleState, at, ({kind,target}) => {
+        const {system} = target, before = drafts[system];
+        const query = Q.create(view(nextWorld,{...drafts}),systems,projection);
+        const ctx = context(system,nextWorld,Object.freeze({...drafts}),at,{},systemEmit(system),query,spatial(system,false));
+        const result = systems[system].storyCleanup[kind].run(before,target,ctx);
+        if (result.state !== before) {
+          drafts[system] = rootedState(result.state);
+          commanded?.add(system);
+        }
+        return result;
+      }, makeEmit('world')) : storyLifecycleState;
+      if (storyCommitments) for (const {story,order} of W.storyCommitments.releases(storyCommitments,cleanedStories,at)) {
+        const {system,agent,generation,sequence} = order;
+        const query = Q.create(view(nextWorld,{...drafts}),systems,projection);
+        const sample = query.probe(system+'/orders',undefined,{agent,generation});
+        if (sample.status!=='ok') continue;
+        const {active,paused,queue} = sample.value;
+        if (![active,...paused,...queue].some(row=>row?.sequence===sequence)) continue;
+        const ctx = context(system,nextWorld,Object.freeze({...drafts}),at,{},systemEmit(system),query,spatial(system,false));
+        drafts[system] = rootedState(systems[system].actions['cancel-order'](drafts[system],{agent,generation,order:sequence},ctx));
+        commanded?.add(system);
+        makeEmit('world')('story-commitment-released',{story,order});
+      }
+      if (measuringMaintenance) finishStoryPhase('maintenance',maintenanceStarted);
+      for (const [index,item] of commands.entries()) {
         const [name,key] = endpoint(item.action);
         if(debug)debug.enter({system:W.stepDebug.actionSystem(item),inputs:item.args});
-        const root = causal?.command(name,item), emit = makeEmit(name,undefined,root);
+        const command=eventStream&&{index,action:item.action,id:item.id,source:item.eventCause};
+        const root = causal?.command(name,item), emit = makeEmit(name,undefined,root,undefined,command);
         if (name === 'world') {
           if (key === 'input') {
             const {port,value} = item.args, descriptor = ports.inputs[port];
@@ -723,17 +1123,71 @@
             const {kind,...detail} = item.args;
             emit(kind,detail);
           }
+          if (key===W.worldFacts.action) {
+            const fact = factLedger.prepare(item.args,events.length);
+            const parents = fact.causes.map(cause=>cause.causal??causal?.eventReference(cause.id)).filter(Boolean);
+            makeEmit(name,undefined,root,typedFact,command)(W.worldFacts.kind,{fact},parents.length?[root,...parents]:undefined);
+            for (const witness of item.args.witnesses??[])
+              publishLearning(knowledgeLedger.witness(fact,witness,at+'.'+events.length),root,command);
+          }
+          if (key===W.worldKnowledge.action) {
+            const {fact,from,to} = item.args;
+            const {learning,rejected,missing} = knowledgeLedger.share(item.args,at+'.'+events.length);
+            if (learning) publishLearning(learning,root,command);
+            if (rejected) emit('fact-report-rejected',{fact,from,to,reason:rejected,...(missing&&{missing})});
+          }
+          if (beliefLedger&&W.worldBeliefs.actions.includes(key)) {
+            const {belief,via,rejected} = beliefLedger.apply(key,item.args,at+'.'+events.length,knowledgeLedger);
+            const publish = makeEmit(name,undefined,root,typedBelief,command);
+            if (belief) {
+              const parent = via&&causal?.eventReference(via);
+              publish(W.worldBeliefs.kind,{belief},parent?[root,parent]:undefined);
+            }
+            if (rejected) publish(W.worldBeliefs.rejection,{action:item.action,args:item.args,reason:rejected});
+          }
+          if (key===W.worldMemories.action) {
+            const {memory,rejected} = memoryLedger.remember(item.args,at+'.'+events.length);
+            const publish = makeEmit(name,undefined,root,typedMemory,command);
+            if (memory) {
+              const parent = memory.source&&causal?.eventReference(memory.source);
+              publish(W.worldMemories.kind,{memory},parent?[root,parent]:undefined);
+            }
+            if (rejected) publish(W.worldMemories.rejection,{args:item.args,reason:rejected});
+          }
+          if (custodyLedger&&W.worldCustody.actions.includes(key)) {
+            const {custody,rejected} = custodyLedger.apply(key,item.args,at+'.'+events.length,retainedEvent);
+            const publish = makeEmit(name,undefined,root,typedCustody,command);
+            if (custody) {
+              const parents = [...new Set([custody.previous,custody.source?.id])].filter(Boolean)
+                .map(id=>causal?.eventReference(id)).filter(Boolean);
+              publish(W.worldCustody.kind,{custody},parents.length?[root,...parents]:undefined);
+            }
+            if (rejected) publish(W.worldCustody.rejection,{action:item.action,args:item.args,reason:rejected});
+          }
+          if (siteLedger&&W.worldSiteHistory.actions.includes(key)) {
+            const {kind,detail,rejected} = siteLedger.apply(key,item.args,at+'.'+events.length,retainedEvent);
+            const publish = makeEmit(name,undefined,root,typedSite,command);
+            if (detail) {
+              const entry = detail.visit??detail.change;
+              const parents = [...new Set([entry.previous,entry.visit?.id,entry.source?.id])].filter(Boolean)
+                .map(id=>causal?.eventReference(id)).filter(Boolean);
+              publish(kind,detail,parents.length?[root,...parents]:undefined);
+            }
+            if (rejected) publish(W.worldSiteHistory.rejection,{action:item.action,args:item.args,reason:rejected});
+          }
           if (key === 'transfer') {
-            requests.push({name,request:item.args,root});
+            requests.push({name,request:item.args,root,command});
             if(commanded)for(const port of [item.args.from,item.args.to])commanded.add(endpoint(port)[0]);
           }
+          if (candidateCommands && key===W.incidentCandidates.action) candidateCommands.push({args:item.args,publish:emit});
+          if (storyCommands && W.storyLifecycle.actions.includes(key)) storyCommands.push({action:key,args:item.args,publish:emit});
           if(chunks?.actions.includes(key))nextChunkState=chunks.action(nextChunkState,key,item.args,at);
         } else {
           commanded?.add(name);
           const actionQuery = Q.create(view(nextWorld,{...drafts}),systems,projection);
           const scope=causal?.scope(name,{}, {},actionQuery,{root,queryTick:tick,queryTime:tick*nextWorld.dt});
           causal?.action(name,root);
-          const ctx = context(name,nextWorld,Object.freeze({...drafts}),at,{},systemEmit(name,scope,root),actionQuery,
+          const ctx = context(name,nextWorld,Object.freeze({...drafts}),at,{},systemEmit(name,scope,root,command),actionQuery,
             spatial(name,false),undefined,scope?.api);
           drafts[name] = rootedState(systems[name].actions[key](drafts[name],item.args,ctx));
         }
@@ -778,29 +1232,33 @@
       }
       check(requests.length <= W.transfers.limit,'Transfer request budget exceeded');
       let confirmations;
-      function settleTransfer(request,name,emit) {
-        const before=causal?.balance&&[request.from,request.to].map(account=>transfers.inspect(drafts,account));
-        const receipt=transfers.settle(drafts,request,at,name,rootedState);
-        const ref=emit('transfer',receipt);
-        if(before&&receipt.status!=='blocked'){
-          let query;
-          for(const account of before){
-            const after=transfers.inspect(drafts,account.name);
-            const site=account.at;
-            let anchor=null;
-            if(Array.isArray(site))anchor={point:site};
-            else if(site){
-              query??=Q.create(view(nextWorld,{...drafts}),systems,projection);
-              const target=W.worksites.frame(query,site);
-              anchor={...site,...(target?.point&&{point:target.point})};
-            }
-            causal.balance(account,after,ref,anchor);
+      function balanceChanges(before,after,ref,queryNow) {
+        let query;
+        for (const [index,account] of before.entries()) {
+          const site=account.at;
+          let anchor=null;
+          if (Array.isArray(site)) anchor={point:site};
+          else if (site) {
+            query??=queryNow();
+            const target=W.worksites.frame(query,site);
+            anchor={...site,...(target?.point&&{point:target.point})};
           }
+          causal.balance(account,after[index],ref,anchor);
         }
+      }
+      function settleTransfer(request,name,emit) {
+        const accounts=[request.from,request.to];
+        const before=causal?.balance&&accounts.map(account=>transfers.inspect(drafts,account));
+        const receipt=transfers.settle(drafts,request,at,name,rootedState);
+        nativeTransfers?.add(at+'.'+events.length);
+        const ref=emit('transfer',receipt);
+        if (before&&receipt.status!=='blocked')
+          balanceChanges(before,accounts.map(account=>transfers.inspect(drafts,account)),ref,
+            ()=>Q.create(view(nextWorld,{...drafts}),systems,projection));
         return receipt;
       }
-      const receipts = requests.map(({name,request,root})=>{
-        const receipt = settleTransfer(request,name,makeEmit(name,undefined,root));
+      let receipts = requests.map(({name,request,root,command})=>{
+        const receipt = settleTransfer(request,name,makeEmit(name,undefined,root,undefined,command));
         if(systems[name]?.receiveTransfers){
           confirmations??=new Map();
           if(!confirmations.has(name))confirmations.set(name,[]);
@@ -810,6 +1268,14 @@
       });
       for(const [name,confirmed] of confirmations??[])
         drafts[name]=rootedState(systems[name].receiveTransfers(drafts[name],confirmed,{tick:at,emit:systemEmit(name)}));
+      for (const {name,solve} of couplings) {
+        const {enabled}=currentValues(name,nextManual,{},outputs,delays);
+        const {requests,report}=solve(drafts,{tick:at,dt:nextWorld.dt,requester:name,root:rootedState,enabled});
+        check(receipts.length+requests.length<=W.transfers.limit,'Transfer coupling exceeds the tick receipt budget');
+        const emit=makeEmit(name);
+        for (const request of requests) receipts.push(settleTransfer(request,name,emit));
+        drafts[name]=rootedState(report);
+      }
       function lateTransfer(source,request){
         if(receipts.length>=W.transfers.limit)return undefined;
         const receipt=rootedState(settleTransfer(request,source,systemEmit(source)));
@@ -825,7 +1291,7 @@
       });
       interactions?.run(drafts,{world:nextWorld,tick:at,detailed,root:rootedState,emit:systemEmit,input:setInput,
         query:queryDrafts,
-        effect(source,effect,query){
+        effect(source,effect,query,interaction){
           if((effect.destinations??[effect.destination]).some(name=>!detailed(name)||
             W.simulationAggregate.isAggregate(drafts[name])))return {reason:'effect-asleep'};
           if(effect.kind==='transfer'){
@@ -840,11 +1306,13 @@
           const staged=Object.freeze({...base,emit:deferred(emit),...(writer&&{spatial:Object.freeze({
             ...writer,write:deferred(writer.write),rebuilt:deferred(writer.rebuilt)
           })})});
-          const prepared=handler.run(drafts[destination],args,1,staged);
-          if(prepared.reason)return {reason:prepared.reason};
+          const prepared = effect.kind==='story-host' ?
+            effect.host(drafts[destination],args,staged,{service:source,...interaction}) : handler.run(drafts[destination],args,1,staged);
+          const detail = effect.kind==='story-host' ? {receipt:prepared.receipt} : {};
+          if(prepared.reason)return {reason:prepared.reason,...detail};
           drafts[destination]=rootedState(prepared.state);
           for(const publish of notes)publish();
-          return {};
+          return detail;
         }
       });
       if(influence){
@@ -932,14 +1400,46 @@
         const start = profile ? clock() : 0;
         const worker=workerResults?.get(name);
         if(worker?.error)throw Error(worker.error.message,{cause:worker.error});
-        let next=state;
+        const timedInputs=plan.timedSolvers.get(name);
+        const split=timedInputs?.some(key=>input[key].length);
+        let next=state, calls=1;
         if(worker){
           if(!worker.unchanged)next=rootedState(worker.state);
           for(const [method,args] of worker.effects){
             if(method==='emit')ctx.emit(...args);
             else ctx.spatial[method](...args);
           }
-        }else if(system.step)next=rootedState(system.step(state,ctx));
+        }else if(system.step) {
+          if (split) {
+            const end=ctx.time, begin=Math.max(0,end-ctx.dt);
+            const groups=W.timedEvents.boundaries(timedInputs,input,begin,end);
+            const eventsOff=Object.fromEntries(Object.keys(system.inputs).filter(key=>
+              ports.inputs[name+'/'+key].type==='event').map(key=>[key,[]]));
+            const splitOff=Object.fromEntries(timedInputs.map(key=>[key,[]]));
+            const levels=freeze({...input,...eventsOff});
+            let prior=begin, segment=0;
+            const segmentContext=(time,dt,values,reaction=false)=>eventContext({...ctx,
+              time,dt,input:values,segment,reaction,
+              random:randomSource(nextWorld.seed,name,at,{...timing,segment})},time-dt);
+            function stepTo(time) {
+              if (time<=prior) return;
+              const values=segment===0?freeze({...input,...splitOff}):levels;
+              const part=segmentContext(time,time-prior,values);
+              next=rootedState(system.step(next,part));
+              if (observedTiming) observedTiming.push([name,part.dt,prior/nextWorld.dt-at+1,
+                time/nextWorld.dt-at+1,timing?.every??1,timing?.substep??1,timing?.substeps??1,null]);
+              segment++;
+              prior=time;
+            }
+            for (const group of groups) {
+              stepTo(group.time);
+              next=rootedState(system.react(next,segmentContext(group.time,0,freeze({...levels,...group.ports}),true)));
+            }
+            stepTo(end);
+            calls=segment;
+            if (debug) observed.reactions=groups.map(({time,ports})=>({time,ports}));
+          } else next=rootedState(system.step(state,ctx));
+        }
         readOutputs(name,next,ctx,target);
         if(debug){
           const outputs=Object.fromEntries(Object.keys(system.outputs??{}).map(key=>[key,target[name+'/'+key]]));
@@ -957,17 +1457,17 @@
         }
         if (profile) {
           const cost = spent[name] ??= {calls:0,ms:0};
-          cost.calls++;
+          cost.calls+=calls;
           cost.ms += clock()-start+(worker?.ms??0);
         }
-        if(observedTiming&&system.step)observedTiming.push([name,ctx.dt,timing?.start??0,timing?.end??1,
+        if(observedTiming&&system.step&&!split)observedTiming.push([name,ctx.dt,timing?.start??0,timing?.end??1,
           timing?.every??1,timing?.substep??1,timing?.substeps??1,timing?.detail?.level??null]);
         return next;
       }
 
       let nextStates, nextOutputs, publishedSignals, nextSampling, delayedSamples;
       if (rates) {
-        const frame = yield* rates.advance(at,committed,outputs,nextManual,delays,lastSignals,sampling,integrate,causal,chunkStep,
+        const frame = yield* rates.advance(at,nextWorld.dt,committed,outputs,nextManual,delays,lastSignals,sampling,integrate,causal,chunkStep,
           prepare&&{prepare,groupsFor});
         ({states:nextStates,outputs:nextOutputs,signals:publishedSignals,buffers:nextSampling,delayedSamples}=frame);
       } else {
@@ -991,22 +1491,196 @@
         publishedSignals = {...observed,...nextOutputs};
       }
       if(reservations)nextStates=reservations.run(nextStates,{tick:at,emit:makeEmit});
-      const nextDelays = Object.fromEntries([...incoming.values()].filter(edge => edge.delay).map(edge =>
+      const nextDelays = Object.fromEntries([...incoming.values()].filter(edge => edge.delay && !edge.crossing).map(edge =>
         [edge.to,[...delays[edge.to].slice(1),delayedSamples?.[edge.to] ?? nextOutputs[edge.from]]]));
       publishedSignals = freeze(publishedSignals);
-      const routed = eventActions?.route(eventActionCounts, events, at);
+      let nextStoryTriggers, nextStoryLifecycle, nextStoryFeasibility, nextStoryReferences, storyStarts = [];
+      let completed;
+      let socialCursor = 0;
+      function observeSocial() {
+        if (!socialObservers.length||socialCursor===events.length) return;
+        const incoming = events.slice(socialCursor);
+        for (const name of socialObservers) {
+          const emit = systemEmit(name);
+          const state = systems[name].storySocial.observe(nextStates[name],incoming,(kind,detail,source)=>{
+            const parent = causal?.eventReference(source);
+            emit(kind,detail,parent?[parent]:undefined);
+          },nativeTransfers);
+          if (state!==nextStates[name]) {
+            nextStates = {...nextStates,[name]:rootedState(state)};
+            completed = undefined;
+          }
+        }
+        socialCursor = events.length;
+      }
+      observeSocial();
+      const completedView = () => {
+        const frame = view(nextWorld,freeze(nextStates),publishedSignals,at,receipts,causalState,nextChunkState);
+        return nextStoryReferences||factLedger||memoryLedger||custodyLedger||siteLedger?{...frame,
+          ...(nextStoryReferences&&{storyReferences:nextStoryReferences}),
+          ...(factLedger&&{worldFacts:factLedger.snapshot()}),...(knowledgeLedger&&{knowledge:knowledgeLedger.snapshot()}),
+          ...(beliefLedger&&{beliefs:beliefLedger.snapshot()}),...(memoryLedger&&{memories:memoryLedger.snapshot()}),
+          ...(custodyLedger&&{custody:custodyLedger.snapshot()}),...(siteLedger&&{siteHistory:siteLedger.snapshot()})}:frame;
+      };
+      const completedQuery = () => completed ??= Q.create(
+        completedView(),systems,projection);
+      function beginStoryTransaction() {
+        const notes = [], transfersAtBoundary = [];
+        const stage = publish => (kind,detail,parents) => notes.push(()=>publish(kind,detail,parents));
+        let trial = {...nextStates};
+        const query = () => Q.create({...completedView(),states:visibleStates(trial),
+          [W.simulationAggregate.rawStates]:trial},systems,projection);
+        const available = name => detailed(name)&&!W.simulationAggregate.isAggregate(trial[name]);
+        function action(name,key,args) {
+          const ctx = context(name,nextWorld,Object.freeze({...trial}),at,{},stage(systemEmit(name)),query());
+          trial[name] = rootedState(systems[name].actions[key](trial[name],args,ctx));
+        }
+        return { query, available, action,
+          allocate(board, isDetailed) {
+            trial = reservations.run(trial,{tick:at,emit:name=>stage(makeEmit(name))},isDetailed,board);
+          },
+          transfer(args) {
+            const accounts = [args.from,args.to];
+            if (!accounts.every(account=>{
+              const [system] = endpoint(account);
+              return available(system)||regionContinuity?.permitsDormant(account)&&!W.simulationAggregate.isAggregate(trial[system]);
+            })) return {blocked:'account-not-detailed'};
+            if (receipts.length+transfersAtBoundary.length>=W.transfers.limit) return {blocked:'transfer-budget'};
+            const before = causal?.balance&&accounts.map(account=>transfers.inspect(trial,account));
+            const receipt = transfers.settle(trial,{...args,mode:'exact'},at,'world',rootedState);
+            if (receipt.status!=='full') return {blocked:'transfer-limited',detail:receipt};
+            transfersAtBoundary.push(receipt);
+            const after = before&&accounts.map(account=>transfers.inspect(trial,account));
+            notes.push(()=>{
+              nativeTransfers?.add(at+'.'+events.length);
+              const ref = systemEmit('world')('transfer',receipt);
+              if (before) balanceChanges(before,after,ref,query);
+            });
+            return {detail:receipt};
+          },
+          postJob(board,args) {
+            if (!available(board)) return {blocked:'board-not-detailed'};
+            const blocked = systems[board].reservationBoard.postingBlocker(trial[board],args,at);
+            if (blocked) return {blocked};
+            action(board,'post-job',args);
+            return {detail:{board,job:query().probe(board+'/jobs',undefined,{job:args.job}).value}};
+          },
+          social(name,key,args) {
+            if (!available(name)) return {blocked:'social-ledger-not-detailed'};
+            const provider = systems[name].storySocial;
+            const result = provider.apply(trial[name],key,args,at);
+            if (result.blocked) return result;
+            trial[name] = rootedState(result.state);
+            stage(systemEmit(name))(provider.events[key],result.detail);
+            return {detail:{ledger:name,...result.detail}};
+          },
+          commit() {
+            nextStates = trial;
+            if (transfersAtBoundary.length) receipts = freeze([...receipts,...transfersAtBoundary]);
+            completed = undefined;
+            for (const publish of notes) publish();
+          }
+        };
+      }
+      function settleStory(effects,row,owner) {
+        const tx = beginStoryTransaction();
+        const report = W.storySettlement.apply(effects,row,owner,at,tx);
+        if (report.status==='applied') tx.commit();
+        return report;
+      }
+      function dispatchCommitment(actor,order,from,settleActivation) {
+        const {system,agent,generation} = actor, scope = W.storyCommitments;
+        const tx = beginStoryTransaction();
+        if (!tx.available(system)) return {check:scope.blocked('simulation','defer','actor-not-detailed')};
+        const probeTrial = (name,args) => tx.query().probe(name,undefined,args);
+        let release;
+        if (from) {
+          const {system:prior,agent,generation,sequence} = from;
+          const book = probeTrial(prior+'/orders',{agent,generation}).value;
+          const pending = book&&[book.active,...book.paused,...book.queue].find(row=>row?.sequence===sequence);
+          const previous = pending??book?.outcomes.find(row=>row.sequence===sequence);
+          const evidence = previous?undefined:[events,lastEvents,history].map(rows=>rows.find(row=>
+            row.system===prior&&row.agent===agent&&row.generation===generation&&row.sequence===sequence&&
+            Array.isArray(row.results)&&['order-cancelled','order-failed','order-succeeded'].includes(row.kind))).find(Boolean);
+          const work = previous?{task:previous.task,phase:previous.phase,nextStep:previous.step,results:previous.results}:
+            evidence?{task:evidence.task,phase:evidence.kind.slice(6),nextStep:evidence.results.length,results:evidence.results}:null;
+          release = {status:book?'settled':'unavailable',work};
+          if (pending) {
+            if (!tx.available(prior))
+              return {check:scope.blocked('release','defer','outgoing-actor-not-detailed')};
+            tx.action(prior,'cancel-order',{agent,generation,order:sequence});
+            if (pending.reservation)
+              tx.allocate(pending.reservation.board);
+            release = {status:'cancelled',work};
+          }
+        }
+        tx.action(system,'issue-order',{agent,generation,order});
+        const sequence = probeTrial(system+'/orders',{agent,generation}).value.active.sequence;
+        const owner = {...actor,sequence};
+        let reservation;
+        if (order.reservation) {
+          const {board} = order.reservation;
+          tx.allocate(board,detailed);
+          const sample = probeTrial(board+'/claim',owner), claim = sample.value;
+          if (claim?.status!=='held') return {check:scope.blocked('reservation',claim?.status==='failed'?'refuse':'defer',
+            claim?.reason??'reservation-unavailable',{board,require:order.reservation.require})};
+          reservation = scope.pass('reservation',{board,grants:claim.grants,until:claim.until});
+        }
+        const settlement = settleActivation?.(tx,owner);
+        if (settlement?.status==='blocked') return {settlement,
+          check:scope.blocked('settlement','defer',settlement.blocker.reason,settlement.blocker)};
+        tx.commit();
+        return {order:owner,...(settlement&&{settlement}),...(reservation&&{check:reservation}),...(release&&{release})};
+      }
+      if (storyReferences) {
+        const started = storyClock?.();
+        nextStoryReferences = storyReferences.advance(storyReferenceState,at,completedQuery(),events,storyLifecycleState,makeEmit('world'));
+        completed = undefined;
+        if (storyClock) finishStoryPhase('references',started);
+      }
+      if (storyTriggers) {
+        const started = storyClock?.();
+        const activated = storyTriggers.advance(storyTriggerState, events, at, completedQuery);
+        nextStoryTriggers = activated.state;
+        storyStarts = activated.starts;
+        if (storyClock) finishStoryPhase('triggers',started);
+      }
+      let queueUpdate;
+      if (incidentCandidates) {
+        const started = storyClock?.();
+        queueUpdate = incidentCandidates.advance(incidentCandidateState,storyStarts,candidateCommands,at,completedQuery,cleanedStories,makeEmit('world'));
+        if (storyClock) finishStoryPhase('scheduler',started);
+      }
+      if (queueUpdate) storyStarts = queueUpdate.starts;
+      if (storyLifecycle) {
+        const started = storyClock?.();
+        ({state:nextStoryLifecycle,gates:nextStoryFeasibility} =
+          storyLifecycle.advance(cleanedStories,storyStarts,storyCommands,at,makeEmit('world'),events,completedQuery,
+            storyFeasibilityState,nextStoryReferences,dispatchCommitment,settleStory,queueUpdate?.released,
+            makeEmit('world',undefined,undefined,typedConsequences)));
+        if (storyClock) finishStoryPhase('lifecycle',started);
+      } else if (storyStarts.length) {
+        const emit = makeEmit('world');
+        for (const row of storyStarts) emit('story-started',row);
+      }
+      if (incidentCooldowns) {
+        const started = storyClock?.();
+        W.incidentCooldowns.publish(incidentCooldowns,nextStoryLifecycle,at,makeEmit('world'));
+        if (storyClock) finishStoryPhase('cooldowns',started);
+      }
+      observeSocial();
+      const routed = eventActions?.route(eventActionCounts, events, at,{trackCauses:Boolean(eventStream)});
       if (routed?.commands.length) {
-        check(routed.commands.length + packCommands().length - commands.length <= 100000, 'Pending command budget exceeded');
+        check(routed.commands.length + packCommands().length - commands.length <= maxPendingCommands, 'Pending command budget exceeded');
         const emit = makeEmit('world');
         for (const row of routed.scheduled) emit('event-action-scheduled', row);
       }
       const submitted=playback?.has(at)?parseCommands(playback.get(at),true,at+1):null;
-      if(submitted)check(submitted.length+(routed?.commands.length??0)+packCommands().length-commands.length<=100000,
+      if(submitted)check(submitted.length+(routed?.commands.length??0)+packCommands().length-commands.length<=maxPendingCommands,
         'Pending command budget exceeded');
       if(observers.length){
         freeze(events);
-        const snapshot=freeze(nextStates), completed=Q.create(
-          view(nextWorld,snapshot,publishedSignals,at,receipts,causalState,nextChunkState),systems,projection);
+        const snapshot=freeze(nextStates), completed=Q.create(completedView(),systems,projection);
         nextStates={...snapshot};
         for(const name of observers){
           const managed=chunks?.managed.has(name);
@@ -1026,7 +1700,23 @@
       const memory = historyWith(events,nextWorld.history);
       const dependencyReport = trace && trace.report();
       const nextCausal = causal?.finish();
-      const nextView = {...view(nextWorld,freeze(nextStates),publishedSignals,at,receipts,nextCausal,nextChunkState),...memory};
+      const nextFacts = factLedger?.finish();
+      const nextKnowledge = knowledgeLedger?.snapshot();
+      const nextBeliefs = beliefLedger?.snapshot();
+      const nextMemories = memoryLedger?.snapshot();
+      const nextCustody = custodyLedger?.snapshot();
+      const nextSiteHistory = siteLedger?.snapshot();
+      const nextView = {...view(nextWorld,freeze(nextStates),publishedSignals,at,receipts,nextCausal,nextChunkState),...memory,events:freeze(events),
+        ...(nextFacts && {worldFacts:nextFacts}),
+        ...(nextKnowledge && {knowledge:nextKnowledge}),
+        ...(nextBeliefs && {beliefs:nextBeliefs}),
+        ...(nextMemories && {memories:nextMemories}),
+        ...(nextCustody && {custody:nextCustody}),
+        ...(nextSiteHistory && {siteHistory:nextSiteHistory}),
+        ...(storyTriggers && {storyTriggers:nextStoryTriggers}),...(storyLifecycle && {storyLifecycle:nextStoryLifecycle}),
+        ...(nextStoryFeasibility && {storyFeasibility:nextStoryFeasibility}),
+        ...(nextStoryReferences && {storyReferences:nextStoryReferences}),
+        ...(queueUpdate && {incidentCandidates:queueUpdate.state})};
       if (navigationBefore) for (const notice of navigationChanges(navigationBefore,Q.create(nextView,systems,projection))) {
         check(nextWrites.length<P.spatialDependencies.limit,'Spatial write budget exceeded');
         nextWrites.push(dependencies.write(notice.writer,notice.field,notice.bounds,notice.reason));
@@ -1037,6 +1727,7 @@
       const recordView=evidence&&weather?{...nextView,weatherTrackState:nextWeather}:nextView;
       const retained=evidence?.prepare(recordView,()=>Q.create(recordView,systems,projection),commands,observedTiming);
       tick = at;
+      checkpointStream = eventStream;
       world = nextWorld;
       states = nextStates;
       outputs = freeze(nextOutputs);
@@ -1046,9 +1737,21 @@
       history = memory.history;
       dropped = memory.dropped;
       lastEvents = freeze(events);
+      if (storyTiming) lastStoryTiming = freeze(storyTiming);
       lastTransfers = receipts;
       causalState = nextCausal;
+      worldFactState = nextFacts;
+      knowledgeState = nextKnowledge;
+      beliefState = nextBeliefs;
+      memoryState = nextMemories;
+      custodyState = nextCustody;
+      siteHistoryState = nextSiteHistory;
       chunkState = nextChunkState;
+      storyTriggerState = nextStoryTriggers;
+      storyLifecycleState = nextStoryLifecycle;
+      storyFeasibilityState = nextStoryFeasibility;
+      storyReferenceState = nextStoryReferences;
+      if (queueUpdate) incidentCandidateState = queueUpdate.state;
       sampling = nextSampling;
       spatialSampling = nextSpatial;
       pendingWrites = freeze(nextWrites);
@@ -1069,7 +1772,8 @@
       lastCheckpoint=undefined;
       for (const [name,{calls,ms}] of Object.entries(spent)) {
         const value = metrics.get(name) ?? {calls:0,ms:0,maxMs:0};
-        metrics.set(name,{calls:value.calls+calls,ms:value.ms+ms,maxMs:Math.max(value.maxMs,ms)});
+        metrics.set(name,{...value,calls:value.calls+calls,ms:value.ms+ms,maxMs:Math.max(value.maxMs,ms),
+          maxCallsPerTick:Math.max(value.maxCallsPerTick??0,calls)});
       }
       if(workerBatches){
         partitionBatches+=workerBatches;
@@ -1106,23 +1810,93 @@
       try{return await stepInBackground();}
       finally{asyncActive=false;}
     }
-    function advance(to, {onTick,stopOnOutcome = false} = {}) {
-      check(!asyncActive,'A simulation advance is already in progress');
-      check(tickOK(to) && to >= tick, 'Target tick precedes current state or exceeds the run budget');
-      while (tick < to && (!stopOnOutcome || scenario.status === 'running')) {
+    function runBlock(end, held, eventValues) {
+      const first = tick+1, commands = scheduled.get(first) ?? [];
+      if (commands.some(row => row.action !== 'world/input')) return false;
+      const nextManual = {...manual};
+      for (const {args:{port,value}} of commands) nextManual[port] = portValue(ports.inputs[port],value,port);
+      Object.assign(nextManual,held);
+      const input = currentValues(blockSystem,nextManual,{},outputs,delays);
+      const start = profile ? clock() : 0, samples = end-tick;
+      const {state,events:emitted} = systems[blockSystem].stepBlock(states[blockSystem],{start:tick,end,input});
+      if (eventValues) for (const [port,rows] of Object.entries(emitted))
+        eventValues[port] = W.rates.add(eventValues[port]??[],rows,'event');
+      const nextOutputs = {};
+      readOutputs(blockSystem,state,undefined,nextOutputs);
+
+      states = freeze({[blockSystem]:state});
+      outputs = freeze(nextOutputs);
+      manual = freeze(nextManual);
+      lastSignals = freeze({...manual,...outputs});
+      lastEvents = freeze([]);
+      currentQuery = undefined;
+      lastCheckpoint = undefined;
+      lastDependencies = null;
+      scheduled.delete(first);
+      tick = end;
+      checkpointStream = eventStream;
+      if (profile) {
+        const prior = metrics.get(blockSystem) ?? {calls:0,ms:0,maxMs:0};
+        const ms = clock()-start;
+        metrics.set(blockSystem,{calls:prior.calls+samples,ms:prior.ms+ms,maxMs:Math.max(prior.maxMs,ms),
+          blockCalls:(prior.blockCalls??0)+1,blockSamples:(prior.blockSamples??0)+samples});
+      }
+      return true;
+    }
+    function blockEnd(to) {
+      commandTicks ??= [...scheduled.keys()].sort((a,b) => a-b);
+      let low = 0, high = commandTicks.length;
+      while (low < high) {
+        const mid = Math.floor((low+high)/2);
+        if (commandTicks[mid] <= tick+1) low = mid+1;
+        else high = mid;
+      }
+      return Math.min(to,tick+blockSize,(commandTicks[low] ?? Infinity)-1);
+    }
+    function advanceBlocks(to, held, eventValues) {
+      while (tick < to) {
+        if (runBlock(blockEnd(to),held,eventValues)) continue;
+        check(held === undefined,'Held model inputs need a level-only sample block');
         step();
-        onTick?.(view(),query());
       }
       return view();
     }
-    async function advanceAsync(to,{onTick,stopOnOutcome=false}={}){
+    function advanceHeld(to, held) {
+      check(!asyncActive && tickOK(to) && to >= tick, 'Invalid held block target');
+      const values = Object.fromEntries(Object.entries(held).map(([port,value]) =>
+        [port,portValue(ports.inputs[port],value,port)]));
+      const eventValues = {};
+      advanceBlocks(to,values,eventValues);
+      return eventValues;
+    }
+    function advance(to, {onTick,stopOnOutcome = false,until} = {}) {
+      check(!asyncActive,'A simulation advance is already in progress');
+      check(tickOK(to) && to >= tick, 'Target tick precedes current state or exceeds the run budget');
+      check(until===undefined||typeof until==='function','Expected an until callback');
+      if (blockSystem && onTick === undefined && until===undefined) return advanceBlocks(to);
+      if (until?.(view(),query())) return view();
+      while (tick < to && (!stopOnOutcome || scenario.status === 'running')) {
+        step();
+        onTick?.(view(),query());
+        if (until?.(view(),query())) break;
+      }
+      return view();
+    }
+    async function advanceAsync(to,{onTick,stopOnOutcome=false,until}={}){
       check(!asyncActive,'A simulation advance is already in progress');
       check(tickOK(to)&&to>=tick,'Target tick precedes current state or exceeds the run budget');
+      check(until===undefined||typeof until==='function','Expected an until callback');
       asyncActive=true;
       try{
+        if (until&&await until(view(),query())) return view();
         while(tick<to&&(!stopOnOutcome||scenario.status==='running')){
+          if (blockSystem && onTick === undefined && until===undefined && runBlock(blockEnd(to))) {
+            await Promise.resolve();
+            continue;
+          }
           const completed=await stepInBackground();
           if(onTick)await onTick(completed,query());
+          if(until&&await until(completed,query())) break;
         }
         return view();
       }finally{asyncActive=false;}
@@ -1130,29 +1904,63 @@
     function recording() {
       const trace=debug?.recording(),end=save();
       return freeze({format:runFormat,version:1,origin,commands:added.slice(),end,...(trace&&{trace}),
+        ...(eventBranch&&eventStream!==origin.eventStream&&{eventBranch}),
         ...(evidence&&{evidence:evidence.document(end)})});
     }
-    return Object.freeze({view,query,projectEntities,step,advance,stepAsync,advanceAsync,...(timeline&&{timeline}),...(regions&&{regions:regions.api}),
+    function queues(){
+      let pending=0;
+      for(const entries of scheduled.values())pending+=entries.length;
+      const rows={commands:{pending,capacity:maxPendingCommands,unit:'commands'}};
+      const capacity=W.rates.maxEvents;
+      eventInputs??=Object.keys(ports.inputs).filter(port=>ports.inputs[port].type==='event');
+      for(const port of eventInputs){
+        if(Array.isArray(sampling?.[port]))rows['events/'+port]={pending:sampling[port].length,capacity,unit:'events'};
+        const slots=delays[port];
+        if(slots)rows['delay/'+port]={pending:slots.reduce((sum,slot)=>sum+slot.length,0),
+          capacity:capacity*slots.length,unit:'events'};
+      }
+      for(const name of names)for(const [port,count] of Object.entries(systems[name].childQueueDepths?.(states[name])??{}))
+        rows['bridge/'+name+'/'+port]={pending:count,capacity,unit:'events'};
+      return rows;
+    }
+    return Object.freeze({view,query,projectEntities,step,advance,stepAsync,advanceAsync,eventBranch,...(blockSystem&&{[W.models.heldAdvance]:advanceHeld}),...(timeline&&{timeline}),...(regions&&{regions:regions.api}),
       ...(debug&&{stepFrame:debug.latest,stepAttempt:debug.attempt}),
       get scenario(){return scenario;}, get history(){return history;}, get events(){return lastEvents;},
-      schedule:commands => enqueue(commands,true),checkpoint:save,recording,
+      committedEvents:()=>Object.freeze(lastEvents.map(row=>E.read(row,world.id,eventStream))),
+      ...(storyClock&&{storyTiming:()=>lastStoryTiming}),
+      schedule:commands => enqueue(commands,true),checkpoint:save,recording,queues,
+      storyDiagnostics:() => plan.storyDiagnostics ?? [],
       commandCounts:() => {
         const all=[...origin.pending,...added];
         return {scheduled:all.length,applied:all.filter(command=>command.tick<=tick).length,pending:packCommands().length};
       },
+      processing:() => Object.fromEntries(names.flatMap(name=>{
+        const report=systems[name].processingReport?.()??systems[name].childProcessing?.(states[name]);
+        return report && Object.keys(report).length ? [[name,report]] : [];
+      })),
       profile:() => rates && profile ? Object.fromEntries(names.map(name=>[name,
         metrics.get(name)??{calls:0,ms:0,maxMs:0}])) : Object.fromEntries(metrics),
       rates:() => rates ? {subdivision:rates.subdivision,systems:rates.rates} : null,
-      composition:() => composition ??= W.systemComposition.describe(plan),
+      composition() {
+        composition ??= W.systemComposition.describe(plan);
+        if (inspection?.execution.tick !== tick) {
+          const execution = W.executionPlan.describe(plan,{
+            tick,world,states,delays,sampling,chunkState,partitioned,observers
+          });
+          inspection = Object.freeze({...composition,execution});
+        }
+        return inspection;
+      },
       partitions:()=>({workers:workerPool?.size??0,peakWorkers,batches:partitionBatches,
         systems:Object.fromEntries(names.filter(name=>jobsBySystem.has(name)).map(name=>[name,jobsBySystem.get(name)]))}),
       dependencies:() => ({declarations:dependencies.describe,
         ...(lastDependencies ?? {changes:[],affected:[],work:[]}),pending:pendingWrites}),
-      fork:() => branch(save(),playback),
+      fork:({branch:label}={}) => branch(save(),playback,label),
       reset:() => branch(origin)});
-    function branch(checkpoint,remaining){
-      return create(checkpoint.world,{checkpoint,implementations,profile,validated:true,workerPool,traceSteps,
-        recordRun:evidence?.plan,playback:remaining,skipInitialSubmission:true,validateEntities},
+    function branch(checkpoint,remaining,label){
+      return create(checkpoint.world,{checkpoint,implementations,profile,validated:true,workerPool,traceSteps,storyClock,
+        recordRun:evidence?.plan,playback:remaining,skipInitialSubmission:true,validateEntities,branch:label??eventBranch,
+        legacyEvents:legacyEvents&&label===undefined},
         checkpoint.world===plan.world?branchToken:undefined);
     }
   }
@@ -1160,7 +1968,8 @@
     const playback=W.runRecords.playback(log), start=checkpoint??log.origin;
     check(tickOK(start.tick)&&start.tick>=log.origin.tick&&start.tick<=log.end.tick&&
       ['id','seed','dt'].every(key=>start.world?.[key]===log.origin.world[key]),'Checkpoint lies outside the recording');
-    return create(start.world,{...options,checkpoint:start,playback,skipInitialSubmission:checkpoint!==undefined});
+    return create(start.world,{...options,checkpoint:start,playback,skipInitialSubmission:checkpoint!==undefined,
+      branch:log.eventBranch,legacyEvents:log.eventBranch===undefined&&log.end.eventStream===undefined});
   }
   function prepareReplay(log,options){
     return openRecording(log,{...options,checkpoint:undefined,recordRun:log?.evidence?.plan??options?.recordRun});
@@ -1181,7 +1990,8 @@
   }
   async function replayAsync(log,options){
     const run=prepareReplay(log,options);
-    await run.advanceAsync(log.end.tick);
+    if(options?.onStart)await options.onStart(run);
+    await run.advanceAsync(log.end.tick,{onTick:options?.onTick});
     return assertReplay(run,log,options);
   }
   function verification(log,mismatch){
@@ -1215,7 +2025,7 @@
       'Simulation diff needs two checkpoints at the same tick');
     return {tick:a.tick,time:{before:a.tick*a.world.dt,after:b.tick*b.world.dt},edits:Q.keyedChanges(a,b)};
   }
-  W.runtime = Object.freeze({register,validate,create,openRecording,replay,replayAsync,verify,verifyAsync,diff,firstDivergence:W.stepDebug.firstDivergence,
-    checkpointFormat,runFormat,maxTick,partitionKernel,checkpointsEqual,
+  W.runtime = Object.freeze({register,validate,storyPreflight,create,openRecording,replay,replayAsync,verify,verifyAsync,diff,firstDivergence:W.stepDebug.firstDivergence,
+    checkpointFormat,runFormat,maxTick,partitionKernel,checkpointsEqual,modelInterface,
     prefabInterfaces:(world,{implementations}={})=>compile(world,implementations,true)});
 })(KIT);

@@ -21,7 +21,21 @@ and playback rate. Sound world events use their committed simulation tick.
 Adaptive cues use the score's authored musical onset, including cues
 delivered between picture frames.
 
+[Room response probes](room-response.md) can add position-dependent reverberation to spatial export and carry tails into a cropped range. A [pinned binaural profile](pinned-binaural.md) applies the same headset responses in spatial preview and WAV delivery. [Directional emitters](directional-audio.md) apply source-local radiation before panning in preview and export. [Per-source propagation](propagation-doppler.md) aligns delayed arrivals and moving-emitter pitch in the scene soundtrack. [Stick-slip contacts](stick-slip-audio.md) synthesize friction release pulses from the recorded world readings.
+
 Feed the aligned WAV files into [per-stem control signals](graph-media.md#per-stem-control-signals) to drive visuals from independent envelopes, bands, and triggers.
+
+Use [audio editorial](audio-editorial.md) to spot a transient inside a take,
+comp alternate performances, and audition the same edits against a recut.
+
+See [Foley and perspective](foley-perspective.md) for editorial assets and
+post buses for dialogue, Foley, effects, ambience, and music.
+
+Use [audio delivery](audio-delivery.md) to hand off an aligned post mix as
+Broadcast Wave and an editorial timeline.
+
+Use [adaptive story audio](adaptive-story-audio.md) to print aligned WAVs and
+beat-linked cue reports directly from a verified world recording.
 
 ## Soundtrack file
 
@@ -77,11 +91,16 @@ All file paths are relative to the soundtrack document.
   maps a section's authored layer level to an additional loop. The section
   `fade` sets transition fades in seconds. Cue intents play the resource
   as a one-shot. A cue resource also defined as a spatial cue can use the
-  intent's emitter.
+  intent's emitter. For an instrument production, `music.production.world`
+  lets named scene cues trigger percussion phrases and make room for effects
+  or silence. [Arrange scene sound with the score](music-world-score.md)
 - **Tracks.** Place a WAV or a named `audio` port from a graph. A graph asset
   can set `time`, `seed`, and `inputs`. Tracks accept `time`, `duration`,
   source `offset`, `gain`, playback `rate`, and `loop`. A looping track
   with no duration continues through the exported range.
+  A track can use `frame` and `fps` in place of `time`. A
+  [printed take](audio-prints.md#place-a-print-against-picture) can align
+  one of its markers to that frame.
 
 Set optional `world` to a native world file to accompany a diorama with a
 sound simulation. It supplies committed spatial and score state while the

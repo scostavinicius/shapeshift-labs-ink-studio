@@ -34,11 +34,11 @@ const VolumeLight = (() => {
     scalar.projection=projected;return scalar;
   }
 
-  function lighting(settings, color, palette, { time = 0, localLights = true, localShadows = true, celestialSun, areaLights = [] } = {}) {
+  function lighting(settings, color, palette, { time = 0, localLights = true, localShadows = true, celestialSun, areaLights = [], cutoutShadow } = {}) {
     const { ambient = .35, sun, point, points = [], spots = [], shadow } = settings || {};
     if (shadow !== undefined && typeof shadow !== 'function') throw new TypeError('Atmosphere shadow must be a ray query');
     if (!Array.isArray(points) || !Array.isArray(spots)) throw new TypeError('Volume points and spots must be arrays');
-    let directional = null, animatedLocals = Boolean(areaLights?.some(light => light.cookie?.animated));
+    let directional = null, animatedLocals = Boolean(cutoutShadow || areaLights?.some(light => light.cookie?.animated));
     if (sun) {
       directional = { direction: unit(celestialSun?.direction ?? sun.direction, 'Sun direction'), rgb: color(sun.color ?? '#fff3dc', palette),
         intensity: number(sun.intensity ?? .7, 0, 64, 'Sun intensity') * (celestialSun?.gain ?? 1),
@@ -83,6 +83,8 @@ const VolumeLight = (() => {
     const locals = localLights ? [...pointLights, ...preparedSpots] : [];
     return { ambient: number(ambient, 0, 64, 'Ambient light'), sun: directional, point: single,
       locals, surfaceSpots: preparedSpots.filter(light => light.surfaceIntensity), shadow, localShadows,
+      localShadow: cutoutShadow ? (x, y, z, direction, stop) =>
+        cutoutShadow([x, y, z], direction, stop) || shadow?.(x, y, z, direction, stop) : shadow,
       areas:localLights?areaLights:[],
       paletteLocals: Boolean(single?.paletteField?.strength || locals.some(light => light.paletteField?.strength)), animatedLocals: Boolean(localLights && animatedLocals) };
   }
@@ -138,9 +140,9 @@ const VolumeLight = (() => {
   }
 
   function addLocal(media, x, y, z, output, direction, anisotropy = 0) {
-    const { point, locals, localShadows, shadow } = media;
-    if(media.areas?.length){const rgb=areas.evaluate(media.areas,[x,y,z],[0,0,0],[0,0,0],{volume:true,direction,anisotropy,shadow:localShadows===false||!shadow?null:(o,d,s)=>shadow(...o,d,s)});for(let k=0;k<3;k++)output[k]+=rgb[k];}
+    const { point, locals, localShadows, localShadow: shadow = media.shadow } = media;
     const localShadow = localShadows === false ? null : shadow;
+    if(media.areas?.length){const rgb=areas.evaluate(media.areas,[x,y,z],[0,0,0],[0,0,0],{volume:true,direction,anisotropy,shadow:localShadow?(o,d,s)=>localShadow(...o,d,s):null});for(let k=0;k<3;k++)output[k]+=rgb[k];}
     if (point) illuminateLocal(point, output, x, y, z, direction, anisotropy, localShadow);
     if (locals) for (const light of locals)
       illuminateLocal(light, output, x, y, z, direction, anisotropy, localShadow);
@@ -288,9 +290,10 @@ const VolumeLight = (() => {
     number(maxGap, .001, 10, 'Volume history time gap');
     let last;
     return {
-      filter(color, depth, time, key) {
+      filter(color, depth, time, key, { owners,boundaries } = {}) {
         if (last && last.key === key && time > last.time && time - last.time <= maxGap && last.depth.length === depth.length) {
           for (let p = 0; p < depth.length; p++) {
+            if (owners?.[p] !== last.owners?.[p] || boundaries?.[p] || last.boundaries?.[p]) continue;
             const dz = depth[p] === last.depth[p] ? 0 : Math.abs(depth[p] - last.depth[p]);
             // A sharp change in transmittance signals disocclusion or a fast density change.
             if (dz > depthTolerance || Math.abs(color[p * 4 + 3] - last.color[p * 4 + 3]) > .18) continue;
@@ -300,7 +303,8 @@ const VolumeLight = (() => {
             }
           }
         }
-        last = { time, key, depth: depth.slice(), color: color.slice() };
+        last = { time, key, depth: depth.slice(), color: color.slice(),
+          owners: owners?.slice(), boundaries: boundaries?.slice() };
         return color;
       },
       clear() { last = undefined; }

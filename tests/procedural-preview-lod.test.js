@@ -71,7 +71,8 @@ test('Gaussian LOD locks silhouettes, owner edges, material seams and authored m
   }
   assert.equal(result.status,'constrained');
   assert.deepEqual(result,lod.mergeSplats(originals,options));
-  assert.equal(lod.mergeSplats(originals,{...options,maxPairs:1}).status,'budget');
+  assert.equal(lod.mergeSplats(originals,{...options,maxSeamPairs:1}).status,'budget');
+  assert.equal(lod.mergeSplats(originals,{...options,maxPairs:1}).work.merged,1);
 });
 
 test('dense single-material surfaces stay inside the pair budget', () => {
@@ -83,6 +84,66 @@ test('dense single-material surfaces stay inside the pair budget', () => {
   assert.equal(reduced.status, 'ok');
   assert.equal(reduced.splats.length, 500);
   assert.equal(new Set(reduced.splats.flatMap(splat => splat.members)).size, samples.length);
+  assert.equal(reduced.work.seamPairs, 0);
+});
+
+const sample = (id, owner, x, y, z = 0) => ({
+  id, owner, position: [x, y, z], normal: [0, 0, 1], radius: 0.01, color: [0.5, 0.5, 0.5]
+});
+
+test('seam checks leave the full merge pair budget available', () => {
+  const samples = [
+    sample('a', 'first', 0.2, 0.06), sample('b', 'first', 0.202, 0.06),
+    sample('c', 'second', 0.32, 0), sample('d', 'second', 0.32, 0.12)
+  ];
+  const reduced = lod.mergeSplats(samples, {
+    target: 3, maxDistance: 0.04, seamDistance: 0.125, maxSeamPairs: 4, maxPairs: 1
+  });
+  assert.equal(reduced.status, 'ok');
+  assert.equal(reduced.work.seamPairs, 4);
+  assert.equal(reduced.work.seamUnverified, 0);
+  assert.equal(reduced.work.pairs, 1);
+  assert.deepEqual(reduced.splats[0].members, ['a', 'b']);
+});
+
+test('a truncated seam scan merges checked interiors and keeps unchecked samples retryable', () => {
+  const samples = [
+    sample('interior-a', 'first', 0, 0), sample('interior-b', 'first', 0.02, 0),
+    sample('edge-a', 'first', 1.2, 0.06), sample('clear', 'second', 1.32, 0),
+    sample('edge-b', 'second', 1.32, 0.06), sample('edge-c', 'first', 1.201, 0.06)
+  ];
+  const options = { target: 4, maxDistance: 0.04, seamDistance: 0.125 };
+  const reduced = lod.mergeSplats(samples, { ...options, maxSeamPairs: 1 });
+  assert.equal(reduced.status, 'budget');
+  assert.equal(reduced.work.seamPairs, 1);
+  assert.equal(reduced.work.seamUnverified, 4);
+  assert.equal(reduced.work.merged, 1);
+  assert.deepEqual(reduced.splats[0].members, ['interior-a', 'interior-b']);
+  for (const [i, row] of reduced.splats.slice(1).entries()) {
+    const original = samples[i + 2];
+    assert.deepEqual(row.members, [original.id]);
+    assert.deepEqual(row.position, original.position);
+    assert.equal(row.protect, false);
+  }
+
+  const retry = lod.mergeSplats(reduced.splats, options);
+  assert.equal(retry.status, 'constrained');
+  assert.equal(retry.work.seamUnverified, 0);
+  assert.deepEqual(retry.splats.filter(row => row.protect).map(row => row.id), ['edge-a', 'edge-b', 'edge-c']);
+  assert.throws(() => lod.mergeSplats(samples, { ...options, maxSeamPairs: 0 }), /bounded samples/);
+});
+
+test('seam bounds skip dense neighbouring groups that cannot touch', () => {
+  const samples = Array.from({ length: 4800 }, (_, i) => sample(
+    String(i), i < 2400 ? 'first' : 'second', i < 2400 ? 0.035 : 0.21,
+    (i % 60) * 0.0001, (Math.floor(i / 60) % 40) * 0.0001
+  ));
+  const reduced = lod.mergeSplats(samples);
+  assert.equal(reduced.status, 'ok');
+  assert.equal(reduced.splats.length, 2400);
+  assert.equal(reduced.work.seamPairs, 0);
+  assert.equal(reduced.work.seamUnverified, 0);
+  assert(reduced.splats.every(row => row.members.every(id => samples[Number(id)].owner === row.owner)));
 });
 
 test('screen coverage can reject a reduction while keeping the full authored splats', () => {

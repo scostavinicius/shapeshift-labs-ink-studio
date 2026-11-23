@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Switchback Courier · Ink Studio</title>
+<style>
+  :root{color-scheme:dark;--bg:#101c25;--ink:#f4edde;--muted:#afc1c8;--line:#3b515a;--panel:#1a2b36;--mint:#8fe5d2;--gold:#ffc179}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.48 system-ui,sans-serif}
+  main{max-width:1130px;margin:auto;padding:clamp(14px,4vw,47px)}
+  header{margin-bottom:18px}
+  h1{margin:0 0 10px;font:500 clamp(2.3rem,6.5vw,4.15rem)/.98 Georgia,serif;letter-spacing:-.044em}
+  p{margin:0;color:var(--muted)}
+  button{font:inherit;color:var(--ink);background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:6px 11px;cursor:pointer}
+  button:hover,button[aria-pressed=true]{border-color:var(--mint);color:var(--mint)}
+  button:disabled{opacity:.55;cursor:default}
+  :focus-visible{outline:2px solid var(--gold);outline-offset:3px}
+  .transport,.steer{display:flex;gap:8px 10px;align-items:center;flex-wrap:wrap;margin:0 0 12px}
+  input{width:clamp(100px,22vw,290px);accent-color:var(--mint)}
+  output{color:var(--mint);font:650 .82rem ui-monospace,monospace}
+  .panels{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px}
+  figure{min-width:0;margin:0;border:1px solid var(--line);border-radius:7px;overflow:hidden;background:var(--panel)}
+  figure:nth-child(2){border-color:#548f89}
+  figcaption,.readout{padding:8px 12px}
+  figure:nth-child(2) figcaption{color:var(--mint)}
+  .stage{position:relative;background:#203641}
+  canvas{display:block;width:100%;height:auto;image-rendering:pixelated}
+  .guides{position:absolute;inset:0;pointer-events:none}
+  .readout{color:var(--muted);font:600 .8rem/1.5 ui-monospace,monospace;min-height:4.8em}
+  .steer{margin:13px 0 0}
+  .steer span{color:var(--muted)}
+  #status{margin-top:10px}
+  @media(max-width:635px){.panels{grid-template-columns:1fr}.readout{min-height:0}}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <h1>Switchback Courier</h1>
+  <p>Use the arrow keys to steer both rigs, or replay the corner and reversal. Guides mark planted feet and the next landing.</p>
+</header>
+<div class="transport">
+  <button id="replay" disabled>Play replay</button>
+  <button id="pause" disabled>Resume</button>
+  <input id="scrub" type="range" min="0" step="1" value="0" aria-label="Replay frame" disabled>
+  <output id="time" for="scrub"></output>
+  <button id="guides" aria-pressed="true" disabled>Foot guides</button>
+</div>
+<section class="panels" aria-label="Same steering input on two procedural rigs">
+  <figure><figcaption>Standard gait</figcaption>
+    <div class="stage"><canvas id="baseline" width="236" height="168" aria-label="Standard gait courier"></canvas>
+    <canvas class="guides" width="236" height="168" aria-hidden="true"></canvas></div>
+    <div id="baseline-readout" class="readout"></div>
+  </figure>
+  <figure><figcaption>Motion-matched gait</figcaption>
+    <div class="stage"><canvas id="matched" width="236" height="168" aria-label="Motion-matched courier"></canvas>
+    <canvas class="guides" width="236" height="168" aria-hidden="true"></canvas></div>
+    <div id="matched-readout" class="readout"></div>
+  </figure>
+</section>
+<div class="steer" role="group" aria-label="Steering directions">
+  <span>Steer</span>
+  <button data-vector="0,1" aria-label="Steer north" disabled>↑</button>
+  <button data-vector="-1,0" aria-label="Steer west" disabled>←</button>
+  <button data-vector="0,-1" aria-label="Steer south" disabled>↓</button>
+  <button data-vector="1,0" aria-label="Steer east" disabled>→</button>
+  <button data-vector="0,0" disabled>Stop</button>
+</div>
+<p id="status" role="status">Preparing the two rigs…</p>
+</main>
+<script src="../../dist/ink-studio.browser.js"></script>
+<script src="scene.js"></script>
+<script type="module" src="demo.mjs"></script>
+</body>
+</html>

@@ -1,5 +1,7 @@
 # First-divergence debugging
 
+Use [aligned simulation review](aligned-simulation-review.md) for paired native traces, sub-sample events, WAVs, and cutaways on the same take clock.
+
 `sim diff --first` compares matching ticks from the common start through the
 first observed difference. The report identifies the tick, system, solver
 substep when available, and sampled inputs. Changed paths show left and

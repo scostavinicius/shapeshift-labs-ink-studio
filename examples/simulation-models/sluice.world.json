@@ -1,0 +1,19 @@
+{
+  "format": "ink-studio/world",
+  "version": 1,
+  "id": "sluice-scene",
+  "dt": 0.1,
+  "systems": {
+    "sluice": {
+      "kind": "simulation-model",
+      "config": { "model": { "file": "sluice.json", "revision": 1 } }
+    },
+    "overflow": {
+      "kind": "control",
+      "config": { "op": "threshold", "threshold": 0.05 }
+    }
+  },
+  "connections": [
+    { "from": "sluice/outletDepth", "to": "overflow/value" }
+  ]
+}

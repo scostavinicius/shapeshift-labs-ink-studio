@@ -1,0 +1,26 @@
+{
+  "format": "ink-studio/native-lighting-approval",
+  "version": 1,
+  "title": "Signal box at blue hour",
+  "scene": "signal-box.js",
+  "rig": "starting-rig.json",
+  "time": 0,
+  "evaluations": 30,
+  "grids": [
+    { "id": "handheld", "label": "Handheld", "width": 96, "height": 64 },
+    { "id": "standard", "label": "Standard", "width": 144, "height": 96 },
+    { "id": "detail", "label": "Detail", "width": 192, "height": 128 }
+  ],
+  "subjects": [
+    { "id": "visor", "select": { "object": "visor" } },
+    { "id": "lever", "select": { "object": "lever-accent" } }
+  ],
+  "checks": [
+    { "id": "visor-readability", "label": "Keep the visor readable", "type": "readability",
+      "subject": "visor", "grids": ["handheld"], "minPixels": 28, "minSamples": 20, "minLightnessP10": 0.055 },
+    { "id": "copper-accent", "label": "Hold the signature copper on the lever", "type": "swatch",
+      "subject": "lever", "swatch": "#c77f5d", "grids": ["handheld", "standard"], "minPixels": 12, "minShare": 0.90 },
+    { "id": "muted-closeup", "label": "Match the darker lever in the close-up reference", "type": "swatch",
+      "subject": "lever", "swatch": "#985b51", "grids": ["detail"], "minPixels": 12, "minShare": 0.92 }
+  ]
+}

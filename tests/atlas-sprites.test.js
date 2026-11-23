@@ -123,6 +123,109 @@ test('exported multi-elevation PNG atlases can be imported and placed without ex
   assert.throws(()=>K.sprite.atlas(atlas([[1,2,3,255]],{frames:[{rect:{x:1,y:0,width:1,height:1}}]})),/rectangle/);
 });
 
+test('view-space atlas normals follow each tile camera without changing its color frame', () => {
+  const source=world(undefined,true), options={width:35,height:31,directions:2,pitches:[.36],yaw:.43,maps:['normal']};
+  const asset=ink.spriteAtlas(source,options), view=ink.spriteAtlas(source,{...options,normalSpace:'view'});
+  assert.equal(asset.metadata.normalSpace,'asset');
+  assert.equal(view.metadata.normalSpace,'view');
+  assert.deepEqual(view.images.color,asset.images.color);
+  const {basis,dot}=require('../src/atlas-sprites.js');
+  const {width}=view.metadata;
+  for(const {rect,yaw,pitch} of view.metadata.frames){
+    const {right,up,normal}=basis(yaw,pitch);
+    let mapped=0;
+    for(let y=0;y<rect.height;y++)for(let x=0;x<rect.width;x++){
+      const at=((rect.y+y)*width+rect.x+x)*4;
+      if(!view.images.normal[at+3])continue;
+      assert(view.images.color[at+3]);
+      const worldNormal=Array.from(asset.images.normal.subarray(at,at+3),byte=>byte-127.5);
+      const expected=[right,up,normal].map(axis=>127.5+dot(axis,worldNormal));
+      expected.forEach((byte,i)=>close(view.images.normal[at+i],byte,2));
+      mapped++;
+    }
+    assert(mapped>25);
+  }
+});
+
+test('painted heights tilt atlas normals and preserve the underlying alpha, depth and color', () => {
+  const width = 8, height = 5;
+  const colors = Array.from({ length: width * height }, () => [160, 114, 62, 255]);
+  const shape = { type:'rect', rect:[2,1,3,3] };
+  const source = atlas(colors, { width, height, scenery: { bands:{face:0}, base:'face' },
+    bump: { paint:[{ shape, height:2 }] } });
+  const raised = K.sprite.atlas(source);
+  const sample = (asset, x, y) => {
+    const out = { color:[], normal:[], emission:[] };
+    return asset.sample(asset.select(0,'scenery',[0,0,1]),x,y,{depth:true},out) ? out : null;
+  };
+  assert.equal(raised.bumpHeight(2,1),2);
+  assert.equal(raised.bumpHeight(1,1),0);
+  const left = sample(raised,1,2), right = sample(raised,5,2);
+  close(left.normal[0],-Math.SQRT1_2);
+  close(right.normal[0],Math.SQRT1_2);
+  close(sample(raised,3,0).normal[1],Math.SQRT1_2);
+  assert.equal(left.alpha,1);
+  assert.equal(left.depth,0);
+  assert.deepEqual(left.color,[160/255,114/255,62/255]);
+  assert.equal(sample(raised,3,2).hasNormal,false);
+  const flat = K.sprite.atlas({ ...source, metadata:{...source.metadata,bump:{...source.metadata.bump,strength:0}} });
+  assert.equal(sample(flat,1,2).hasNormal,false);
+  const opposite = K.sprite.atlas({ ...source, metadata:{...source.metadata,bump:{paint:[
+    {shape,height:2},{shape,height:-2}
+  ]}} });
+  close(sample(opposite,1,2).normal[0],Math.SQRT1_2);
+  assert.deepEqual(raised.snapshot().images.color,source.images.color);
+  assert.deepEqual(K.sprite.atlas(raised.snapshot()).snapshot(),raised.snapshot());
+
+  const scene = world({atlas:raised,at:[0,0,0]});
+  const render = direction => ink.render(scene,{...view,ortho:true,transparent:true,passes:['depth'],
+    liveSun:{direction,ambient:.4,intensity:.8,shadows:false}});
+  const litLeft = render([-.9,0,.4]), litRight = render([.9,0,.4]);
+  assert.notDeepEqual(litLeft.rgb,litRight.rgb);
+  assert.deepEqual(litLeft.alpha,litRight.alpha);
+  assert.deepEqual(litLeft.passes.depth,litRight.passes.depth);
+});
+
+test('atlas bump paint does not cross transparent texels, scenery bands or frame borders', () => {
+  const colors = Array.from({ length:8 }, () => [200,140,70,255]);
+  colors[2] = [0,0,0,0];
+  const source = atlas(colors, { scenery:{bands:{front:0,back:2},base:'front',depthPaint:[
+    {band:'back',shape:{type:'rect',rect:[5,0,3,1]}}
+  ]}, bump:{paint:[
+    {height:3,shape:{type:'rect',rect:[0,0,3,1]}},
+    {height:2,shape:{type:'rect',rect:[5,0,3,1]}}
+  ]} });
+  const asset = K.sprite.atlas(source), view = asset.select();
+  for(const x of [1,3,4,5]) {
+    const out = {color:[],normal:[],emission:[]};
+    assert(asset.sample(view,x,0,{depth:true},out));
+    assert.equal(out.hasNormal,false);
+  }
+  const frames = [{x:0,y:0,width:4,height:1},{x:4,y:0,width:4,height:1}].map((rect,frame)=>({rect,frame}));
+  const card = K.sprite.atlas(atlas(colors,{frames,bump:{paint:[
+    {height:2,shape:{type:'rect',rect:[4,0,4,1]}}
+  ]}}));
+  for(const [frame,x] of [[0,3],[1,0]]) {
+    const out = {color:[],normal:[],emission:[]};
+    assert(card.sample(card.select(frame),x,0,{},out));
+    assert.equal(out.hasNormal,false);
+  }
+});
+
+test('bump slopes layer over an asset-space normal in the selected tile basis', () => {
+  const source = atlas([[160,114,62,255],[160,114,62,255],[160,114,62,255]], {
+    frames:[{yaw:Math.PI/2,rect:{x:0,y:0,width:3,height:1}}],
+    normalSpace:'asset', normal:Array.from({length:3},()=>[255,128,128,255]),
+    bump:{paint:[{height:2,shape:{type:'rect',rect:[1,0,1,1]}}]}
+  });
+  const asset=K.sprite.atlas(source), out={color:[],normal:[],emission:[]};
+  assert(asset.sample(asset.select(),0,0,{},out));
+  close(out.normal[0],Math.SQRT1_2);
+  close(out.normal[1],0);
+  close(out.normal[2],Math.SQRT1_2);
+  assert.deepEqual(asset.snapshot().images.normal,source.images.normal);
+});
+
 test('painted scenery interleaves vine and recess depth with opaque geometry and local fog', () => {
   const source=atlas([[250,24,24,255],[24,242,32,255]],{ scenery:{
     bands:{wall:0,vines:-.62,recess:.84},base:'recess',
@@ -272,4 +375,46 @@ test('a rebake can reuse a cel sidecar, preserving baked geometry and requiring 
   } finally {
     fs.rmSync(directory,{recursive:true,force:true});
   }
+});
+
+test('cutout mips conserve occupied texels per registered view and keep aligned source maps', () => {
+  const width = 13, height = 7, color = new Uint8Array(width * height * 4);
+  const depth = new Uint8Array(color.length), normal = new Uint8Array(color.length), emission = new Uint8Array(color.length);
+  let sourceCount = 0;
+  for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+    const p = (y * width + x) * 4;
+    if (x >= 5) { color.set([0, 0, 255, 255], p); continue; }
+    if ((x + y) % 3) { color.set([0, 0, 255, 127], p); continue; }
+    sourceCount++;
+    const b = x >= 2;
+    color.set([b ? 250 : 20, 30, 0, 255], p);
+    depth.set([b ? 255 : 0, 0, 0, 255], p);
+    normal.set(b ? [255, 128, 128, 255] : [128, 128, 255, 255], p);
+    emission.set([b ? 170 : 35, 0, 0, 255], p);
+  }
+  const metadata = { width, height, depthFormat: 'gray', depthRange: [-1, 1], cutoutMipmaps: true,
+    frames: [{ rect: { x: 0, y: 0, width: 5, height: 7 } }, { yaw: Math.PI, rect: { x: 5, y: 0, width: 8, height: 7 } }] };
+  const asset = K.sprite.atlas({ metadata, images: { color, depth, normal, emission } });
+  const front = asset.select(0, 'impostor', [0, 0, 1]), back = asset.select(0, 'impostor', [0, 0, -1]);
+  assert.equal(asset.cutoutLevel(front, .24), 2);
+  assert.equal(asset.cutoutLevel(front, 2), 0);
+  for (let level = 0; level <= 2; level++) {
+    const image = asset.cutoutImage(front, level);
+    assert.equal(image, asset.cutoutImage(front, level));
+    assert.equal(image.covered, Math.round(sourceCount * image.width * image.height / 35));
+    const out = { color: [], normal: [], emission: [] };
+    for (let y = 0; y < image.height; y++) for (let x = 0; x < image.width; x++) {
+      if (!asset.cutoutSample(front, image, (x + .5) * 5 / image.width, (y + .5) * 7 / image.height,
+        { depth: true, emission: true }, out)) continue;
+      const far = out.depth === 1;
+      assert.equal(out.depth, far ? 1 : -1);
+      assert.equal(Math.round(out.color[0] * 255), far ? 250 : 20);
+      assert.equal(out.color[2], 0);
+      assert.equal(out.normal[far ? 0 : 2], 1);
+      assert.equal(Math.round(out.emission[0] * 255), far ? 170 : 35);
+    }
+  }
+  assert.equal(asset.cutoutImage(back, 1).covered, 12);
+  assert.throws(() => asset.cutoutImage(front, 3), /mip level/);
+  assert.throws(() => K.sprite.atlas({ metadata: { ...metadata, cutoutMipmaps: { cutoff: 0 } }, images: { color } }), /cutoff/);
 });

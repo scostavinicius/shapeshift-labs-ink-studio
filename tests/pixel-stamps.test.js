@@ -115,7 +115,7 @@ test('diorama stamp frames render protected swatches, transparent holes and behi
 
 test('library presets expose editable indexed clips and named swatches', () => {
   const { clips, presets } = stamps.catalog();
-  assert.deepEqual(presets.map(entry=>entry.id),['star','glint','bubble','ember','burst']);
+  assert.deepEqual(presets.map(entry=>entry.id),['star','glint','bubble','ember','burst','glyph']);
   assert(clips.some(entry=>entry.id==='bubble-pop-small'));
   for (const {id} of clips) stamps.prepare(stamps.clip(id));
   for (const {id,variants} of presets) for (const variant of variants)
@@ -128,6 +128,25 @@ test('library presets expose editable indexed clips and named swatches', () => {
   assert.deepEqual(stamps.clip('ember-chip'),original);
   assert.throws(()=>stamps.clip('ember-chip',{swatches:{unknown:'#eeeeee'}}),/need roles/);
   assert.throws(()=>stamps.preset('bubble',{at:[0,0,0],period:1}),/whole effect/);
+});
+
+test('signal glyph cels open exact holes and the stream loops independently of the specimen', () => {
+  const outline = stamps.clip('glyph-outline-cross');
+  const { rgba } = stamps.image(outline, { time: .15 });
+  assert.equal(rgba[(3 * 7 + 3) * 4 + 3], 0);
+  assert.equal(rgba[(3 * 7) * 4 + 3], 255);
+
+  const example = require('../examples/signal-fall')({ KIT: K, makeBuilder });
+  const world = example.build(example.seed);
+  const frame = t => render(world, { w: 388, h: 240, px: 1, t }).rgb;
+  const first = frame(0), later = frame(.32);
+  assert.notDeepEqual(first, later);
+  assert.deepEqual(frame(4), first);
+  assert.deepEqual(frame(.32), later);
+  for (let y = 0; y < 240; y++) {
+    const start = (y * 388 + 204) * 3, end = (y + 1) * 388 * 3;
+    assert.deepEqual(first.subarray(start, end), later.subarray(start, end));
+  }
 });
 
 test('native stamp cues hide outside their window and move whole pixels through out-of-order seeks', () => {

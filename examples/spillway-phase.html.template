@@ -1,0 +1,134 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Winter Spillway</title>
+<style>
+  :root { color-scheme:dark; font:15px/1.45 system-ui,sans-serif; background:#142533; color:#e0ebea; }
+  * { box-sizing:border-box; }
+  body,p,h1,h2,figure,dl,dd { margin:0; }
+  main { max-width:1260px; margin:auto; padding:32px clamp(16px,4vw,45px); }
+  h1 { font:500 clamp(42px,5.2vw,66px)/1.03 Georgia,serif; letter-spacing:-.045em; color:#e2f3e4; }
+  .intro { margin:9px 0 22px; color:#b0c8cb; }
+  .layout { display:grid; grid-template-columns:minmax(0,1fr) 228px; gap:17px; align-items:start; }
+  figure,aside { background:#203744; border:1px solid #405d65; border-radius:8px; overflow:hidden; }
+  #scene { width:100%; height:auto; aspect-ratio:336/184; image-rendering:pixelated; display:block; }
+  .controls { display:flex; flex-wrap:wrap; align-items:center; gap:11px; padding:12px; border-top:1px solid #405d65; }
+  input[type=range] { flex:1 1 120px; min-width:0; accent-color:#9adddc; }
+  output { min-width:5.4ch; font-variant-numeric:tabular-nums; }
+  .cue { display:flex; flex-wrap:wrap; gap:7px; margin:12px 0 0; }
+  button { font:inherit; color:#d8eeeb; background:#1c3340; border:1px solid #55727a; border-radius:4px; padding:6px 9px; cursor:pointer; }
+  button[aria-pressed=true] { background:#a9d9d3; border-color:#a9d9d3; color:#192f39; }
+  #play { min-width:68px; }
+  :focus-visible { outline:2px solid #daedc4; outline-offset:2px; }
+  aside { padding:15px; }
+  h2 { font-size:16px; margin-bottom:11px; color:#def0e9; }
+  dl { display:grid; gap:10px; }
+  dl div { display:flex; justify-content:space-between; gap:8px; align-items:baseline; }
+  dt { color:#b7cdd0; font-size:13px; }
+  dd { font-variant-numeric:tabular-nums; }
+  .colors { height:9px; display:flex; overflow:hidden; border-radius:2px; margin:14px 0 12px; background:#1b303c; }
+  .colors span:nth-child(1) { background:#55a5b1; }
+  .colors span:nth-child(2) { background:#85c6ce; }
+  .colors span:nth-child(3) { background:#d1f0da; }
+  hr { width:100%; border:0; height:1px; background:#405d65; margin:14px 0; }
+  .note { font-size:13px; color:#b6c8ca; margin-top:13px; }
+  @media(max-width:810px) { main { padding-top:20px; } .layout { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Winter Spillway</h1>
+  <p class="intro">Ice grows below the cold sluice, breaks free, and melts into the downstream current.</p>
+  <div class="layout">
+    <div>
+      <figure>
+        <img id="scene" width="336" height="184" alt="A snow-edged mountain spillway and the ice lip carried across its teal channel.">
+        <div class="controls">
+          <button id="play" type="button">Pause</button>
+          <input id="seek" type="range" min="0" step="1" aria-label="Scene time">
+          <output id="seconds" for="seek"></output>
+        </div>
+      </figure>
+      <nav class="cue" aria-label="Simulation stages" id="cues"></nav>
+    </div>
+    <aside aria-label="Mass and heat ledger">
+      <h2>Mass and heat</h2>
+      <dl>
+        <div><dt>Liquid</dt><dd id="liquid"></dd></div>
+        <div><dt>Ice in the field</dt><dd id="field"></dd></div>
+        <div><dt>Rigid ice</dt><dd id="solid"></dd></div>
+        <div><dt>Drifting ice</dt><dd id="afloat"></dd></div>
+      </dl>
+      <div class="colors" aria-hidden="true"><span id="liquidBar"></span><span id="fieldBar"></span><span id="solidBar"></span></div>
+      <dl><div><dt>Total water mass</dt><dd id="mass"></dd></div></dl>
+      <hr>
+      <dl>
+        <div><dt>Net climate heat</dt><dd id="exchange"></dd></div>
+        <div><dt>Heat balance error</dt><dd id="error"></dd></div>
+      </dl>
+      <p class="note">The same water moves between the field and the rigid piece. Heat includes the energy it takes to melt ice.</p>
+    </aside>
+  </div>
+</main>
+<script>
+  /* STUDY */
+  const el=id=>document.getElementById(id), seek=el('seek');
+  const stages=[
+    {name:'Pooling',tick:0,start:0},
+    {name:'Freezing',tick:moments.freeze+4,start:8},
+    {name:'Breakaway',tick:moments.lift+7,start:moments.lift},
+    {name:'Melting',tick:moments.melt+5,start:moments.melt},
+    {name:'Meltwater',tick:moments.lastMelt+14,start:moments.lastMelt}
+  ];
+  function frameAt(tick) {
+    const index=frames.findIndex(frame=>frame.tick>=tick);
+    return index<0?frames.length-1:index;
+  }
+  let index=frameAt(moments.freeze+4), playing=!matchMedia('(prefers-reduced-motion:reduce)').matches;
+  seek.max=frames.length-1;
+  function play() { el('play').textContent=playing?'Pause':'Play'; }
+  const buttons=stages.map(({name,tick})=>{
+    const button=document.createElement('button');
+    button.type='button';
+    button.textContent=name;
+    button.addEventListener('click',()=>{playing=false;play();render(frameAt(tick));});
+    el('cues').append(button);
+    return button;
+  });
+  const kg=mass=>mass.toFixed(1)+' kg';
+  function render(i) {
+    const state=frames[index=i];
+    el('scene').src=images[i];
+    seek.value=i;
+    el('seconds').value=state.time.toFixed(2)+' s';
+    el('liquid').textContent=kg(state.liquidMass);
+    el('field').textContent=kg(state.fieldIceMass);
+    el('solid').textContent=kg(state.solidMass);
+    el('afloat').textContent=kg(state.afloat);
+    el('mass').textContent=state.mass.toFixed(3)+' kg';
+    el('exchange').textContent=(state.phaseEnergy>=0?'+':'')+state.phaseEnergy.toFixed(0)+' kJ';
+    el('error').textContent=Math.abs(state.energyError)<1e-7?'< 0.000001 kJ':state.energyError.toExponential(2)+' kJ';
+    for (const [name,mass] of [['liquid',state.liquidMass],['field',state.fieldIceMass],['solid',state.solidMass]])
+      el(name+'Bar').style.width=(100*mass/state.mass)+'%';
+    const active=stages.findLastIndex(stage=>state.tick>=stage.start);
+    buttons.forEach((button,j)=>button.setAttribute('aria-pressed',String(j===active)));
+  }
+  seek.addEventListener('input',()=>{playing=false;play();render(seek.valueAsNumber);});
+  el('play').addEventListener('click',()=>{playing=!playing;play();});
+  let last=performance.now();
+  function animate(now) {
+    if(now-last>=1000/12){
+      const advance=Math.floor((now-last)*12/1000);
+      if(playing)render((index+advance)%frames.length);
+      last+=advance*1000/12;
+    }
+    requestAnimationFrame(animate);
+  }
+  play();
+  render(index);
+  requestAnimationFrame(animate);
+</script>
+</body>
+</html>

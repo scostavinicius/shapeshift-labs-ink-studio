@@ -1,0 +1,81 @@
+{
+  "format": "ink-studio/graph-project",
+  "version": 1,
+  "nodes": {
+    "yarn": {
+      "op": "textile.pattern",
+      "inputs": {
+        "kind": "weave",
+        "options": {
+          "size": [
+            4,
+            3
+          ],
+          "columns": 12,
+          "rows": 9,
+          "radius": 0.072,
+          "clearance": 0.01,
+          "pattern": [
+            "1100",
+            "0110",
+            "0011",
+            "1001"
+          ]
+        }
+      }
+    },
+    "world": {
+      "op": "textile.world",
+      "inputs": {
+        "source": {
+          "node": "yarn",
+          "port": "value"
+        },
+        "options": {
+          "camera": {
+            "dist": 6,
+            "yaw": 0.18,
+            "pitch": 0.14
+          },
+          "appearance": {
+            "ambient": 0.48,
+            "sheen": 0.2
+          }
+        }
+      }
+    },
+    "render": {
+      "op": "scene.render",
+      "inputs": {
+        "source": {
+          "node": "world",
+          "port": "value"
+        },
+        "options": {
+          "width": 640,
+          "height": 480
+        }
+      }
+    }
+  },
+  "outputs": {
+    "image": {
+      "node": "render",
+      "port": "value"
+    },
+    "plan": {
+      "node": "yarn",
+      "port": "value"
+    }
+  },
+  "exports": {
+    "image": {
+      "output": "image",
+      "format": "png"
+    },
+    "plan": {
+      "output": "plan",
+      "format": "json"
+    }
+  }
+}

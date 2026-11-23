@@ -1,0 +1,13 @@
+{
+  "format": "ink-studio/world",
+  "id": "sample-block-bench",
+  "dt": 0.016666666666666666,
+  "modules": { "resonator": { "file": "resonator.model.json", "revision": 1 } },
+  "instances": { "voice": { "module": "resonator", "drive": ["drive"] } },
+  "commands": [
+    { "tick": 1, "action": "world/input", "args": { "port": "voice/drive", "value": 0.00008 } },
+    { "tick": 2, "action": "world/input", "args": { "port": "voice/drive", "value": 0 } },
+    { "tick": 7, "action": "world/input", "args": { "port": "voice/drive", "value": -0.00005 } },
+    { "tick": 8, "action": "world/input", "args": { "port": "voice/drive", "value": 0 } }
+  ]
+}

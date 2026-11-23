@@ -59,10 +59,100 @@ For per-pixel rendering set `S.pixel = true` before baking and set `look: { pixe
 | `sheen` | Choose a grazing `color` and control its width with `power` and its grain bias with `directional`. |
 | `film` | Set `thickness` and `variation` in nanometres, `ior`, `scale` and optional `colors`. Set `flash` for an angle-limited flash or `axisBias` to steer the effect toward the grain. |
 | `diffraction` | Configure groove `spacing` and `bandwidth` in nanometres, diffraction `order` and the angular `roughness` across the effect. |
-| `directionalColor` | Blend between `color` and `crossColor` according to the grain and view. Set `width` and `bias` to tune the shift. |
+| `directionalColor` | Blend between `color` and `crossColor` according to the grain and view, or give `views` its own left, right, front and back swatches. |
 | `glints` | Set cell `scale`, candidate `density`, inset `radius`, normal `tilt`, angular `roughness` and one `color` or a list of `colors`. A lower `response` makes faint glints more visible. Glints are deterministic, fade at subpixel size, and can survive the pixel cleanup pass. |
 
 These are stylized reflectance models. The CLI resolves them into the scene palette and uses its existing baked direct-light visibility. Subtle tones can share the same palette entry, so include colours for any highlights you want visible in the final render.
+
+Bind an [authored highlight cel](highlight-cels.md) to a surface anchor
+when a light catch needs a specific pixel drawing at each size and angle.
+
+## Signed viewing directions
+
+A `directionalColor` layer with `views` uses authored colors for opposing
+directions. It projects the art-pixel camera ray into the object's or bone's
+rest frame. The default axes are +X for right and +Z for front. They follow
+a rigid part, GPU bone, or analytic orbit as it turns.
+
+```js
+const shell = K.surface.material({ r: [5, 6, 7, 8] }, {
+  layers: {
+    shell: {
+      type: 'directionalColor',
+      views: { left: '#bb4b18', right: '#248bec', front: '#38d391', back: '#e768ae' },
+      blendAngle: 9,
+      strength: .86
+    }
+  }
+});
+```
+
+- Swatches accept palette slots, named color roles, hex colors, and normalized
+  RGB triples. Omit a direction or set it to `null` to show the incoming color.
+- `blendAngle` is the half-width in degrees around each 45° transition. The
+  default of zero picks a hard sector. `strength` controls the contribution
+  from zero to one. A view directly above or below the axes keeps the incoming
+  color.
+- Supply `axes: { right: [x, y, z], front: [x, y, z] }` to orient a material
+  with a different rest frame. The renderer normalizes both vectors and makes
+  the front perpendicular to the right. A skinned splat uses the primary bone
+  that carries its shape.
+- Use one signed layer per surface. It shades after the other finish layers
+  and stepped facing colors, before the final palette resolve. Signed layers
+  share the authored swatches, blend angle and strength between CPU and
+  WebGL. The original grain-based `color`, `crossColor`, `width`, and `bias`
+  still apply when `views` is omitted or set to `false`.
+
+Use the same settings under `mat.surface.layers` in JSON. Compare with
+`directionalColors: false` in a render call or `--directional-colors off` in
+the CLI. The switch applies to signed layers.
+
+## Stepped facing colors
+
+Add `facingColors` to a surface finish to give its geometric planes distinct
+colors as they turn. The renderer measures the acute angle between the posed
+surface normal and the camera ray at each art pixel. The first band whose
+`maxAngle` includes that angle wins. List up to eight bands in increasing
+order and end at 90°. Normal maps do not move the bands.
+
+```js
+const cloak = K.surface.material({ r: [5, 6, 7, 8] }, {
+  facingColors: {
+    bands: [
+      { maxAngle: 38, color: 7 },
+      { maxAngle: 72, color: 9 },
+      { maxAngle: 90, color: 11 }
+    ]
+  }
+});
+```
+
+In replace mode, `color` accepts a palette slot, a named color role, a hex
+color, or a normalized RGB triple. Use `null` to keep the incoming color in a
+band. The scene's final palette and grading still apply.
+
+In shift mode, use `steps` instead of `color`. The renderer finds the closest
+swatch in the material's dark-to-light ramp, adds that many steps, and clamps
+to the ends. A zero shift preserves the incoming color. Sculpted materials
+inherit their baked ramp. Supply a `ramp` explicitly to override it or when
+using a low-level surface binding without a sculpt ramp.
+
+```js
+const cloth = K.surface.material({ r: [5, 6, 7, 8] }, {
+  facingColors: {
+    mode: 'shift',
+    bands: [
+      { maxAngle: 38, steps: 0 },
+      { maxAngle: 72, steps: -1 },
+      { maxAngle: 90, steps: 2 }
+    ]
+  }
+});
+```
+
+Set the same object on `mat.surface.facingColors` in JSON. The CPU and standard
+WebGL renderers both support perspective and orthographic views. Compare with
+`facingColors: false` in a render call or `--facing-colors off` in the CLI.
 
 ## Surface detail kits
 
@@ -100,6 +190,9 @@ node cli/ink-studio.js render examples/surface-detail-courtyard.js --w 372 --h 2
 
 ## Material lighting ramps
 
+Use [shadow band paint](shadow-band-paint.md) to shift the diffuse ramp's
+thresholds along authored surface strokes.
+
 Use a `diffuse` finish layer to give a material its own transition from
 shadow to direct light. A `lightingRamp` can also tint and shape the response
 of a `specular`, `sheen`, `fiber`, `glints`, or `bevel` layer. The effects run in layer
@@ -132,13 +225,27 @@ const cloth = K.surface.material({ r: [8, 9, 10, 11] }, {
   strength and a highlight uses its original angular response. Explicit
   highlight weights must start at zero so an inactive highlight stays dark.
 - Diffuse ramps use the angle to the directional light and the existing
-  shadow visibility. Specular ramps keep the layer's `roughness` control.
+  shadow visibility. Set `wrap` on a diffuse layer to shift the lookup across
+  the terminator. It defaults to 0 for ordinary Lambert shading. At 1 the
+  full signed cosine range maps to zero through one, with grazing light at
+  the midpoint, as in the [Team Fortress 2 diffuse warp](https://cdn.steamstatic.com/apps/valve/2007/NPAR07_IllustrativeRenderingInTeamFortress2.pdf#page=4).
+  With shadows enabled, fully occluded areas use the first stop. Specular
+  ramps keep the layer's `roughness` control.
   Use the layer's mask or strength to blend with the underlying shading.
   Disable a diffuse layer by setting its named slot to `false`, or clear a
   highlight ramp with `lightingRamp: false`. A ramp override replaces its
   configuration as a unit.
 
-Ink resolves the resulting colors through the usual export palette.
+WebGL evaluates diffuse ramps on posed splat centers. The software
+renderer evaluates them at surface samples. Both feed the usual palette
+resolve. Set `diffuseRamps: false` or use `--diffuse-ramps off` to
+compare with the baked diffuse colors. A live diffuse layer takes priority
+over the corresponding baked pixel ramp in WebGL.
+
+Open the [Kiln Relay workshop](../examples/diffuse-ramps/index.html) after
+building the browser bundle to sweep a light, edit color stops and compare
+stepped, linear and smooth ramps.
+
 For custom hosts, pass `{ paletteRoles }` as the fifth argument to
 `SurfaceLook.prepare`. Render the headless example to compare cloth, iron,
 and worn stone under a shared key light.
@@ -487,3 +594,7 @@ node scripts/render-surface-gallery.js
 ```
 
 The gallery script writes a still life and two camera angles of all 40 presets to `studio/out/surface-gallery`. It keeps the light and scene state fixed for each pair.
+
+[Simulation-driven material layers](simulation-material-layers.md) let native
+mesh materials use committed world fields and signals to drive UV and
+rest-space pigment, roughness, sheen, and relief.

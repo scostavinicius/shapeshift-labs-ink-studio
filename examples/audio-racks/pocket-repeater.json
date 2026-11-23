@@ -1,0 +1,34 @@
+{
+  "format": "ink-studio/audio-rack",
+  "version": 1,
+  "id": "pocket-repeater",
+  "revision": 1,
+  "title": "Pocket Repeater",
+  "description": "Re-cut part of a phrase on the beat grid, then run it through a drifting sampler and a short alternating echo.",
+  "inputs": {"main": "input"},
+  "output": "master",
+  "strips": {
+    "input": {"inserts": ["replay", "clock"], "sends": {"ghost": {"tap": "post", "level": 0.28}}},
+    "ghost": {"inserts": ["head", "echo"], "fader": 0.65},
+    "master": {}
+  },
+  "processors": {
+    "replay": {"type": "retro-sampler", "interpolation": "hold", "wet": 1, "retriggers": [
+      {"at": {"beat": 1.75}, "from": {"beat": 0.5}, "length": {"beats": 0.16}, "every": {"beats": 0.25}, "count": 4}
+    ]},
+    "clock": {"type": "retro-sampler", "rateHz": 4100, "bits": 6, "interpolation": "hold", "wet": 0.74},
+    "head": {"type": "tape-drift", "wowHz": 0.74, "wowCents": 35, "flutterCents": 8, "seed": 11},
+    "echo": {"type": "tempo-delay", "beats": 0.5, "feedback": 0.41, "crossfeed": 0.86,
+      "lowHz": 470, "highHz": 2700, "driveDb": 9}
+  },
+  "taps": {"replay": {"strip": "input"}, "echo": {"strip": "ghost"}},
+  "macros": {
+    "clock": {"label": "Capture clock", "default": 0.55, "targets": [
+      {"path": ["processors", "clock", "rateHz"], "range": [7400, 1700]}
+    ]},
+    "ghost": {"label": "Ghost send", "default": 0.42, "targets": [
+      {"path": ["strips", "input", "sends", "ghost", "level"], "range": [0.04, 0.67]},
+      {"path": ["processors", "head", "wowCents"], "range": [12, 66]}
+    ]}
+  }
+}

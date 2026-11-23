@@ -1,0 +1,65 @@
+{
+  "format": "ink-studio/wave-run",
+  "version": 1,
+  "network": "tube.network.json",
+  "samples": 16800,
+  "settings": {
+    "method": "delay",
+    "sampleRate": 24000,
+    "soundSpeed": 343,
+    "loss": 0.035,
+    "sources": {
+      "drive": {
+        "kind": "pressure",
+        "node": "source"
+      }
+    },
+    "terminations": {
+      "tip": {
+        "kind": "open"
+      }
+    }
+  },
+  "inputs": {
+    "drive": {
+      "impulses": [
+        {
+          "sample": 120,
+          "value": 0.057294901688
+        },
+        {
+          "sample": 121,
+          "value": 0.207294901688
+        },
+        {
+          "sample": 122,
+          "value": 0.392705098312
+        },
+        {
+          "sample": 123,
+          "value": 0.542705098312
+        },
+        {
+          "sample": 124,
+          "value": 0.6
+        },
+        {
+          "sample": 125,
+          "value": 0.542705098312
+        },
+        {
+          "sample": 126,
+          "value": 0.392705098312
+        },
+        {
+          "sample": 127,
+          "value": 0.207294901688
+        },
+        {
+          "sample": 128,
+          "value": 0.057294901688
+        }
+      ]
+    }
+  }
+}

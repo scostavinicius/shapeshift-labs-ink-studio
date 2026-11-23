@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Kingfisher’s Turn</title>
+<style>
+  :root { color-scheme:dark; font:15px/1.4 system-ui,sans-serif; color:#e8e1df; background:#1c1a26; }
+  * { box-sizing:border-box; }
+  body,h1,h2,p,figure { margin:0; }
+  main { max-width:1200px; margin:auto; padding:32px clamp(16px,4vw,42px); }
+  h1 { color:#f0d9b8; font:500 clamp(39px,5.4vw,67px)/1 Georgia,serif; letter-spacing:-.05em; }
+  .intro { color:#c6b7bd; margin:9px 0 20px; }
+  [hidden] { display:none!important; }
+  .layout { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:16px; align-items:start; }
+  figure,aside { background:#2a2433; border:1px solid #544350; border-radius:8px; overflow:hidden; }
+  canvas { display:block; image-rendering:pixelated; }
+  #scene { width:100%; height:auto; background:#302638; }
+  figure.picking canvas { cursor:crosshair; }
+  .transport { display:flex; flex-wrap:wrap; gap:10px; align-items:center; padding:12px; border-top:1px solid #544350; }
+  input[type=range] { flex:1 1 100px; min-width:0; accent-color:#a9cfc3; }
+  .transport output { min-width:10ch; color:#e2cdbd; font-variant-numeric:tabular-nums; }
+  button,input[type=number] { font:inherit; color:inherit; background:#241e2d; border:1px solid #725965; border-radius:4px; padding:6px 9px; }
+  button { cursor:pointer; }
+  button[aria-pressed=true] { background:#a7d3c5; color:#202c31; border-color:#a7d3c5; }
+  :focus-visible { outline:2px solid #f3d69f; outline-offset:2px; }
+  #play { min-width:68px; }
+  aside { padding:14px; }
+  h2 { color:#f0d9bd; font-size:17px; }
+  .zoom-wrap { position:relative; width:255px; max-width:100%; margin:11px 0 10px; }
+  #zoom { width:100%; height:auto; cursor:crosshair; background:#201c2b; }
+  .grid { position:absolute; inset:0; pointer-events:none; outline:1px solid #725e69; background-size:calc(100% / 17) calc(100% / 13);
+    background-image:linear-gradient(to right,#27203066 1px,transparent 1px),linear-gradient(to bottom,#27203066 1px,transparent 1px); }
+  .swatches { display:flex; gap:6px; margin:7px 0 12px; align-items:center; }
+  .swatches button.color { width:26px; height:27px; background:var(--ink); border:2px solid #67525d; padding:0; }
+  .swatches button.color[aria-pressed=true] { outline:2px solid #f8dab0; outline-offset:1px; }
+  .swatches #erase { margin-left:auto; padding:4px 7px; }
+  .numbers,.actions { display:flex; flex-wrap:wrap; gap:8px; align-items:end; margin:9px 0; }
+  .numbers label { display:grid; gap:3px; color:#c8bac3; font-size:13px; }
+  input[type=number] { width:75px; }
+  .check { font-size:13px; color:#d9ccc8; display:flex; align-items:center; gap:6px; padding:7px 0 0; }
+  .check input { accent-color:#b5dacf; }
+  .note,#status { color:#c0b1bb; font-size:13px; }
+  #status { margin-top:8px; color:#deccb1; min-height:2.65em; }
+  @media(max-width:820px) { main { padding-top:19px; } .layout { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Kingfisher’s Turn</h1>
+  <p class="intro">Paint the enamel’s highlight, then choose the frame where it splits.</p>
+  <p id="loading" role="status">Preparing the brooch…</p>
+  <div id="study" class="layout" hidden>
+    <figure id="figure">
+      <canvas id="scene" width="194" height="132" aria-label="Turning enamel kingfisher brooch"></canvas>
+      <div class="transport">
+        <button type="button" id="play">Play</button>
+        <input id="seek" type="range" min="1" max="48" step="1" aria-label="Shot frame">
+        <output id="frame" for="seek"></output>
+      </div>
+    </figure>
+    <aside aria-labelledby="editor">
+      <h2 id="editor">Paint correction</h2>
+      <div class="zoom-wrap">
+        <canvas id="zoom" width="17" height="13" aria-label="Magnified native pixels around the surface anchor"></canvas>
+        <div class="grid" aria-hidden="true"></div>
+      </div>
+      <div class="swatches" id="swatches" aria-label="Brush colors"><button type="button" id="erase" aria-pressed="false">Erase</button></div>
+      <div class="numbers">
+        <label>Start frame<input id="first" type="number" min="1" max="48" step="1"></label>
+        <label>End frame<input id="last" type="number" min="1" max="48" step="1"></label>
+      </div>
+      <label class="check"><input id="show" type="checkbox" checked> Show correction</label>
+      <div class="actions">
+        <button type="button" id="pin" aria-pressed="false">Set anchor</button>
+        <button type="button" id="restore">Restore hook</button>
+        <button type="button" id="save">Save JSON</button>
+      </div>
+      <p class="note">Click a square to paint one art pixel. The start and end frames are both included.</p>
+      <p id="status" aria-live="polite"></p>
+    </aside>
+  </div>
+</main>
+<script type="module">
+  const el=id=>document.getElementById(id);
+  async function unpack(data) {
+    const bytes=Uint8Array.from(atob(data),c=>c.charCodeAt(0));
+    const stream=new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+    return new Response(stream).text();
+  }
+  try {
+    /* STUDIO */
+    const API=toolkit.KIT.shotCorrections;
+    const scene=el('scene'), zoom=el('zoom'), ctx=zoom.getContext('2d');
+    const renderer=createRenderer(scene,{toolkit,contextAttributes:{preserveDrawingBuffer:true}});
+    const levels=['Cream','Frost','Glaze','Teal','Shadow'];
+    let frame=first+1, range=[first,last], anchor=demo.anchor, paint=demo.hook.map(row=>row.slice());
+    let brush=demo.swatches[0], playing=false, picking=false, capture, origin, crop, lastReport;
+    const seek=el('seek');
+    function plan() {
+      return API.paint(demo.blank,{id:'crown-hook',frames:range,anchor,pixels:paint});
+    }
+    const swatchButtons=demo.swatches.map((color,i)=>{
+      const button=document.createElement('button');
+      button.type='button';
+      button.className='color';
+      button.style.setProperty('--ink',color);
+      button.setAttribute('aria-label',levels[i]+' '+color);
+      button.title=levels[i];
+      button.addEventListener('click',()=>{brush=color; updateBrush();});
+      el('swatches').insertBefore(button,el('erase'));
+      return button;
+    });
+    function updateBrush() {
+      swatchButtons.forEach((button,i)=>button.setAttribute('aria-pressed',String(brush===demo.swatches[i])));
+      el('erase').setAttribute('aria-pressed',String(brush===null));
+    }
+    function updateInputs() {
+      el('first').value=range[0]+1;
+      el('last').value=range[1]+1;
+    }
+    function play(value) { playing=value; el('play').textContent=playing?'Pause':'Play'; }
+    function draw() {
+      const definition=API.paint(el('show').checked?plan():demo.blank,{...demo.guide,anchor});
+      renderer.render(demo.world,{...demo.options(frame),time:frame/demo.fps,shotCorrections:definition,
+        captureShotCorrectionSurface:true,shotCorrectionSurfaceFrame:value=>{capture=value;},
+        shotCorrectionsFrame:report=>{lastReport=report;}});
+      origin=lastReport.corrections.find(row=>row.id==='pin-guide')?.at;
+      ctx.clearRect(0,0,zoom.width,zoom.height);
+      if(origin){
+        crop=[Math.max(0,Math.min(demo.w-zoom.width,origin[0]-8)),
+          Math.max(0,Math.min(demo.h-zoom.height,origin[1]-6))];
+        ctx.imageSmoothingEnabled=false;
+        ctx.drawImage(scene,...crop,zoom.width,zoom.height,0,0,zoom.width,zoom.height);
+      }
+      seek.value=frame+1;
+      el('frame').value=(frame+1)+' / '+demo.count;
+      const active=lastReport.corrections.find(row=>row.id==='crown-hook');
+      const status=picking?'Click the brooch to pick a new surface anchor.':active?
+        active.painted+' painted '+(active.painted===1?'pixel':'pixels')+' on frame '+(frame+1):
+        'Correction inactive on frame '+(frame+1);
+      if(el('status').textContent!==status)el('status').textContent=status;
+    }
+    function canvasPoint(element,event) {
+      const box=element.getBoundingClientRect();
+      return [Math.floor((event.clientX-box.left)*element.width/box.width),
+        Math.floor((event.clientY-box.top)*element.height/box.height)];
+    }
+    function pixel(event) {
+      if(!origin||picking)return;
+      const [x,y]=canvasPoint(zoom,event), at=[x+crop[0],y+crop[1]];
+      if(x<0||x>=zoom.width||y<0||y>=zoom.height||!capture.pin(...at))return;
+      play(false);
+      const offset=at.map((n,i)=>n-origin[i]);
+      paint=paint.filter(([u,v])=>u!==offset[0]||v!==offset[1]);
+      if(brush!==null)paint.push([...offset,brush]);
+      el('show').checked=true;
+      draw();
+    }
+    zoom.addEventListener('pointerdown',event=>{if(event.button===0)pixel(event);});
+    zoom.addEventListener('pointermove',event=>{if(event.buttons===1)pixel(event);});
+    scene.addEventListener('pointerdown',event=>{
+      if(!picking)return;
+      const hit=capture.pin(...canvasPoint(scene,event));
+      if(!hit){el('status').textContent='Choose a visible pixel on the brooch.';return;}
+      anchor=hit;
+      pick(false);
+      draw();
+    });
+    function pick(value) {
+      picking=value;
+      el('pin').setAttribute('aria-pressed',String(picking));
+      el('figure').classList.toggle('picking',picking);
+      if(picking)play(false);
+    }
+    el('pin').addEventListener('click',()=>{pick(!picking);draw();});
+    el('erase').addEventListener('click',()=>{brush=null;updateBrush();});
+    el('play').addEventListener('click',()=>play(!playing));
+    seek.addEventListener('input',()=>{play(false);frame=seek.valueAsNumber-1;draw();});
+    el('show').addEventListener('change',draw);
+    for(const [i,name] of ['first','last'].entries()){
+      el(name).addEventListener('change',()=>{
+        const input=el(name).valueAsNumber-1;
+        if(Number.isSafeInteger(input)&&input>=0&&input<demo.count){
+          range[i]=input;
+          if(range[0]>range[1])range[1-i]=input;
+        }
+        play(false);
+        updateInputs();
+        draw();
+      });
+    }
+    el('restore').addEventListener('click',()=>{
+      anchor=demo.anchor;
+      paint=demo.hook.map(row=>row.slice());
+      range=[first,last];
+      frame=first+1;
+      brush=demo.swatches[0];
+      play(false);
+      pick(false);
+      el('show').checked=true;
+      updateInputs();
+      updateBrush();
+      draw();
+    });
+    el('save').addEventListener('click',()=>{
+      const url=URL.createObjectURL(new Blob([JSON.stringify(plan(),null,2)+'\n'],{type:'application/json'}));
+      const download=document.createElement('a');
+      download.href=url;
+      download.download='kingfisher-shot-corrections.json';
+      download.click();
+      setTimeout(()=>URL.revokeObjectURL(url),1000);
+    });
+    let previous=performance.now();
+    const sampleTime=1000/demo.fps;
+    function animate(now) {
+      if(now-previous>=sampleTime){
+        const advance=Math.floor((now-previous)/sampleTime);
+        previous+=advance*sampleTime;
+        if(playing){frame=(frame+advance)%demo.count;draw();}
+      }
+      requestAnimationFrame(animate);
+    }
+    updateInputs();
+    updateBrush();
+    draw();
+    el('loading').hidden=true;
+    el('study').hidden=false;
+    requestAnimationFrame(animate);
+  } catch(error) {
+    el('loading').textContent='The editor could not open. '+error.message;
+    console.error(error);
+  }
+</script>
+</body>
+</html>

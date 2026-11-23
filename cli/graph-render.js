@@ -1,14 +1,15 @@
 /* Host the CPU splat renderer and pass previews in headless recipe graphs. */
 const { render, cameraCapture } = require('./render.js');
 const { layer: graphDeepLayer } = require('./deep-composite.js');
+const { objectMatte } = require('./object-mattes.js');
 const { history } = require('../src/render-graph.js');
 const { pose } = require('./diarama-pose.js');
-const { select } = require('../src/art-passes.js');
+const { select, needsPartMotion, needsStrandMotion, needsSurfaceMotion } = require('../src/art-passes.js');
 const { encode, depthRange, labels } = require('./pass-preview.js');
 
 const defaults = ['coverage', 'depth', 'normal', 'objectId', 'materialId', 'emission'];
 const positionPass = new Set(['position', 'objectPosition']);
-const finitePass = new Set(['depth', 'emissionDepth']);
+const finitePass = new Set(['depth', 'emissionDepth', 'previousDepth', 'strandDepth', 'proxyDepth']);
 
 function renderGraphScene(source, { camera, lights, channels = defaults, options = {}, renderGraphInputs, renderGraphCapture,
   take, time = take?.start ?? 0, kit } = {}) {
@@ -49,12 +50,17 @@ function createSceneSampler(kit) {
     const at = options.time ?? time;
     if (!Number.isFinite(at) || at < 0) throw new RangeError('Graph scene playback needs nonnegative seconds');
     pose(source, at, { kit, artDirection: options.artDirection, maxSteps: 36000 });
-    const motion = select(settings.channels).some(channel => channel === 'motion' || channel === 'emissionMotion');
+    const channels = select(settings.channels);
+    const motion = channels.some(channel => channel === 'motion' || channel === 'emissionMotion');
+    const parts = needsPartMotion(channels);
+    const strands = needsStrandMotion(channels), surfaces=needsSurfaceMotion(channels);
     const result = renderGraphScene(source, { ...settings, time, take, kit, options: {
-      ...(motion && at > previousTime && { motionFrom: previousMotion }), ...options,
-      ...(motion && { captureMotion: true }), renderHistory: retained, renderHistoryKey: retained
+      ...((motion || parts || strands || surfaces) && at > previousTime && { motionFrom: previousMotion }), ...options,
+      ...(motion && { captureMotion: true }), ...(parts && { capturePartMotion:true }),
+      ...(strands && { captureStrandMotion:true }), ...(surfaces && {captureSurfaceMotion:true}),
+      renderHistory: retained, renderHistoryKey: retained
     } });
-    previousMotion = motion ? result.motionReference : undefined;
+    previousMotion = motion || parts || strands || surfaces ? result.motionReference : undefined;
     previousTime = at;
     return result;
   }
@@ -115,10 +121,16 @@ function graphRenderPass(frame, channel, { emptyDepth = 1e9, kit } = {}) {
     if (!owner) throw new RangeError('Position preview needs its matching depth pass');
     for (let p = 0; p < size; p++) if (!Number.isFinite(owner[p])) valid[p] = 0;
   }
+  if (channel === 'strandId' || channel === 'strandU' || channel === 'strandTangent') {
+    for (let p = 0; p < size; p++)
+      if (channel === 'strandId' ? raw[p] === 0 : channel === 'strandU' ? raw[p] < 0 :
+        !(raw[p * 3] || raw[p * 3 + 1] || raw[p * 3 + 2])) valid[p] = 0;
+  }
   const preview = positions ? positionPreview(raw, valid, width, height) :
     { image: api.rasterFrame(encode({ w: width, h: height, passes: frame.passes }, channel)),
       ...(depth && { range: depthRange(raw) }) };
-  const names = { objectId: 'objects', materialId: 'materials', target: 'targets', paletteOwner: 'paletteOwners' }[channel];
+  const names = { objectId: 'objects', materialId: 'materials', partId: 'parts', strandId: 'strands',
+    target: 'targets', paletteOwner: 'paletteOwners', surfaceKind: 'surfaceKinds' }[channel];
   const legend = names ? labels(frame.passes)[names] : undefined;
   return { value: preview.image, data: { width, height, channels, data: buffer }, valid: { width, height, channels: 1, data: valid },
     report: { channel, width, height, ...(preview.range !== undefined && { range: preview.range }),
@@ -147,6 +159,12 @@ function graph3DOperations(kit) {
       outputs: { value: 'raster', surface: 'raster', depth: 'raster', mask: 'raster', valid: 'raster', ids: 'raster',
         scatter: 'raster', transmission: 'raster', report: 'record' },
       run({ frame, options }) { return graphDeepLayer(frame, options); }
+    },
+    'scene.objectMatte': {
+      description: 'Read all visible coverage for a captured object, including through glass and planar reflections.',
+      inputs: { frame:'renderFrame', options },
+      outputs: { value:'raster' },
+      run({ frame, options }) { return { value:objectMatte(frame,options) }; }
     },
     'scene.pass': {
       inputs: { frame: 'renderFrame', channel: 'string', options },

@@ -1,6 +1,7 @@
 /* Versioned diffuse probes. Coefficients hold linear RGB irradiance in real SH. */
 const BounceProbes = (() => {
   const shadowArt = typeof ShadowArt === 'undefined' ? require('./shadow-art.js') : ShadowArt;
+  const targets = typeof TargetSelectors === 'undefined' ? require('./target-selectors.js') : TargetSelectors;
   const format = 'ink-studio/bounce-probes';
   const record = value => value && Object.getPrototypeOf(value) === Object.prototype;
   const vector = value => Array.isArray(value) && value.length === 3 && Array.from(value).every(Number.isFinite);
@@ -8,21 +9,41 @@ const BounceProbes = (() => {
   const smooth = t => t*t*(3-2*t);
   const clamp = value => Math.max(0, Math.min(1, value));
 
+  function dynamicSettings(value) {
+    if (value === undefined || value === false) return;
+    if (!record(value) || Object.keys(value).some(key => !['reflect', 'emit', 'lights'].includes(key)))
+      throw new TypeError('Dynamic bounce needs reflector selectors, emitter selectors or named area lights');
+    const { reflect = [], emit = [], lights = [] } = value;
+    if (![reflect, emit, lights].every(rows => Array.isArray(rows) && rows.length <= 16) ||
+        !Array.from(lights).every(targets.name) || new Set(lights).size !== lights.length ||
+        !reflect.length && !emit.length && !lights.length)
+      throw new TypeError('Dynamic bounce needs one or more sources and up to 16 entries of each kind');
+    return {
+      reflect: Array.from(reflect, targets.prepare),
+      emit: Array.from(emit, item => {
+        if (!record(item) || Object.keys(item).some(key => key !== 'select' && key !== 'gain') ||
+            !bounded(item.gain ?? 1, 0, 16)) throw new TypeError('A dynamic bounce emitter needs a selector and gain from 0 to 16');
+        return { select: targets.prepare(item.select), gain: item.gain ?? 1 };
+      }),
+      lights: lights.slice()
+    };
+  }
+
   function prepare(value) {
     if (value === false || value === undefined) return null;
     if (!record(value) || Object.keys(value).some(key=>!['format','version','probes','samples','reach','strength',
-      'bounceStrength','skyStrength','cast','receive'].includes(key))) throw new TypeError('Invalid bounce probe settings');
+      'bounceStrength','skyStrength','cast','receive','dynamic'].includes(key))) throw new TypeError('Invalid bounce probe settings');
     const baked = value.format !== undefined || value.version !== undefined;
     if (baked && (value.format !== format || value.version !== 1)) throw new TypeError('Unsupported bounce probe format or version');
     const { probes, samples = 96, reach = 8, strength = 1, bounceStrength = .9, skyStrength = .4, cast, receive } = value;
     if (!Array.isArray(probes) || probes.length > 128 || !Number.isInteger(samples) || !bounded(samples,24,256) ||
         !bounded(reach,.05,400) || !bounded(strength,0,1) || !bounded(bounceStrength,0,4) || !bounded(skyStrength,0,4))
       throw new RangeError('Bounce probes need up to 128 sites, 24–256 samples, positive reach and valid strengths');
-    const masks = shadowArt.prepare({ cast, receive });
+    const masks = shadowArt.prepare({ cast, receive }), dynamic = dynamicSettings(value.dynamic);
     const ids = new Set();
     return {
       ...(baked && { format, version:1 }), samples, reach, strength, bounceStrength, skyStrength,
-      ...(masks?.cast && { cast:masks.cast }), ...(masks?.receive && { receive:masks.receive }),
+      ...(dynamic && { dynamic }), ...(masks?.cast && { cast:masks.cast }), ...(masks?.receive && { receive:masks.receive }),
       probes: Array.from(probes, probe=>{
         const fields=['id','at','radius','bounds', ...(baked ? ['coefficients','open'] : [])];
         if (!record(probe) || Object.keys(probe).some(key=>!fields.includes(key))) throw new TypeError('Invalid bounce probe site');

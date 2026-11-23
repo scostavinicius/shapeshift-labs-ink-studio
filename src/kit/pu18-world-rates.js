@@ -6,9 +6,9 @@
     while(b) [a,b] = [b,a%b];
     return a;
   }
-  function schedules(world,systems,chunks) {
+  function schedules(world,systems,chunks,timed=false) {
     const rates = {};
-    let subdivision = 1, active = Boolean(chunks)||world.connections.some(edge=>edge?.sample !== undefined);
+    let subdivision = 1, active = timed||Boolean(chunks)||world.connections.some(edge=>edge?.sample !== undefined || edge?.signal==='accumulated' || edge?.signal==='event');
     for (const [name,system] of Object.entries(systems)) {
       const spec = world.systems[name].schedule;
       check(spec === undefined || record(spec) && Object.keys(spec).every(key=>key==='every'||key==='substeps'),
@@ -29,11 +29,17 @@
   }
 
   function policy(edge,type,active) {
-    const sample = edge.sample === undefined ? (active && type==='event'?'events':'hold') : edge.sample;
+    const sample = edge.sample ?? (type==='event' ? active?'events':'hold' : edge.signal==='accumulated'?'sum':'hold');
+    const signal = edge.signal ?? (type==='event'?'event':sample==='sum'?'accumulated':'instantaneous');
     const numeric = type==='number' || type==='vec3';
-    check(sample==='hold' && (type!=='event' || !active) || sample==='events' && type==='event' ||
-      (sample==='average'||sample==='sum') && numeric,'Invalid sampling for '+edge.to);
-    return sample;
+    const advanced = W.signalCrossings.isAdvanced(sample);
+    check(edge.sample!==null && edge.signal!==null && (
+      type==='event' && signal==='event' && (sample==='events' || sample==='hold' && !active) ||
+      type!=='event' && signal==='instantaneous' && (sample==='hold' || numeric && (sample==='average' || advanced)) ||
+      numeric && signal==='accumulated' && sample==='sum'
+    ),'Invalid sampling or signal semantics for '+edge.to);
+    check(edge.filter===undefined || sample==='decimate','A filter requires decimation for '+edge.to);
+    return {sample,signal};
   }
   const buffered = edge => edge.sample==='events' || edge.sample==='sum';
   const zero = type => type==='number'?0:type==='vec3'?[0,0,0]:[];
@@ -48,14 +54,20 @@
   }
   const scale = (value,n,type) => type==='number'?value*n:value.map(v=>v*n);
 
-  function bind({rates,subdivision,chunks},systems,ports,incoming,order) {
+  function phases({rates,subdivision,chunks},order) {
     const choices=new Map(order.map(name=>[name,chunks?.rates(name)??[rates[name]]]));
-    const phases = Array.from({length:subdivision},(_,index)=>{
+    return freeze(Array.from({length:subdivision},(_,index)=>{
       const slice=index+1;
       return {slice,names:order.filter(name=>choices.get(name).some(rate=>slice%(subdivision/rate.substeps)===0))};
-    }).filter(row=>row.names.length||row.slice===subdivision);
+    }).filter(row=>row.names.length||row.slice===subdivision));
+  }
+
+  function bind(schedule,systems,ports,incoming,order,trace) {
+    const {rates,subdivision,chunks} = schedule, boundaries = phases(schedule,order);
     const receiving = [], averages = [], delayed = [], bySource = new Map(), eventOutputs = [];
     const wakePorts=new Map();
+    const earlySources = new Set();
+    const crossings = W.signalCrossings.bind(incoming,ports,subdivision), {historyKey} = W.signalCrossings;
     for (const [port,descriptor] of Object.entries(ports.outputs))
       if (descriptor.type==='event') eventOutputs.push(port);
     for (const [port,descriptor] of Object.entries(ports.inputs)) {
@@ -72,6 +84,7 @@
       }
       if (!edge || !buffered(edge)) continue;
       if (edge.delay) delayed.push({...edge,type});
+      if (edge.earlyEvent) earlySources.add(edge.from);
       if (!bySource.has(edge.from)) bySource.set(edge.from,[]);
       bySource.get(edge.from).push({...edge,type});
     }
@@ -79,8 +92,12 @@
       ...receiving.map(({port,type})=>[port,zero(type)]),
       ...averages.map(({to,type})=>[to,{value:zero(type),quanta:0}])
     ]);
+    function seed(outputs,causes) {
+      return crossings ? freeze({...initial,[historyKey]:crossings.seed(outputs,causes)}) : initial;
+    }
     function validate(saved,parse,tick,chunkState) {
-      check(record(saved) && Object.keys(saved).length===Object.keys(initial).length,'Malformed multi-rate buffers');
+      check(record(saved) && Object.keys(saved).length===Object.keys(initial).length+Number(!!crossings),'Malformed multi-rate buffers');
+      crossings?.validate(saved[historyKey],parse,tick,trace);
       for (const {port,type} of receiving) {
         const value = parse(ports.inputs[port],saved[port],port);
         if (type==='event') check(value.length<=maxEvents,'Invalid saved event backlog');
@@ -94,8 +111,9 @@
       }
     }
 
-    function* advance(at,committed,previous,manual,delays,signals,saved,visit,causal,chunkStep,parallel) {
+    function* advance(at,baseDt,committed,previous,manual,delays,signals,saved,visit,causal,chunkStep,parallel) {
       const buffers = {...saved}, delayedSamples = {}, eventValues = {}, observed = {};
+      const history = crossings?.begin(saved[historyKey],at,causal);
       for (const port of Object.keys(ports.inputs))
         observed[port] = ports.inputs[port].type==='event'?[]:signals[port];
       for (const port of eventOutputs) eventValues[port] = [];
@@ -109,16 +127,20 @@
       }
       for (const {to,type} of delayed) delayedSamples[to] = zero(type);
 
-      function publish(port,value) {
-        causal?.publish(port,value);
-        if (own(eventValues,port)) eventValues[port] = add(eventValues[port],value,'event');
-        for (const {to,delay,type} of bySource.get(port) ?? []) {
+      function publish(port,value,early=false) {
+        causal?.publish(port,value,early);
+        if (!early) {
+          history?.publish(port,value);
+          if (own(eventValues,port)) eventValues[port] = add(eventValues[port],value,'event');
+        }
+        for (const {to,delay,type,earlyEvent} of bySource.get(port) ?? []) {
+          if (Boolean(earlyEvent)!==early) continue;
           const destination = delay?delayedSamples:buffers;
           destination[to] = add(destination[to],value,type);
         }
       }
       let states=committed, outputs=previous, last=0;
-      for (const {slice,names} of phases) {
+      for (const {slice,names} of boundaries) {
         if(chunks&&slice!==subdivision&&!names.some(name=>{
           const detail=chunkStep.due.get(name);
           return detail?slice%(subdivision/detail.substeps)===0:!chunks.managed.has(name)&&at%rates[name].every===0;
@@ -144,20 +166,28 @@
           const input={};
           for (const key of Object.keys(systems[name].inputs ?? {})) {
             const port=name+'/'+key, edge=incoming.get(port), type=ports.inputs[port].type;
-            let value;
-            if (edge?.sample==='average') {
+            let value, reconstructed, pending;
+            if (edge?.crossing) {
+              reconstructed = history.sample(edge,(at-1)*subdivision+slice,Boolean(sources));
+              value = reconstructed.value;
+            } else if (edge?.sample==='average') {
               const row=buffers[port];
               value=type==='number'?row.value/row.quanta:row.value.map(n=>n/row.quanta);
               if(consume)buffers[port]={value:zero(type),quanta:0};
             } else if (edge && buffered(edge) || !edge && type==='event') {
               value=buffers[port];
-              if(consume)buffers[port]=zero(type);
+              if (type==='event' && ports.inputs[port].timing!==undefined) {
+                const selected=W.timedEvents.select(value,(at-1+slice/subdivision)*baseDt,(edge?.delay??0)*baseDt);
+                value=selected.ready;
+                pending=selected.pending;
+              }
+              if(consume)buffers[port]=pending??zero(type);
             } else value=!edge?manual[port]:edge.delay?delays[port][0]:live[edge.from]??outputs[edge.from];
             input[key]=value;
             if (sources) {
               const queued=edge?.sample==='average'||edge&&buffered(edge)||!edge&&type==='event';
-              sources[key]={parents:queued?causal.consume(port):causal.held(port,edge,own(live,edge?.from)),
-                source:edge?.from,delay:edge?.delay,mode:edge?.sample??(queued?'events':'hold')};
+              sources[key]={parents:reconstructed?.parents ?? (queued?causal.consume(port,Boolean(pending?.length)):causal.held(port,edge,own(live,edge?.from))),
+                source:edge?.from,delay:edge?.delay,latencyTicks:edge?.crossing?.latencyTicks,mode:edge?.sample??(queued?'events':'hold')};
             }
             if(consume)observed[port]=type==='event'?add(observed[port],value,type):value;
           }
@@ -172,10 +202,12 @@
             const sources=causal?{}:undefined;
             changed[name]=visit(name,states,inputsFor(name,true,sources),{...timing,signals:snapshotSignals},
               staged,sources,outputs,changed);
-            if(systems[name].combinational)for(const key of Object.keys(systems[name].outputs??{})){
+            for(const key of Object.keys(systems[name].outputs??{})){
               const port=name+'/'+key;
-              live[port]=staged[port];
-              publish(port,staged[port]);
+              if(systems[name].combinational){
+                live[port]=staged[port];
+                publish(port,staged[port]);
+              } else if(earlySources.has(port)) publish(port,staged[port],true);
             }
           }
         }
@@ -185,13 +217,14 @@
         if (Object.keys(staged).length) outputs=freeze({...outputs,...staged});
         last=slice;
       }
+      if (history) buffers[historyKey]=history.finish();
       return {states,outputs,signals:{...observed,...outputs,...eventValues},buffers:freeze(buffers),delayedSamples};
     }
     function hasEvents(name,saved,manual,delays){
       return wakePorts.get(name)?.some(({port,edge})=>saved[port].length||
         (!edge?manual[port].length:edge.delay&&delays[port][0].length))??false;
     }
-    return Object.freeze({rates:freeze(rates),subdivision,initial:freeze(initial),validate,advance,hasEvents});
+    return Object.freeze({rates:freeze(rates),subdivision,phases:boundaries,seed,validate,advance,hasEvents,historySlots:crossings?.capacity??0});
   }
-  W.rates = Object.freeze({schedules,policy,bind,buffered,zero,add});
+  W.rates = Object.freeze({schedules,policy,bind,buffered,zero,add,scale,gcd,maxEvents});
 })(KIT);

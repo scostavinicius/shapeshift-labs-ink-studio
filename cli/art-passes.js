@@ -3,12 +3,14 @@ const EmissiveFinishes = require('../src/emissive-finishes.js');
 const { ditherFootprint } = require('./dither-footprint.js');
 const { surfacePoint } = require('./scene-optics.js');
 const TargetSelectors = require('../src/target-selectors.js');
+const PartMotion = require('./part-motion.js');
+const SurfaceMotion = require('./opaque-surface-pass.js');
 
 const SplatFrames = require('../src/splat-frames.js');
 const { rows: shutterRows } = require('./programmable-exposure.js');
 let matrices;
 function sampleFrames(world, time) {
-  if (!matrices && (world.anim?.rig || world.anim?.bones)) matrices = require('../index.js').load().KIT.M;
+  if (!matrices && (world.anim?.rig || world.anim?.bones || world.reconstructionPose)) matrices = require('../index.js').load().KIT.M;
   const exposure = world[shutterRows];
   const base = SplatFrames.create(world, time, matrices);
   if (!exposure) return base;
@@ -19,30 +21,32 @@ function sampleFrames(world, time) {
     const source = alternate ?? world;
     const key = alternate ?? clock;
     if (!sources.has(key)) {
-      if (!matrices && (source.anim?.rig || source.anim?.bones)) matrices = require('../index.js').load().KIT.M;
+      if (!matrices && (source.anim?.rig || source.anim?.bones || source.reconstructionPose)) matrices = require('../index.js').load().KIT.M;
       sources.set(key, SplatFrames.create(source, clock.scene, matrices));
     }
     return sources.get(key)(index);
   };
 }
 
-function createArtPasses(request, w, h, emissiveSlots) {
+function createArtPasses(request, w, h, emissiveSlots, capturePartMotion, captureSurfaceMotion, captureHistory) {
   const selected = new Set(ArtPasses.select(request));
-  if (!selected.size) return null;
+  if (!selected.size && !capturePartMotion && !captureSurfaceMotion && !captureHistory) return null;
   const size = w * h;
   const coverage = selected.has('coverage') ? new Float32Array(size) : null;
+  const surfaceCoverage=selected.has('surfaceCoverage') ? new Float32Array(size) : null;
   const emission = selected.has('emission') ? new Float32Array(size * 3) : null;
   const emissionOwner = selected.has('emissionMotion') ? new Int32Array(size).fill(-1) : null;
   const scopedOwners = emissiveSlots && new Uint8Array(size);
   const scopedCoverage = emissiveSlots && new Float32Array(size);
   const emissionDepth = selected.has('emissionDepth') || emissionOwner || scopedOwners ? new Float32Array(size).fill(Infinity) : null;
-  const needsOwner = [...selected].some(channel => !['emission', 'emissionDepth', 'emissionMotion', 'coverage', 'protected'].includes(channel));
+  const needsOwner = captureHistory || capturePartMotion || captureSurfaceMotion ||
+    [...selected].some(channel => !['emission', 'emissionDepth', 'emissionMotion', 'coverage', 'protected'].includes(channel));
   const owner = needsOwner ? new Int32Array(size).fill(-1) : null;
   const depth = needsOwner ? new Float32Array(size).fill(Infinity) : null;
 
   let atlasOwners;
-  function fragment(p, i, a, solid, z, emits, r, g, b, atlas) {
-    const tint=atlas?.emission;
+  function fragment(p, i, a, solid, z, emits, r, g, b, atlas, emissionTint) {
+    const tint=emissionTint ?? atlas?.emission;
     emits ||= Boolean(tint);
     if (coverage) coverage[p] = a + coverage[p] * (1 - a);
     if (emission) {
@@ -78,6 +82,7 @@ function createArtPasses(request, w, h, emissiveSlots) {
     if (owner && ArtPasses.ownsSurface(a, solid, z, depth[p])) {
       owner[p] = i;
       depth[p] = z;
+      if (surfaceCoverage) surfaceCoverage[p]=a;
       if (atlas) (atlasOwners??=new Map()).set(p,atlas);
       else atlasOwners?.delete(p);
       return true;
@@ -94,6 +99,7 @@ function createArtPasses(request, w, h, emissiveSlots) {
     if (owner) {
       owner[p] = i;
       depth[p] = z;
+      if (surfaceCoverage) surfaceCoverage[p]=1;
     }
   }
 
@@ -105,7 +111,9 @@ function createArtPasses(request, w, h, emissiveSlots) {
       return out;
     };
     const result = { w, h };
+    if (geometry.ditherView) result.ditherView = geometry.ditherView;
     if (coverage) result.coverage = topDown(coverage, 1);
+    if (surfaceCoverage) result.surfaceCoverage=topDown(surfaceCoverage,1);
     if (emission) result.emission = topDown(emission, 3);
     if (scopedOwners) result.scopedEmission = { slots:topDown(scopedOwners,1), coverage:topDown(scopedCoverage,1) };
     if (selected.has('emissionDepth')) result.emissionDepth = topDown(emissionDepth, 1);
@@ -117,16 +125,76 @@ function createArtPasses(request, w, h, emissiveSlots) {
         result.protected[p] = Number(Boolean(detail?.[p] || sprM?.[bottom] || surfaceGlint?.[bottom]));
       }
     }
-    if (selected.has('depth')) result.depth = topDown(depth, 1);
-    const normalOut = selected.has('normal') ? new Float32Array(size * 3) : null;
+    const topDepth=(selected.has('depth')||captureSurfaceMotion) && topDown(depth,1);
+    if (selected.has('depth')) result.depth=topDepth;
+    if (captureSurfaceMotion) {
+      const motion=SurfaceMotion.capture(w,h,captureSurfaceMotion,topDepth,atlasOwners,selected);
+      geometry.motionReference.surfaceMotion=motion.snapshot;
+      if (motion.vectors) result.surfaceMotion=motion.vectors;
+      if (motion.valid) result.surfaceMotionValid=motion.valid;
+    }
+    if(captureHistory){
+      const labels=new Map(), keys=[null], ids=new Uint32Array(size);
+      for(let p=0;p<size;p++){
+        const hit=atlasOwners?.get(p), i=owner[p];
+        const key=hit ? hit.mesh?.key && hit.mesh.key+'/'+hit.mesh.triangle : i>=0 ? i+1 : null;
+        if(!key)continue;
+        if(!labels.has(key)){labels.set(key,keys.length);keys.push(key);}
+        ids[p]=labels.get(key);
+      }
+      result.historyOwners=topDown(ids,1);
+      result.historyKeys=keys;
+    }
+    if (selected.has('surfaceKind')) {
+      result.surfaceKind=topDown(Uint8Array.from(owner,(i,p)=>{
+        const hit=atlasOwners?.get(p);
+        return hit?.sdf ? 2 : hit?.mesh ? 1 : hit?.surface ? 5 : hit ? 4 : i>=0 ? 3 : 0;
+      }),1);
+    }
+    if (selected.has('surfaceUV')||selected.has('surfaceUVValid')) {
+      const uv=selected.has('surfaceUV') && new Float32Array(size*2), valid=new Uint8Array(size);
+      for (const [p,hit] of atlasOwners ?? []) if (hit.uv) {
+        if (uv) uv.set(hit.uv,p*2);
+        valid[p]=255;
+      }
+      if (uv) result.surfaceUV=topDown(uv,2);
+      result.surfaceUVValid=topDown(valid,1);
+    }
+    const parts = (capturePartMotion || selected.has('partId')) && PartMotion.catalog(world);
+    if (selected.has('partId')) {
+      for (const {object,part} of [...(geometry.representationLabels ?? []),...(geometry.surfaceLabels?.parts ?? [])])
+        parts.authored(object,part);
+      result.partId = topDown(Uint32Array.from(owner,(i,p)=>{
+        const hit=atlasOwners?.get(p), part=hit?.mesh?.part ?? hit?.partId;
+        if (part!==undefined) return parts.authored(hit.mesh?.object ?? hit.objectId,part);
+        return parts.rows[i] ?? 0;
+      }),1);
+      result.parts = parts.parts;
+    }
+    const normalOut = (selected.has('normal')||selected.has('shadingNormal')) ? new Float32Array(size * 3) : null;
+    const geometric = selected.has('geometricNormal') ? new Float32Array(size * 3) : null;
     const positionOut = selected.has('position') ? new Float32Array(size * 3) : null;
     const objectOut = selected.has('objectPosition') ? new Float32Array(size * 3) : null;
-    if (normalOut || positionOut || objectOut) {
-      const frames = new Map(), sample = sampleFrames(world, time);
+    const sample = (normalOut || geometric || positionOut || objectOut || capturePartMotion) && sampleFrames(world,time);
+    if (capturePartMotion) {
+      const motion = PartMotion.capture(w,h,parts,owner,depth,capturePartMotion,geometry,topDown,sample,atlasOwners,selected);
+      geometry.motionReference.partMotion = motion.snapshot;
+      if (selected.has('partMotion')) result.partMotion = motion.vectors;
+      if (selected.has('partMotion') || selected.has('partMotionValid')) result.partMotionValid = motion.valid;
+      if (selected.has('previousDepth')) {
+        result.previousDepth = motion.previousDepth;
+        result.previousDepthValid = motion.valid;
+      }
+    }
+    if (normalOut || geometric || positionOut || objectOut) {
+      const frames = new Map();
       for (let p = 0; p < size; p++) {
         const atlas=atlasOwners?.get(p);
         if (atlas) {
-          if (normalOut && atlas.normal) normalOut.set(atlas.normal,p*3);
+          if (atlas.normal) {
+            normalOut?.set(atlas.normal,p*3);
+            geometric?.set(atlas.biasNormal ?? atlas.normal,p*3);
+          }
           positionOut?.set(atlas.position,p*3);
           objectOut?.set(atlas.objectPosition,p*3);
           if (atlas.patternPosition) (result.ditherRest ??= new Map()).set((h-1-Math.floor(p/w))*w+p%w,atlas.patternPosition);
@@ -136,7 +204,10 @@ function createArtPasses(request, w, h, emissiveSlots) {
         if (i < 0) continue;
         if (!frames.has(i)) frames.set(i, sample(i));
         const frame = frames.get(i);
-        if (normalOut && frame.normal) normalOut.set(frame.normal, p * 3);
+        if (frame.normal) {
+          normalOut?.set(frame.normal,p*3);
+          geometric?.set(frame.normal,p*3);
+        }
         if (!positionOut && !objectOut) continue;
         const x = geometry.x[i], y = geometry.y[i], z = geometry.z[i];
         const hit = frame.normal ?
@@ -148,7 +219,12 @@ function createArtPasses(request, w, h, emissiveSlots) {
           for (let k = 0; k < 3; k++) objectOut[p * 3 + k] = (frame.rest[k] ?? 0) + offset[k];
         }
       }
-      if (normalOut) result.normal = topDown(normalOut, 3);
+      if (normalOut) {
+        const normals=topDown(normalOut,3);
+        if (selected.has('normal')) result.normal=normals;
+        if (selected.has('shadingNormal')) result.shadingNormal=normals;
+      }
+      if (geometric) result.geometricNormal=topDown(geometric,3);
       if (positionOut) result.position = topDown(positionOut, 3);
       if (objectOut) result.objectPosition = topDown(objectOut, 3);
       if (geometry.ditherPixelStep && result.position) {
@@ -157,7 +233,8 @@ function createArtPasses(request, w, h, emissiveSlots) {
           const atlas = atlasOwners?.get(bottom);
           const frame = frames.get(owner[bottom]);
           const footprint = ditherFootprint(geometry.rayAt, x + .5, y + .5, result.position.subarray(p * 3, p * 3 + 3),
-            atlas ? atlas.normal : frame?.normal, geometry.ditherPixelStep, space === 'object' ? frame?.localOffset : undefined);
+            atlas ? atlas.normal : frame?.normal, geometry.ditherPixelStep,
+            space === 'object' ? frame?.localOffset : space === 'view' ? geometry.ditherView : undefined);
           return space === 'object' && atlas?.objectScale ? footprint / atlas.objectScale : footprint;
         };
       }
@@ -167,7 +244,7 @@ function createArtPasses(request, w, h, emissiveSlots) {
       const vectors = new Float32Array(size * 2), valid = new Uint8Array(size);
       const previous = channel === 'motion' ? geometry.motionFrom : geometry.emissionMotionFrom;
       const current = geometry.motionReference;
-      if (previous?.w === w && previous.h === h && previous.centers.length === geometry.centers.length) {
+      if (previous?.w === w && previous.h === h && previous.centers?.length === geometry.centers.length) {
         for (let p = 0; p < size; p++) {
           const i = ids[p] * 2;
           if (i < 0 || !Number.isFinite(previous.centers[i]) || !Number.isFinite(geometry.centers[i])) continue;
@@ -188,8 +265,19 @@ function createArtPasses(request, w, h, emissiveSlots) {
     for (const [channel, names] of [['objectId', 'objects'], ['materialId', 'materials']]) {
       if (!selected.has(channel)) continue;
       const ids = world.renderMetadata?.[channel + 's'];
-      result[channel] = topDown(Uint32Array.from(owner, i => ids?.[i] || 0), 1);
-      result[names] = world.renderMetadata?.[names] || [null];
+      const defaults=world.renderMetadata?.[names] || [null];
+      const key=channel==='objectId' ? 'object' : 'material';
+      const declared=(geometry.representationLabels ?? []).map(row=>row[key]);
+      const appended=[...new Set([...(geometry.surfaceLabels?.[names] ?? []),...declared])]
+        .filter(name=>!defaults.includes(name)).sort();
+      const table=appended?.length ? [...defaults,...appended] : defaults;
+      const byName=new Map(table.map((name,i)=>[name,i]));
+      result[channel]=topDown(Uint32Array.from(owner,(i,p)=>{
+        const hit=atlasOwners?.get(p);
+        const name=hit?.mesh?.[key] ?? (hit?.partId!==undefined || hit?.sdf ? hit?.[channel] : undefined);
+        return name===undefined ? ids?.[i] || 0 : byName.get(name) ?? 0;
+      }),1);
+      result[names]=table;
     }
     return result;
   }

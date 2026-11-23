@@ -12,6 +12,7 @@
     replay: RenderGraph.replay,
     feedbackMotion: RenderGraph.feedbackMotion,
     rowTable: RenderGraph.rowTable,
+    windowFrame: (window, ctx) => RenderGraph.windowFrame(window, { ...ctx, resolve: K.annotations.anchor }),
     addressRaster: RenderGraph.addressRaster,
     scheduleTable: RenderGraph.scheduleTable,
     indexedSchedule: RenderGraph.indexedSchedule,
@@ -27,7 +28,9 @@
         (spec, ctx) => K.annotations.anchor(spec, { ...ctx, sceneTime }),
         gl,
         inputs,
-        K.procedural.raster
+        K.procedural.raster,
+        K.directionDrawing.extract,
+        sceneTime
       )
   });
 })(KIT);

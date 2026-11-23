@@ -1,0 +1,24 @@
+{
+  "format": "ink-studio/simulation-model",
+  "version": 1,
+  "id": "vent-block-parity",
+  "revision": 1,
+  "seed": 4,
+  "numerics": { "dt": 0.000020833333333333333, "blockSize": 160 },
+  "domain": {}, "parameters": {}, "initial": {}, "boundaries": {},
+  "operators": { "solver": { "kind": "prepared-vent-network", "revision": 1 } },
+  "inputs": { "inlet": "solver/inlet" },
+  "outputs": { "outlet": "solver/outlet" },
+  "commands": [
+    { "tick": 1, "input": "inlet", "value": 0.04 },
+    { "tick": 73, "input": "inlet", "value": 0 },
+    { "tick": 94, "input": "inlet", "value": -0.027 },
+    { "tick": 94, "input": "inlet", "value": -0.051 },
+    { "tick": 165, "input": "inlet", "value": 0 },
+    { "tick": 258, "input": "inlet", "value": 0.059 },
+    { "tick": 313, "input": "inlet", "value": 0 },
+    { "tick": 449, "input": "inlet", "value": 0.024 },
+    { "tick": 512, "input": "inlet", "value": -0.018 }
+  ],
+  "probes": {}
+}

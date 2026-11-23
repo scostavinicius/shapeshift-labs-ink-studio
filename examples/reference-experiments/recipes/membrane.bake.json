@@ -1,0 +1,39 @@
+{
+  "format": "ink-studio/resonant-mode-plan",
+  "version": 1,
+  "id": "reference-membrane",
+  "source": {
+    "kind": "mesh",
+    "file": "membrane.obj",
+    "count": 4,
+    "speed": 300,
+    "density": 0.64,
+    "decay": 5.5,
+    "fixed": "boundary"
+  },
+  "excitations": {
+    "strike": {
+      "point": [
+        0.45,
+        0.35,
+        0
+      ]
+    }
+  },
+  "pickups": {
+    "center": {
+      "point": [
+        0.45,
+        0.35,
+        0
+      ]
+    },
+    "edge": {
+      "point": [
+        0,
+        0.35,
+        0
+      ]
+    }
+  }
+}

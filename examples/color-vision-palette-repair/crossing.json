@@ -1,0 +1,14 @@
+{
+  "format": "ink-studio/color-vision-palette-repair",
+  "version": 1,
+  "title": "Signal crossing",
+  "width": 168,
+  "height": 108,
+  "minDistance": 0.105,
+  "minEdges": 2,
+  "locked": ["#9eece1"],
+  "pairs": [
+    { "id": "west", "label": "West arrow", "subject": { "object": "west-signal" }, "background": { "object": "west-plate" } },
+    { "id": "east", "label": "East crossing", "subject": { "object": "east-signal" }, "background": { "object": "east-plate" } }
+  ]
+}

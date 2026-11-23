@@ -61,6 +61,7 @@
     const channels = Object.freeze(finish ? [...names, ...finishNames] : names.slice());
     const times = specs.map(({ diffusion }) => Math.ceil(dt * 2 * diffusion * (1 / dx ** 2 + 1 / dz ** 2) / .9));
     const diffusionWork = times.reduce((a, b) => a + b, 0) * size;
+    const tickWork = diffusionWork + size * (names.length * 6 + recipes.length * (2 + names.length));
     let state = names.map(() => new Float64Array(size)),
       carries = recipes.map(rule => rule.emitEvery ? new Float64Array(size) : null);
     let tick = 0, serial = 0, stepping = false;
@@ -159,13 +160,67 @@
       return Object.freeze({ tick, time, events, sample, source, outputs, data: name => buffer(name).slice() });
     }
 
+    function react(values, clock, drive, emit) {
+      const before = values.map((values, c) => diffuse(values, times[c], specs[c].diffusion));
+      const next = before.map(data => data.slice());
+      for (const site of sites) {
+        const { i, at } = site, local = context(before, site, clock), driving = drive?.(local) ?? empty;
+        check(record(driving), 'drive must return inputs and sources');
+        const { inputs = empty, sources = empty } = driving;
+        check(record(inputs) && record(sources) && Object.entries(inputs).every(([key, v]) => nameOK(key) && number(v, -1e8, 1e8)),
+          'invalid driver inputs or sources');
+        for (const [name, rate] of Object.entries(sources)) {
+          const c = indices.get(name);
+          check(c !== undefined && number(rate, -1e8, 1e8), 'invalid source rate for ' + name);
+          next[c][i] = clamp(next[c][i] + rate * dt, specs[c].capacity);
+        }
+        const sensed = Object.freeze({ ...local, inputs: Object.freeze({ ...inputs }) });
+        for (const { id, debit, credit, rate, emitEvery, slot } of recipes) {
+          const value = typeof rate === 'function' ? rate(sensed) : rate;
+          check(number(value, 0, 1e8), 'reaction rate must be finite and nonnegative for ' + id);
+          let made = value * dt;
+          for (const [c, factor] of debit) made = Math.min(made, next[c][i] / factor);
+          for (const [c, factor] of credit) made = Math.min(made, (specs[c].capacity - next[c][i]) / factor);
+          if (!(made > 0)) continue;
+          for (const [c, factor] of debit) next[c][i] = clamp(next[c][i] - made * factor, specs[c].capacity);
+          for (const [c, factor] of credit) next[c][i] = clamp(next[c][i] + made * factor, specs[c].capacity);
+          if (!emitEvery || !emit) continue;
+          emit(id, i, at, made, emitEvery, slot);
+        }
+      }
+      return next;
+    }
+
+    function solve(fields, { time = 0, drive } = {}) {
+      available();
+      check(record(fields) && Object.keys(fields).length === names.length && finite(time) &&
+        (drive === undefined || typeof drive === 'function'), 'expected external channel buffers and a finite clock');
+      const values = names.map((name, c) => {
+        const buffer = fields[name];
+        check((Array.isArray(buffer) || ArrayBuffer.isView(buffer)) && buffer.length === size,
+          'buffer must match the grid for ' + name);
+        return Float64Array.from(buffer, (value, i) => {
+          check(number(value, 0, specs[c].capacity) && (open[i] || value === 0),
+            'buffer exceeds its capacity or contains a blocked cell for ' + name);
+          return value;
+        });
+      });
+      check(tickWork <= maxWork,
+        'step exceeds its diffusion or reaction budget');
+      stepping = true;
+      try {
+        const result = react(values, time, drive);
+        return Object.fromEntries(names.map((name, i) => [name, result[i]]));
+      } finally { stepping = false; }
+    }
+
     const available = () => check(!stepping, 'cannot change the simulation during a step');
     function step(count = 1, { drive } = {}) {
       available();
       check(integer(count, 0, 300) && tick + count <= 1e8 && (drive === undefined || typeof drive === 'function'),
         'invalid timestep count or driver');
       if (!count) return frame();
-      const work = count * (diffusionWork + size * (names.length * 6 + recipes.length * (2 + names.length)));
+      const work = count * tickWork;
       check(work <= maxWork, 'step exceeds its diffusion or reaction budget');
 
       let current = state, nextSerial = serial;
@@ -174,38 +229,13 @@
       try {
         for (let k = 0; k < count; k++) {
           const clock = (tick + k) * dt, outputTime = (tick + k + 1) * dt;
-          const before = current.map((values, c) => diffuse(values, times[c], specs[c].diffusion));
-          const next = before.map(data => data.slice());
-          for (const site of sites) {
-            const { i, at } = site, local = context(before, site, clock), driving = drive?.(local) ?? empty;
-            check(record(driving), 'drive must return inputs and sources');
-            const { inputs = empty, sources = empty } = driving;
-            check(record(inputs) && record(sources) && Object.entries(inputs).every(([key, v]) => nameOK(key) && number(v, -1e8, 1e8)),
-              'invalid driver inputs or sources');
-            for (const [name, rate] of Object.entries(sources)) {
-              const c = indices.get(name);
-              check(c !== undefined && number(rate, -1e8, 1e8), 'invalid source rate for ' + name);
-              next[c][i] = clamp(next[c][i] + rate * dt, specs[c].capacity);
-            }
-            const sensed = Object.freeze({ ...local, inputs: Object.freeze({ ...inputs }) });
-            for (const { id, debit, credit, rate, emitEvery, slot } of recipes) {
-              const value = typeof rate === 'function' ? rate(sensed) : rate;
-              check(number(value, 0, 1e8), 'reaction rate must be finite and nonnegative for ' + id);
-              let made = value * dt;
-              for (const [c, factor] of debit) made = Math.min(made, next[c][i] / factor);
-              for (const [c, factor] of credit) made = Math.min(made, (specs[c].capacity - next[c][i]) / factor);
-              if (!(made > 0)) continue;
-              for (const [c, factor] of debit) next[c][i] = clamp(next[c][i] - made * factor, specs[c].capacity);
-              for (const [c, factor] of credit) next[c][i] = clamp(next[c][i] + made * factor, specs[c].capacity);
-              if (!emitEvery) continue;
-              const amount = carry[slot][i] + made, n = Math.floor(amount / emitEvery);
-              check(emitted.length + n <= maxEvents && nextSerial + n <= Number.MAX_SAFE_INTEGER, 'emission budget exceeded');
-              carry[slot][i] = Math.max(0, amount - n * emitEvery);
-              for (let event = 0; event < n; event++)
-                emitted.push({ id: nextSerial++, rule: id, cell: i, at, time: outputTime, amount: emitEvery });
-            }
-          }
-          current = next;
+          current = react(current, clock, drive, (id, i, at, made, emitEvery, slot) => {
+            const amount = carry[slot][i] + made, n = Math.floor(amount / emitEvery);
+            check(emitted.length + n <= maxEvents && nextSerial + n <= Number.MAX_SAFE_INTEGER, 'emission budget exceeded');
+            carry[slot][i] = Math.max(0, amount - n * emitEvery);
+            for (let event = 0; event < n; event++)
+              emitted.push({ id: nextSerial++, rule: id, cell: i, at, time: outputTime, amount: emitEvery });
+          });
         }
       } finally { stepping = false; }
       state = current;
@@ -229,7 +259,7 @@
       return frame();
     }
     const start = checkpoint();
-    return Object.freeze({ width, height, bounds, channels, dt, step, frame, checkpoint, restore, reset: () => restore(start),
+    return Object.freeze({ width, height, bounds, channels, dt, step, solve, frame, checkpoint, restore, reset: () => restore(start),
       mask: () => open.slice() });
   }
 

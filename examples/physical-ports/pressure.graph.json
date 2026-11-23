@@ -1,0 +1,22 @@
+{
+  "format": "ink-studio/graph-project",
+  "version": 1,
+  "inputs": {
+    "sensor": {
+      "type": "number",
+      "default": 12.5,
+      "quantity": { "unit": "kPa", "kind": "gauge-pressure", "sampleRate": 20 }
+    }
+  },
+  "nodes": {
+    "pascals": {
+      "op": "quantity.convert",
+      "inputs": {
+        "value": { "input": "sensor" },
+        "from": { "unit": "kPa", "kind": "gauge-pressure", "sampleRate": 20 },
+        "to": { "unit": "Pa", "kind": "gauge-pressure", "sampleRate": 20 }
+      }
+    }
+  },
+  "outputs": { "pressure": { "node": "pascals" } }
+}

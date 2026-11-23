@@ -176,7 +176,7 @@ function markFrame(frame, mask) {
 
 function comparison(kit, tiles, time) {
   const {w,h}=tiles[0].frame, column=Math.max(144,w);
-  const width=24+3*column+16, height=2*h+106;
+  const width=24+tiles.length*column+(tiles.length-1)*8, height=2*h+106;
   const title='#e2eaf6', muted='#a6b8cd';
   const draw=[], layers=[];
   const label=(text,x,y,size,color=title)=>draw.push({type:'text',text,at:[x,y],size,color});
@@ -197,20 +197,21 @@ function comparison(kit, tiles, time) {
 
 function reviewPaletteShimmer(world, {
   from=0,to=3,fps=12,window=3,minDelta=.025,minCoverage=.8,width=160,height=96,
-  view={},camera,pose,onFrame
+  view={},camera,pose,onFrame,includeView=false
 }={}) {
   const n=Math.ceil((to-from)*fps-1e-8);
   const px=view.px??1, artWidth=Math.ceil(width/px), artHeight=Math.ceil(height/px);
   if (!Number.isFinite(from) || from<0 || !Number.isFinite(to) || !integer(fps,1,120) || !integer(n,3,240) ||
       !integer(window,1,30) || !unit(minDelta) || !unit(minCoverage) ||
-      !integer(width,1,2048) || !integer(height,1,2048) || !integer(px,1,2048) || 3*n*artWidth*artHeight>72e6)
+      typeof includeView!=='boolean' || !integer(width,1,2048) || !integer(height,1,2048) || !integer(px,1,2048) ||
+      (includeView ? 4 : 3)*n*artWidth*artHeight>72e6)
     throw new RangeError('Palette shimmer needs 3–240 frames, a valid art size, and bounded sampling settings');
   if ([camera,pose,onFrame].some(fn=>fn!==undefined && typeof fn!=='function'))
     throw new TypeError('Palette shimmer camera, pose and frame callbacks must be functions');
   if (world.anim?.stateful && !pose) throw new TypeError('A stateful scene needs a pose callback for palette shimmer review');
   if (view.raw) throw new RangeError('Palette shimmer needs a palette-enabled render');
   const kit=require('../index.js').load().KIT, distance=colorDistance();
-  const streams=spaces.map(space=>({space,pairs:new Map(),frames:[],total:totals(),
+  const streams=(includeView ? [...spaces,'view'] : spaces).map(space=>({space,pairs:new Map(),frames:[],total:totals(),
     history:{artHistory:artHistory({frames:24}),volumeHistory:kit.atmosphere.history(),transparencyHistory:transparencyHistory(),
       afterimageHistory:kit.afterimages.history()}}));
   const settings={window,minDelta,minCoverage};
@@ -241,7 +242,7 @@ function reviewPaletteShimmer(world, {
     before=grid;
     const score=Math.max(...tiles.map(row=>row.counts.reversals));
     if (!peak || score>peak.score || !score && !peak.score && index===Math.floor(n/2)) peak={index,time,tiles,score};
-    if (onFrame) onFrame(comparison(kit,tiles,time),{index,time});
+    if (onFrame) onFrame(comparison(kit,tiles,time),{index,time,tiles});
   }
   const variants=streams.map(({space,pairs,total,frames})=>({space,...total,
     reversalRate:total.trackedPixels ? total.reversals/total.trackedPixels : 0,frames,

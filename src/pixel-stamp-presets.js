@@ -1,6 +1,12 @@
 /* Authored cel clips and native-pixel cue presets. */
 const PixelStampPresets = (() => {
   const glitter = typeof GlitterBurstCels === 'undefined' ? require('./glitter-burst-cels.js') : GlitterBurstCels;
+  const tileCels = typeof PixelTileCels === 'undefined' ? require('./pixel-tile-cels.js') : PixelTileCels;
+  const reconnectCels = typeof ReconnectingTileCels === 'undefined' ? require('./reconnecting-tile-cels.js') : ReconnectingTileCels;
+  const contactCels = typeof ContactMarkCels === 'undefined' ? require('./contact-mark-cels.js') : ContactMarkCels;
+  const highlightCels = typeof HighlightCelPresets === 'undefined' ? require('./highlight-cel-presets.js') : HighlightCelPresets;
+  const boundaryCels = typeof BoundaryCelPresets === 'undefined' ? require('./boundary-cel-presets.js') : BoundaryCelPresets;
+  const foamCels = typeof ShoreFoamPresets === 'undefined' ? require('./shore-foam-presets.js') : ShoreFoamPresets;
   const record = value => value && Object.getPrototypeOf(value) === Object.prototype;
 
   function clips(){
@@ -84,7 +90,53 @@ const PixelStampPresets = (() => {
       ['..2..','..3..','.35..','.456.','..565','34563'],['..3..','..46.','.456.','.565.','456..','33433'],
       ['.....','...2.','..346','..565','.3563','23433'],['.....','..2..','..3..','.254.','34654','33543']
     ],'loop');
-    return {star,far,seven,start,sweep,echo,bubble,tiny,pop,popTiny,ripple,tongue,chip,ash,burst,bed};
+    const signal = ['#34465f', '#678098', '#a9c5d4', '#edf9f7'];
+    const glyph = cels => effect(signal, [.09, .12, .13, .18], cels);
+    // All phases share a center. The contours are redrawn at each size.
+    const cross = glyph([
+      ['.......','.......','...1...','..121..','...1...','.......','.......'],
+      ['...2...','..232..','..333..','2333332','..333..','..232..','...2...'],
+      ['.......','...0...','...1...','.01110.','...1...','...0...','.......'],
+      ['.......','.......','...0...','..000..','...0...','.......','.......']
+    ]);
+    const outlinedCross = glyph([
+      ['.......','...1...','..1.1..','.1...1.','..1.1..','...1...','.......'],
+      ['..232..','..3.3..','233.332','3.....3','233.332','..3.3..','..232..'],
+      ['.......','...1...','..1.1..','.1...1.','..1.1..','...1...','.......'],
+      ['.......','...0...','.......','.0...0.','.......','...0...','.......']
+    ]);
+    const splitCross = glyph([
+      ['.......','..1.1..','..1.1..','.......','..1.1..','..1.1..','.......'],
+      ['..2.2..','..3.3..','233.332','.......','233.332','..3.3..','..2.2..'],
+      ['.......','..1.1..','.11.11.','.......','.11.11.','..1.1..','.......'],
+      ['.......','..0....','....0..','.......','..0....','....0..','.......']
+    ]);
+    const ring = glyph([
+      ['.......','.......','...1...','..1.1..','...1...','.......','.......'],
+      ['..232..','.3...3.','3.....3','3.....3','3.....3','.3...3.','..232..'],
+      ['.......','..11...','.1...1.','.0...1.','.1...0.','...11..','.......'],
+      ['.......','...0...','..0.0..','.......','..0.0..','...0...','.......']
+    ]);
+    const diamond = glyph([
+      ['.......','...1...','...1...','.11211.','...1...','...1...','.......'],
+      ['...2...','...3...','..333..','2333332','..333..','...3...','...2...'],
+      ['.......','...0...','..111..','.01.10.','..111..','...0...','.......'],
+      ['.......','.......','.......','...0...','.......','.......','.......']
+    ]);
+    const fourDot = glyph([
+      ['.......','.......','..1.1..','.......','..1.1..','.......','.......'],
+      ['.......','.32.23.','.33.33.','.......','.33.33.','.23.32.','.......'],
+      ['.......','..0.0..','.1...1.','.......','.1...1.','..0.0..','.......'],
+      ['.......','.......','..0.0..','.......','..0.0..','.......','.......']
+    ]);
+    const brackets = glyph([
+      ['.......','.......','..1.1..','..1.1..','..1.1..','.......','.......'],
+      ['.......','.32.23.','.3...3.','.......','.3...3.','.32.23.','.......'],
+      ['.......','.10..1.','.1.....','.......','.....1.','.1..01.','.......'],
+      ['.......','.......','..0....','.......','....0..','.......','.......']
+    ]);
+    return {star,far,seven,start,sweep,echo,bubble,tiny,pop,popTiny,ripple,tongue,chip,ash,burst,bed,
+      cross,outlinedCross,splitCross,ring,diamond,fourDot,brackets};
   }
 
   const art = clips();
@@ -107,16 +159,36 @@ const PixelStampPresets = (() => {
     'burst-spray': ['Hollow burst', 'heat', art.burst],
     'burst-fork': ['Forked flare', 'glitter', glitter.burst('fork')],
     'burst-diamond': ['Hollow diamond', 'glitter', glitter.burst('diamond')],
-    'burst-fan': ['Ember fan', 'glitter', glitter.burst('fan')]
+    'burst-fan': ['Ember fan', 'glitter', glitter.burst('fan')],
+    'glyph-cross': ['Signal cross', 'signal', art.cross],
+    'glyph-outline-cross': ['Signal outline cross', 'signal', art.outlinedCross],
+    'glyph-split-cross': ['Signal split cross', 'signal', art.splitCross],
+    'glyph-ring': ['Signal ring', 'signal', art.ring],
+    'glyph-diamond': ['Signal diamond', 'signal', art.diamond],
+    'glyph-four-dot': ['Signal four-dot', 'signal', art.fourDot],
+    'glyph-brackets': ['Signal brackets', 'signal', art.brackets],
+    ...tileCels, ...reconnectCels, ...highlightCels, ...foamCels, ...boundaryCels,
+    ...Object.fromEntries(Object.entries(contactCels).map(([id, art]) => {
+      const [, kind, size, angle] = id.split('-');
+      return [id, ['Contact ' + kind + ' · ' + size + ' · ' + (angle === 'ne' ? 'diagonal' : 'horizontal'), 'contact', art]];
+    }))
   };
   const roles = {
     sky: ['dim','lit','pale','ray','core'],
     light: ['shadow','bronze','honey','cream','core'],
     dew: ['rim-dark','rim','rim-light','catchlight','recess','reflection'],
     heat: ['ash','dim','ember','red','orange','gold','hot','core'],
-    glitter: ['ash','dim','ember','orange','gold','hot','core']
+    glitter: ['ash','dim','ember','orange','gold','hot','core'],
+    signal: ['residue', 'dim', 'lit', 'peak'],
+    'tile-copper': ['shadow', 'trace', 'warm', 'lit', 'peak'],
+    'tile-reconnect': ['shadow', 'ink', 'edge', 'wave', 'spark'],
+    'tile-frost': ['shadow', 'ice', 'blue', 'lit', 'peak'],
+    contact: ['ash', 'ember', 'heat', 'edge', 'core'],
+    highlight: ['shade', 'edge', 'lit', 'spark', 'core'],
+    foam: ['wake', 'wash', 'edge', 'crest', 'spark'],
+    'boundary-frost': ['shade','ice','rim','core']
   };
-  const labels = {star:'Star twinkle', glint:'Surface glint', bubble:'Rising bubble', ember:'Ember', burst:'Glitter burst'};
+  const labels = {star:'Star twinkle', glint:'Surface glint', bubble:'Rising bubble', ember:'Ember', burst:'Glitter burst', glyph:'Signal glyph'};
   const recipes = {
     star: {
       tall: [['star-tall',0]], wide: [['star-wide',0]], distant: [['star-distant',0]]
@@ -148,6 +220,11 @@ const PixelStampPresets = (() => {
     burst: {
       spray: [['burst-spray',0,[[0,0,0],[.74,1,-2]]]],
       fork: [['burst-fork',0]], diamond: [['burst-diamond',0]], fan: [['burst-fan',0]]
+    },
+    glyph: {
+      cross: [['glyph-cross',0]], 'outline-cross': [['glyph-outline-cross',0]], 'split-cross': [['glyph-split-cross',0]],
+      ring: [['glyph-ring',0]],
+      diamond: [['glyph-diamond',0]], 'four-dot': [['glyph-four-dot',0]], brackets: [['glyph-brackets',0]]
     }
   };
   const duration = source => source.frames.reduce((sum,frame)=>sum+frame.duration,0);

@@ -1,0 +1,14 @@
+{
+  "format": "ink-studio/graph-project",
+  "version": 1,
+  "time": 0.6,
+  "assets": { "model": { "format": "json", "file": "sluice.json" } },
+  "nodes": {
+    "source": { "op": "jsonAsset", "inputs": { "name": "model" } },
+    "sluice": { "op": "sim.model", "inputs": { "model": { "node": "source" } } }
+  },
+  "outputs": {
+    "sluice": { "node": "sluice", "port": "value" }
+  },
+  "exports": { "sluice": { "output": "sluice", "format": "json" } }
+}

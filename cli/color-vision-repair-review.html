@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Color-vision palette repair · Ink Studio</title>
+<style>
+  :root { color-scheme: dark; --page: #15161d; --card: #20232e; --line: #3a4156; --ink: #eff1f9; --muted: #bbc4d8; --accent: #a6eafa; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.45 system-ui, sans-serif; }
+  main { max-width: 1200px; margin: auto; padding: 35px clamp(14px, 4vw, 45px) 48px; }
+  h1 { margin: 3px 0 0; font-size: clamp(30px, 6vw, 45px); line-height: 1.1; letter-spacing: -.045em; }
+  h2 { margin: 0; font-size: 15px; }
+  p { margin: 0; }
+  .meta { color: var(--muted); font: 12px/1.45 ui-monospace, monospace; }
+  header, .toolbar, figcaption, .heading { display: flex; gap: 8px 12px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
+  header { margin-bottom: 20px; }
+  .toolbar { margin-bottom: 12px; }
+  button, select { color: var(--ink); background: var(--card); border: 1px solid var(--line); border-radius: 6px; font: inherit; padding: 7px 10px; }
+  button { cursor: pointer; }
+  button:hover, select:hover { border-color: var(--muted); }
+  button:focus-visible, select:focus-visible, input:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  button[aria-pressed="true"] { border-color: var(--accent); background: #2b3b49; }
+  button.primary { color: #182b31; background: var(--accent); border-color: var(--accent); font-weight: 650; }
+  .controls { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+  label select { margin-left: 4px; }
+  .frames { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 11px; }
+  figure { margin: 0; background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  figcaption { padding: 7px 11px; min-height: 41px; }
+  .picture { position: relative; background: #151c27; }
+  img { display: block; width: 100%; image-rendering: pixelated; }
+  .mask { position: absolute; inset: 0; pointer-events: none; }
+  section { margin-top: 21px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 9px 0; }
+  .change, .chip { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .sample { width: 15px; height: 15px; border: 1px solid #ffffff51; border-radius: 3px; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { text-align: right; border-bottom: 1px solid var(--line); padding: 6px 5px; }
+  th:first-child, td:first-child { text-align: left; }
+  .weak { color: #ffd697; }
+  .passing { color: #b8f3d2; }
+  .foot { color: var(--muted); margin-top: 10px; }
+  [hidden] { display: none !important; }
+  @media (max-width: 580px) { main { padding-top: 20px; } .frames { grid-template-columns: 1fr; } th, td { padding: 6px 3px; } .chip { gap: 3px; font-size: 11px; } .sample { width: 11px; height: 11px; } }
+</style>
+<main>
+  <header>
+    <div><p class="meta">Ink Studio · Color-vision palette repair</p><h1 id="title"></h1></div>
+    <button id="download" class="primary">Download repair</button>
+  </header>
+  <div class="toolbar">
+    <label>View simulation <select id="mode"></select></label>
+    <div class="controls" id="pairs" aria-label="Outline a subject boundary"></div>
+  </div>
+  <div class="frames" id="frames"></div>
+  <section aria-labelledby="changes-title">
+    <div class="heading"><h2 id="changes-title">Swatch changes</h2><span id="proof" class="meta"></span></div>
+    <div class="chips" id="changes"></div>
+  </section>
+  <section aria-labelledby="edges-title">
+    <div class="heading"><h2 id="edges-title">Subject and background separation</h2><span id="threshold" class="meta"></span></div>
+    <table><thead><tr><th scope="col">Boundary</th><th scope="col">Before</th><th scope="col">After</th></tr></thead><tbody id="edges"></tbody></table>
+    <p class="foot" id="evidence"></p>
+  </section>
+</main>
+<script>
+'use strict';
+const data = /*REPAIR_DATA*/;
+const get = id => document.getElementById(id);
+const { report, images, title } = data;
+const names = { normal: 'Unsimulated', protanopia: 'Protanopia', deuteranopia: 'Deuteranopia', tritanopia: 'Tritanopia' };
+const affected = report.relationships.flatMap(pair => pair.edges.flatMap(edge => edge.weakBefore));
+const select = get('mode');
+let mode = affected.includes('deuteranopia') ? 'deuteranopia' : affected[0] ?? report.modes[0];
+let selected = -1;
+get('title').textContent = title;
+for (const key of report.modes) select.add(new Option(names[key], key, false, key === mode));
+get('threshold').textContent = 'Target distance ≥ ' + report.thresholds.minDistance.toFixed(3) +
+  (report.thresholds.minLightness ? ' · Lightness gap ≥ ' + report.thresholds.minLightness.toFixed(3) : '');
+get('proof').textContent = report.work.minimumChanges === null ? {
+  unsampled: 'Some boundaries have no samples', unresolved: 'No repair found with these settings', 'search-limit': 'Search limit reached'
+}[report.status] : 'Minimum · ' + report.work.minimumChanges + (report.work.minimumChanges === 1 ? ' edit' : ' edits');
+
+function chip(color) {
+  const item = document.createElement('span'); item.className = 'chip meta';
+  const sample = document.createElement('span'); sample.className = 'sample'; sample.style.backgroundColor = color;
+  item.append(sample, color); return item;
+}
+for (const change of report.changes) {
+  const row = document.createElement('div'); row.className = 'change';
+  row.append(chip(change.from), '→', chip(change.to), ' · ' + change.pixels + ' pixels'); get('changes').append(row);
+}
+if (!report.changes.length) get('changes').textContent = report.status === 'passing' ? 'All sampled boundaries pass.' : 'Review the flagged boundaries below.';
+
+const frames = [['before', 'Original'], ['after', 'Repaired']].map(([key, label]) => {
+  const figure = document.createElement('figure'), caption = document.createElement('figcaption'), name = document.createElement('strong');
+  name.textContent = label;
+  const summary = document.createElement('span'); summary.className = 'meta'; caption.append(name, summary);
+  const box = document.createElement('div'); box.className = 'picture';
+  const image = document.createElement('img'), mask = document.createElement('img'); mask.alt = ''; mask.className = 'mask'; mask.hidden = true;
+  box.append(image, mask); figure.append(caption, box); get('frames').append(figure);
+  return { key, image, mask, summary, label };
+});
+const buttons = ['Overview', ...report.relationships.map(pair => pair.label)].map((name, index) => {
+  const button = document.createElement('button'); button.type = 'button'; button.textContent = name;
+  button.addEventListener('click', () => { selected = index - 1; update(); }); get('pairs').append(button);
+  return button;
+});
+function update() {
+  const pairs = selected < 0 ? report.relationships : [report.relationships[selected]];
+  const rows = pairs.flatMap(pair => pair.edges.map(edge => ({ label: pair.label, edge })));
+  for (const { key, image, mask, summary, label } of frames) {
+    image.src = images[mode][key]; image.alt = label + ' · ' + names[mode];
+    mask.hidden = selected < 0;
+    if (selected >= 0) mask.src = data.masks[selected].image;
+    const weak = rows.filter(({ edge }) => edge[key === 'before' ? 'weakBefore' : 'weakAfter'].includes(mode)).length;
+    summary.textContent = weak + (weak === 1 ? ' weak swatch pair' : ' weak swatch pairs');
+  }
+  buttons.forEach((button, index) => button.setAttribute('aria-pressed', String(index === selected + 1)));
+  rows.sort((a, b) => Number(b.edge.weakBefore.includes(mode)) - Number(a.edge.weakBefore.includes(mode)) || b.edge.count - a.edge.count);
+  get('edges').replaceChildren(...rows.slice(0, 16).map(({ label, edge }) => {
+    const tr = document.createElement('tr'), name = document.createElement('th'); name.scope = 'row';
+    const hint = document.createElement('small'); hint.className = 'meta'; hint.textContent = ' · ' + edge.count + ' edges';
+    name.append(label, hint); name.title = edge.subject + ' on ' + edge.background; tr.append(name);
+    for (const [key, flags] of [['before', 'weakBefore'], ['after', 'weakAfter']]) {
+      const value = edge[key].find(sample => sample.mode === mode), cell = document.createElement('td');
+      cell.textContent = value.distance.toFixed(3) + (report.thresholds.minLightness ? ' / ' + value.lightness.toFixed(3) : '');
+      cell.className = 'meta ' + (edge[flags].includes(mode) ? 'weak' : 'passing');
+      cell.setAttribute('aria-label', (edge[flags].includes(mode) ? 'Weak ' : 'Passing ') + cell.textContent);
+      tr.append(cell);
+    }
+    return tr;
+  }));
+  get('evidence').textContent = rows.length ? (rows.length > 16 ? 'Showing 16 of ' + rows.length + ' swatch pairs. ' : '') +
+    'Distances are measured on adjacent art pixels in the selected simulation.' : 'No qualifying opaque boundaries were found for the selection.';
+}
+select.addEventListener('change', () => { mode = select.value; update(); });
+get('download').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify(data.stack, null, 2) + '\n'], { type: 'application/json' });
+  const url = URL.createObjectURL(blob), link = document.createElement('a');
+  link.href = url; link.download = 'palette-repair.json'; link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+});
+update();
+</script>
+</html>

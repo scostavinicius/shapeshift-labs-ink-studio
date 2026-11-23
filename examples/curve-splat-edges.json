@@ -1,0 +1,21 @@
+{
+  "format": "ink-studio/curve-splat-scene",
+  "version": 1,
+  "id": "curve-edge-study",
+  "background": "#17283a",
+  "camera": { "target": [0, 0, 0], "dist": 7.0, "yaw": 0.13, "pitch": 0.08 },
+  "strands": [
+    {
+      "object": "soft-fibre", "edge": "gaussian", "width": 0.28, "opacity": 0.94, "color": "#f2be7d",
+      "source": { "kind": "spline", "points": [[-2.35, 1.15, -0.35], [-1.29, 1.70, 0.30], [0.1, 1.19, -0.15], [1.38, 0.93, 0.45], [2.33, 1.34, -0.16]] }
+    },
+    {
+      "object": "bounded-fibre", "edge": "beta", "width": 0.28, "opacity": 0.94, "color": "#f2be7d",
+      "source": { "kind": "spline", "points": [[-2.35, -0.11, -0.35], [-1.29, 0.44, 0.30], [0.1, -0.07, -0.15], [1.38, -0.33, 0.45], [2.33, 0.08, -0.16]] }
+    },
+    {
+      "object": "pixel-cord", "edge": "hard", "width": 0.28, "opacity": 0.94, "color": "#f2be7d",
+      "source": { "kind": "spline", "points": [[-2.35, -1.37, -0.35], [-1.29, -0.82, 0.30], [0.1, -1.33, -0.15], [1.38, -1.59, 0.45], [2.33, -1.18, -0.16]] }
+    }
+  ]
+}

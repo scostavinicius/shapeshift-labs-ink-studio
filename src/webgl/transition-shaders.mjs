@@ -167,6 +167,33 @@ const bodies = {
     float band = mod(floor(uv.y * u_bands), 2.0);
     float x = uv.x + (band * 2.0 - 1.0) * u_value;
     return x < 0.0 || x >= 1.0 ? sourceTo(uv) : sourceFrom(vec2(x, uv.y));`,
+  columnMelt: `
+    if (u_value <= 0.0) return sourceFrom(uv);
+    if (u_value >= 1.0) return sourceTo(uv);
+    vec2 pixel = floor(gl_FragCoord.xy) + 0.5;
+    vec2 center = pixel / u_size;
+    float arrival, stick;
+    if (u_hasMask != 0) {
+      int strips = textureSize(u_mask, 0).x;
+      int strip = (2 * int(pixel.x) + 1) * strips / (2 * int(u_size.x));
+      vec4 authored = texelFetch(u_mask, ivec2(strip, 0), 0);
+      arrival = authored.r;
+      stick = authored.b;
+    } else {
+      float strip = floor(pixel.x / max(1.0, floor(u_cells + 0.5)));
+      arrival = hash(vec2(strip, 3.0));
+      stick = hash(vec2(strip, 19.0)) > 0.82 ? 0.62 : 0.0;
+    }
+    float start = 0.60 * arrival;
+    float phase = clamp((u_value - start) / (1.0 - start), 0.0, 1.0);
+    float slip = 0.14 * stick;
+    float holdTime = 0.52 * stick;
+    float sag = 0.10 * stick;
+    float fall = max(0.0, (phase - slip - holdTime) / (1.0 - slip - holdTime));
+    float distance = phase < slip ? sag * phase / slip : sag + (1.0 - sag) * fall * fall;
+    float drop = floor(u_size.y * distance + 0.5);
+    if (u_size.y - pixel.y < drop) return sourceTo(center);
+    return sourceFrom(vec2(center.x, (pixel.y + drop) / u_size.y));`,
   rush: `
     float lane = floor(uv.y * u_bands);
     float speed = 0.55 + hash(vec2(lane, 27.0)) * 0.65;

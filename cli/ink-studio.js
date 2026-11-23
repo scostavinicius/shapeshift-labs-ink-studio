@@ -38,6 +38,8 @@ const num = (k, d) => (opt[k] === undefined ? d : +opt[k]),
   list = (k, d) => (opt[k] === undefined ? d : String(opt[k]).split(',').map(Number));
 let A = null;
 const importedAssets = new Map();
+const gaussianFile = file => /\.(ply|spz|gsz)$/i.test(file);
+const gaussianScenes = new Map();
 const lib = () => A || (A = cfg.load ? cfg.load() : require('../index.js').load());
 // a diorama by its id, or a file in lab/ that exports (kit) => ({ id, name, seed, build })
 /* a mesh file is a diorama too: fitted to --size, coloured from its own materials, baked and looked at like the rest */
@@ -85,10 +87,15 @@ function meshScene(file) {
 }
 /* a diorama written as data (see lab/data-shrine.json). --style puts it in another style; meshes it names are looked for beside the file */
 function dataScene(file, override, { installedPacks = false } = {}) {
-  const K = lib().KIT,
-    source = override ?? JSON.parse(fs.readFileSync(path.resolve(file), 'utf8')),
-    bundles = K.authoring.projectBundles,
-    project = bundles && source?.format === bundles.format ? bundles.open(source) : undefined,
+  const K = lib().KIT, Assets = require('./asset-references.js'),
+    raw = override ?? JSON.parse(fs.readFileSync(path.resolve(file), 'utf8')),
+    source = Assets.visual(K.authoring.assetReferences, raw, 'scene', file, shot?.dependency);
+  if (source?.format === K.curveSplats.format)
+    return { id: source.id, name: source.name ?? source.id, seed: source.seed, build: seed => K.curveSplats.world({
+      ...source, seed: seed ?? source.seed
+    }) };
+  const bundles = K.authoring.projectBundles,
+    project = bundles && source?.format === bundles.format ? bundles.open(source, { digest: Assets.hash }) : undefined,
     spec = project ? project.scene() : { ...source },
     dir = path.dirname(path.resolve(file));
   if (!project && spec.dataInputs !== undefined)
@@ -159,8 +166,22 @@ function dataScene(file, override, { installedPacks = false } = {}) {
 }
 function scene(id) {
   if (!id) die('which diorama? try: ink-studio scenes');
+  if (id.startsWith('@')) {
+    const file = opt['asset-registry'];
+    if (typeof file !== 'string' || !file.trim()) die('Pass --asset-registry with a locked registry for a versioned scene');
+    const api = lib().KIT.authoring.assetReferences, assets = require('./asset-references.js');
+    const selection = assets.open(api, path.resolve(file), { onFile: shot?.dependency })
+      .resolve(assets.referenceArgument(api, id), 'scene');
+    id = selection.filename;
+    return dataScene(id, assets.parse(selection.bytes));
+  }
   if (opt['environment-preset'] !== undefined && !id.endsWith('.json'))
     die('--environment-preset selects a preset for a JSON diorama');
+  if (gaussianFile(id)) {
+    const descriptor = gaussianScenes.get(id);
+    if (!descriptor) throw new Error('Gaussian input is supported by render, turn, sheet, clip and snap');
+    return descriptor;
+  }
   if (/\.(obj|gltf|glb)$/i.test(id)) return meshScene(id);
   if (id.endsWith('.json')) return dataScene(id);
   if (id.endsWith('.js')) return require(path.resolve(id))(lib());
@@ -170,7 +191,8 @@ function scene(id) {
 }
 const paintDirectory = id => path.resolve(CWD, opt.dir || path.join(cfg.paint || 'studio/paint', id));
 const readPaint = file => fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {};
-function build(id, seedOverride, { paint = true, retainSdf = false, parameterInputs, controls: suppliedControls } = {}) {
+function build(id, seedOverride, { paint = true, retainSdf = false, retainReferenceSdf = false,
+  parameterInputs, controls: suppliedControls } = {}) {
   if (opt.focus) {
     const f = list('focus'); // uneven detail: x,y,z then near, far, coarse
     globalThis.INK_FOCUS = { p: [f[0] || 0, f[1] || 0, f[2] || 0], near: f[3], far: f[4], coarse: f[5] };
@@ -213,12 +235,15 @@ function build(id, seedOverride, { paint = true, retainSdf = false, parameterInp
     return (s.animate && s.animate(built, seed)) || built;
   };
   const previousSdf = globalThis.INK_RETAIN_RENDER_SDF;
+  const previousReferenceSdf = globalThis.INK_RETAIN_REFERENCE_SDF;
   let w;
   try {
     if (retainSdf) globalThis.INK_RETAIN_RENDER_SDF = true;
+    if (retainReferenceSdf) globalThis.INK_RETAIN_REFERENCE_SDF = true;
     w = liveSunOption() ? require('./look-preview.js').withAlbedo(assemble) : assemble();
   } finally {
     if (retainSdf) globalThis.INK_RETAIN_RENDER_SDF = previousSdf;
+    if (retainReferenceSdf) globalThis.INK_RETAIN_REFERENCE_SDF = previousReferenceSdf;
   }
   if (inputs) {
     const actual = w.simulationInputs && lib().KIT.simulationInputs.tracks(w.simulationInputs);
@@ -235,6 +260,27 @@ function build(id, seedOverride, { paint = true, retainSdf = false, parameterInp
       (w.pixAnchors = lib().KIT.pixel.anchors)); // (colour per pixel: its patterns, to be called for each pixel; where edge sprites stand)
   w.buildMs = Date.now() - t0;
   w.id = s.id;
+  if (opt['pose-correctives']!==undefined) {
+    const editor=lib().KIT.poseCorrectives.forWorld(w), source=opt['pose-correctives'];
+    if (source==='off') editor?.set([]);
+    else {
+      if (typeof source!=='string' || !editor) die('--pose-correctives needs a patch JSON file and a puppet rig');
+      const file=path.resolve(source);
+      shot?.dependency(file);
+      const asset=JSON.parse(fs.readFileSync(file,'utf8'));
+      editor.set(Array.isArray(asset) ? asset : [asset]);
+    }
+  }
+  if (opt['view-poses']!==undefined) {
+    const editor=lib().KIT.viewPoses.forWorld(w), source=opt['view-poses'];
+    if (source==='off') editor?.set(null);
+    else {
+      if (typeof source!=='string' || !editor) die('--view-poses needs an asset JSON file and a puppet rig');
+      const file=path.resolve(source);
+      shot?.dependency(file);
+      editor.set(JSON.parse(fs.readFileSync(file,'utf8')));
+    }
+  }
   if (s.lookPreviewPacks !== undefined) w.lookPreviewPacks = s.lookPreviewPacks;
   w.name = s.name;
   w.clock = 0;
@@ -345,6 +391,9 @@ function liveSunOption() {
     ...(opt['shadow-bias'] !== undefined && { bias: num('shadow-bias') }),
     ...(opt['sun-shadows'] !== undefined && { shadows: opt['sun-shadows'] !== 'off' })
   };
+  for (const [flag,key] of [['shadow-strand-spans','maxSpans'],['shadow-strand-layers','maxLayers']]) {
+    if (opt[flag]!==undefined) (overrides.strandShadows ??= {})[key]=opt[flag]===true ? NaN : num(flag);
+  }
   for (const [flag, key] of [['sky-bounce', 'skyBounce'], ['ground-bounce', 'groundBounce']]) {
     const choice = opt[flag], strength = opt[flag + '-intensity'];
     if (choice === undefined && strength === undefined) continue;
@@ -438,6 +487,9 @@ function splatFieldsOption() {
 
 function spriteAtlasOption() {
   const value=opt['sprite-atlas'];
+  const clip=opt['sprite-clip'];
+  if (clip!==undefined && (typeof clip!=='string' || typeof value!=='string' || ['on','off'].includes(value)))
+    die('--sprite-clip needs a clip ID and an atlas file passed with --sprite-atlas');
   if (value===undefined) return undefined;
   if (value==='off') return false;
   if (value==='on' || value===true) return true;
@@ -447,7 +499,8 @@ function spriteAtlasOption() {
     const atlas=require('./sprite-atlas.js').readSpriteAtlas(path.resolve(value),
       { cels: edits==='off'?false:edits&&path.resolve(edits) });
     inputSpriteAtlas=[lib().KIT.sprite.placeAtlas({
-      atlas,at:opt['sprite-at']?list('sprite-at'):[0,0,0],scale:num('sprite-scale',1),playback:opt['sprite-playback']
+      atlas,at:opt['sprite-at']?list('sprite-at'):[0,0,0],scale:num('sprite-scale',1),
+      playback:clip===undefined?opt['sprite-playback']:{clip,mode:opt['sprite-playback']}
     })];
   }
   return inputSpriteAtlas;
@@ -604,6 +657,14 @@ function stableDetailOption() {
 let stagingOverride;
 function cameraOptions() {
   const cameraShot = opt['camera-shot'];
+  const cameraOffset = opt['camera-orbit-offset'];
+  let cameraOrbitOffset;
+  if (cameraOffset !== undefined) {
+    const degrees = list('camera-orbit-offset');
+    if (typeof cameraOffset !== 'string' || cameraOffset.split(',').some(part => !part.trim()) ||
+        degrees.length !== 2 || !degrees.every(Number.isFinite)) die('--camera-orbit-offset needs yaw,pitch in degrees');
+    cameraOrbitOffset = degrees.map(n => n * Math.PI / 180);
+  }
   if (cameraShot !== undefined && !lib().KIT.world.data.id(cameraShot)) die('--camera-shot needs a shot ID');
   const staging = opt['camera-staging'];
   if (staging !== undefined && typeof staging !== 'string') die('--camera-staging needs a JSON file, on or off');
@@ -612,7 +673,7 @@ function cameraOptions() {
   if (opt['focal-length'] === true || opt['sensor-height'] === true) die('Lens options need a value in millimeters');
   const composition=opt.composition===undefined?undefined:String(opt.composition).split(',').map(Number);
   if(composition!==undefined) {try{lib().CameraLens.composition(composition);}catch(error){die('--composition needs two normalized numbers, e.g. 0.33,0.5');}}
-  return { cameraImpulseTime:num('camera-impulse-time'), fov:num('fov'), focusDistance:num('focus-distance'), composition, cameraShot, ortho: onOffOption('ortho'), cameraStaging, cameraGuides: onOffOption('camera-guides'),
+  return { cameraImpulseTime:num('camera-impulse-time'), fov:num('fov'), focusDistance:num('focus-distance'), composition, cameraShot, cameraOrbitOffset, ortho: onOffOption('ortho'), cameraStaging, cameraGuides: onOffOption('camera-guides'),
     focalLength: num('focal-length'), sensorHeight: num('sensor-height'), depthOfField: onOffOption('depth-of-field') };
 }
 
@@ -633,6 +694,30 @@ function colorClustersOption() {
   if (typeof value !== 'string') die('--color-clusters needs a JSON file or off');
   return colorClustersOverride ??= JSON.parse(fs.readFileSync(path.resolve(value), 'utf8'));
 }
+let protectedPixelsOverride;
+function protectedPixelsOption() {
+  const value = opt['protected-pixels'];
+  if (value === undefined) return;
+  if (value === 'off') return false;
+  if (value === 'on' || value === true) return true;
+  return protectedPixelsOverride ??= JSON.parse(fs.readFileSync(path.resolve(value),'utf8'));
+}
+let surfaceHistoryOverride;
+function surfaceHistoryOption() {
+  const value = opt['surface-history'];
+  if (value === undefined) return;
+  if (value === 'off') return false;
+  if (value === 'on' || value === true) return true;
+  return surfaceHistoryOverride ??= JSON.parse(fs.readFileSync(path.resolve(value),'utf8'));
+}
+let coverageFilterOverride;
+function coverageFilterOption() {
+  const value = opt['coverage-filter'];
+  if (value === undefined) return;
+  if (value === 'off') return false;
+  if (value === 'on' || value === true) return true;
+  return coverageFilterOverride ??= JSON.parse(fs.readFileSync(path.resolve(value), 'utf8'));
+}
 let edgeFilterOverride;
 function edgeFilterOption() {
   const value = opt['edge-filter'];
@@ -640,6 +725,35 @@ function edgeFilterOption() {
   if (value === true || value === 'on') return true;
   if (value === 'off') return false;
   return edgeFilterOverride ??= JSON.parse(fs.readFileSync(path.resolve(value), 'utf8'));
+}
+
+let curveWidthOverride;
+function curveWidthOption() {
+  const value = opt['curve-width'];
+  if (value === undefined) return;
+  if (value === 'off') return false;
+  if (typeof value !== 'string') die('--curve-width needs a JSON file or off');
+  return curveWidthOverride ??= JSON.parse(fs.readFileSync(path.resolve(value), 'utf8'));
+}
+
+function curveSubdivisionOption() {
+  const value = opt['curve-subdivision'];
+  if (value === undefined) return;
+  if (value === 'on') return true;
+  if (value === 'off') return false;
+  const pixels = Number(value);
+  if (typeof value !== 'string' || !Number.isFinite(pixels) || pixels <= 0 || pixels > 4)
+    die('--curve-subdivision needs on, off, or an art-pixel budget in (0, 4]');
+  return { pixels };
+}
+
+let curveQualityOverride;
+function curveQualityOption() {
+  const value = opt['curve-quality'];
+  if (value === undefined) return;
+  if (value === 'off') return false;
+  if (typeof value !== 'string') die('--curve-quality needs a JSON file or off');
+  return curveQualityOverride ??= JSON.parse(fs.readFileSync(path.resolve(value), 'utf8'));
 }
 
 let translucentSilhouettesOverride;
@@ -651,6 +765,16 @@ function translucentSilhouettesOption() {
   return translucentSilhouettesOverride ??= JSON.parse(fs.readFileSync(path.resolve(value), 'utf8'));
 }
 
+let motionalCoverageOverride;
+function motionalCoverageOption() {
+  const value = opt['motional-coverage'];
+  if (value === undefined) return undefined;
+  if (value === true || value === 'on') return true;
+  if (value === 'off') return false;
+  if (typeof value !== 'string') die('--motional-coverage needs on, off or a JSON file');
+  return motionalCoverageOverride ??= JSON.parse(fs.readFileSync(path.resolve(value), 'utf8'));
+}
+
 let inkOverride;
 function inkOption() {
   const value = opt.ink;
@@ -658,6 +782,14 @@ function inkOption() {
   if (value === true || value === 'on') return true;
   if (value === 'off') return false;
   return inkOverride ??= JSON.parse(fs.readFileSync(path.resolve(value), 'utf8'));
+}
+
+let inkShotOverride;
+function inkShotOption() {
+  const value = opt['ink-shot'];
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') die('--ink-shot needs a JSON file');
+  return inkShotOverride ??= JSON.parse(fs.readFileSync(path.resolve(value), 'utf8'));
 }
 
 function cutawayOption() {
@@ -711,7 +843,9 @@ function bounceProbesOption() {
   if (value === undefined) return undefined;
   if (value === 'off') return false;
   if (value === true || value === 'on') return true;
-  return bounceProbesOverride ??= JSON.parse(fs.readFileSync(path.resolve(value), 'utf8'));
+  const file = path.resolve(value);
+  shot?.dependency(file);
+  return bounceProbesOverride ??= JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
 const view = extra =>
@@ -727,14 +861,22 @@ const view = extra =>
       stable: stabilityOption(),
       stableDetail: stableDetailOption(),
       edgeFilter: edgeFilterOption(),
+      coverageFilter: coverageFilterOption(),
+      surfaceHistory: surfaceHistoryOption(),
+      protectedPixels: protectedPixelsOption(),
+      motionalCoverage: motionalCoverageOption(),
       colorClusters: colorClustersOption(),
+      boundaryCels: onOffOption('boundary-cels') === false ? false : undefined,
       artDirection: artDirectionOption(),
       silhouetteProtection: silhouetteOption(),
       horizonBands: horizonOption(),
       effectPalettes: effectPalettesOption(),
       artEffects: opt.effects === 'off' ? false : opt.effects,
       emissiveFinishes: onOffOption('emissive-finishes') === false ? false : undefined,
+      shoreFoam: onOffOption('shore-foam') === false ? false : undefined,
+      highlightCels: onOffOption('highlight-cels') === false ? false : undefined,
       ink: inkOption(),
+      inkShot: inkShotOption(),
       tone: opt.tone === 'off' ? false : opt.tone,
       paletteRemap: opt['palette-remap'] === 'off' ? false : undefined,
       colorCurves: opt['color-curves'] === 'off' ? false : undefined,
@@ -756,7 +898,17 @@ const view = extra =>
       splatCoverage: opt['splat-coverage'],
       translucentSilhouettes: translucentSilhouettesOption(),
       splatFootprints: onOffOption('splat-footprints'),
+      curveSplats: onOffOption('curve-splats'),
+      curveMode: opt['curve-mode'],
+      curveLod: onOffOption('curve-lod'),
+      curveSubdivision: curveSubdivisionOption(),
+      curveWidth: curveWidthOption(),
+      curveQuality: curveQualityOption(),
+      paletteSampling: onOffOption('palette-sampling'),
       brushwork: onOffOption('brushwork'),
+      shadowBandPaint: onOffOption('shadow-band-paint'),
+      diffuseRamps: onOffOption('diffuse-ramps'),
+      shadeNormals: onOffOption('shade-normals'),
       renderGrid: opt['render-grid'] === 'off' ? false : opt['render-grid'] === undefined ? undefined :
         { mode: opt['render-grid'], size: num('grid-size', 8), angle: num('grid-angle', 0),
           aspect: num('grid-aspect', 1), gap: num('grid-gap', 0), origin: list('grid-origin', [0, 0]) },
@@ -778,6 +930,8 @@ const view = extra =>
       clean: !!opt.clean,
       ...cameraOptions(),
       surface: opt.surface === 'off' ? false : undefined,
+      facingColors: onOffOption('facing-colors'),
+      directionalColors: onOffOption('directional-colors'),
       water: opt.water === 'off' ? false : undefined,
       reflections: opt.reflections === 'off' ? false : undefined,
       reflectionDetail: onOffOption('reflection-detail'),
@@ -804,8 +958,11 @@ const view = extra =>
       skyTransitions: skyTransitionsOption(),
       liveSun: liveSunOption(),
       areaLights: areaLightsOption(),
+      cutoutShadows: onOffOption('cutout-shadows'),
+      shadowShells: onOffOption('shadow-shells'),
       shotLighting: shotLightingOption(),
       bounceProbes: bounceProbesOption(),
+      dynamicBounce: onOffOption('dynamic-bounce'),
       relighting: relightingOption(),
       shadowArt: shadowArtOption(),
       contactShadows: contactShadowsOption(),
@@ -817,14 +974,24 @@ const view = extra =>
       atmosphereEmitters: atmosphereEmittersOption(),
       spriteAtlases: spriteAtlasOption(),
       scalePreviews: onOffOption('scale-previews'),
+      reliefLOD: opt['relief-lod']==='off' ? false : opt['relief-lod'],
       spriteAtlasMode: opt['sprite-atlas-mode'],
+      meshes: onOffOption('meshes'),
+      brickMeshes: onOffOption('brick-meshes'),
+      splatDepthProxies: onOffOption('splat-depth-proxies'),
+      surfaceDecals: onOffOption('surface-decals'),
+      semanticMipmaps: onOffOption('semantic-mipmaps'),
+      simulationMaterialLayers:onOffOption('simulation-material-layers'),
+      splatProxyTolerance: num('splat-proxy-tolerance'),
+      spriteReconstruction: opt['sprite-reconstruction'],
       aerialPerspective: aerialOption(),
       volumeLocalLights: onOffOption('volume-local-lights'),
       volumeLocalShadows: onOffOption('volume-local-shadows'),
-      volumeQuality: opt['volume-scale'] || opt['volume-steps'] || opt['volume-jitter'] ? {
+      volumeQuality: opt['volume-scale'] || opt['volume-steps'] || opt['volume-jitter'] || opt['volume-reconstruction'] ? {
         ...(opt['volume-scale'] && { scale: num('volume-scale') }),
         ...(opt['volume-steps'] && { steps: num('volume-steps') }),
-        ...(opt['volume-jitter'] && { jitter: opt['volume-jitter'] })
+        ...(opt['volume-jitter'] && { jitter: opt['volume-jitter'] }),
+        ...(opt['volume-reconstruction'] && { reconstruction: opt['volume-reconstruction'] })
       } : undefined,
       edges: opt.edges === 'off' ? false : undefined
     },
@@ -853,6 +1020,18 @@ function buildPreview(id = pos[0], options) {
   return Preview.override(world, opt, lib());
 }
 const previewPasses = () => require('./look-preview.js').preview(opt);
+function outputFinish() {
+  const paletteFile = opt['output-palette'], gradeFile = opt['output-grade'];
+  if (paletteFile === undefined && gradeFile === undefined) return image => image;
+  if (opt.text || [paletteFile, gradeFile].some(file => file !== undefined && typeof file !== 'string'))
+    die('Use --output-grade stack.json and --output-palette policy.json on raster renders or clips');
+  const palette = paletteFile && require('./sequence-palette.js').prepareOutputPalette(JSON.parse(fs.readFileSync(path.resolve(paletteFile), 'utf8')));
+  const grade = gradeFile && require('./output-grade.js').prepareOutputGrade(require('./color-stack.js').override(gradeFile));
+  return image => {
+    const graded = grade ? grade.apply(image) : image;
+    return palette ? palette(graded) : graded;
+  };
+}
 const reviewSidecars = diagnostics => [...(diagnostics?.suffixes ?? []), ...(opt.text ? ['.txt'] : [])];
 const textSidecar = file => file.replace(/\.(?:a?png)$/i, '') + '.txt';
 function sceneEmbedConfig() {
@@ -862,6 +1041,15 @@ function sceneEmbedConfig() {
 }
 function sequenceHistory() {
   return R.sequenceHistory(lib().KIT);
+}
+function priorArtReference(world, time, capture) {
+  const previous = num('previous');
+  if (!Number.isFinite(time) || opt.t === true) die('--t needs a time in seconds');
+  if (previous === undefined) return;
+  if (opt.previous === true || !Number.isFinite(previous) || previous >= time)
+    die('--previous needs a time earlier than --t');
+  pose(world, previous);
+  return R.render(world, view({ t: previous, ...capture })).motionReference;
 }
 function feedbackReplay(world, start, frame) {
   const api = lib().KIT.renderGraph;
@@ -890,10 +1078,29 @@ function die(m) {
   console.error(m);
   process.exit(1);
 }
-const worldCLI = () => require('./world.js')({kit:lib(),build,pose,dataScene,opt,renderOptions:view,sequenceHistory,inkOption,atmosphereEmittersOption,depthBandsOption,effectPalettesOption,stabilityOption,artDirectionOption,silhouetteOption,horizonOption,skyTransitionsOption,
+const worldCLI = () => require('./world.js')({kit:lib(),build,pose,dataScene,opt,renderOptions:view,sequenceHistory,inkOption,inkShotOption,atmosphereEmittersOption,depthBandsOption,effectPalettesOption,stabilityOption,artDirectionOption,silhouetteOption,horizonOption,skyTransitionsOption,
   weatherTracksOption:() => onOffOption('weather-tracks'),skyOptions,cameraOptions,compositeOption,colorClustersOption,shot,shotReplay,shotRender});
 const worldCommands = new Set(['inspect','probe','trace','field','data-inputs','scene','sim']);
 const CMD = {
+  async 'show-bridge'() {
+    const dmxHost = opt['dmx-host'], protocol = opt['dmx-protocol'] ?? 'artnet', oscHost = opt['osc-host'];
+    if (pos.length || !Object.keys(opt).every(name => [
+      'port', 'osc-in', 'input-host', 'art-timecode-in', 'dmx-host', 'dmx-protocol', 'dmx-port', 'universe', 'osc-host', 'osc-port'
+    ].includes(name)) || Object.values(opt).some(value => value === true))
+      die('Usage: ink-studio show-bridge [--port 8181] [--dmx-host IP] [--dmx-protocol artnet|sacn]');
+    const bridge = await require('./show-bridge.js').createShowBridge({
+      port: num('port', 8181), oscInput: num('osc-in', 9002), inputHost: opt['input-host'],
+      artTimecodeInput: num('art-timecode-in'),
+      dmx: dmxHost && { host: dmxHost, protocol, universe: num('universe', protocol === 'artnet' ? 0 : 1), port: num('dmx-port') },
+      oscOutput: oscHost && { host: oscHost, port: num('osc-port', 9000) }
+    });
+    console.log('Ink Show Control ' + bridge.url);
+    console.log('OSC input UDP ' + bridge.oscPort + (bridge.artTimecodePort ? ' · ArtTimeCode UDP ' + bridge.artTimecodePort : ''));
+    if (dmxHost) console.log('Stage output configured and disarmed');
+    const stop = () => { void bridge.close().catch(error => { console.error(error.message); process.exitCode = 1; }); };
+    process.once('SIGINT', stop);
+    process.once('SIGTERM', stop);
+  },
   help() {
     console.log(
       [
@@ -913,12 +1120,16 @@ const CMD = {
         '  palette inspect <scene> --at x,y [--out report.json]   explain the palette choice at one art pixel',
         '  palette fit <fit.json> [--format png|data] [--tile]   fit two approved swatches and preview at native size',
         '  palette dither-review <fit.json> [--out directory]   compare approved pairs and flag strong texture',
-        '  palette shimmer <scene> [--from 0 --to 3 --fps 12] [--camera-pan x,y,z --camera-orbit degrees] [--animate] [--out directory]',
+        '  palette shimmer <scene> [--from 0 --to 3 --fps 12] [--camera-pan x,y,z --camera-orbit degrees] [--include-view] [--animate] [--out directory]',
         '  palette readability <scene> [--select JSON | --plan file.json] [--directions N --times t1,t2] [--out directory]',
         '  palette darks <scene> [--plan file.json] [--directions N --times t1,t2] [--out directory]',
         '  palette weather <scene> [--plan file.json | --select JSON --times t1,t2] [--out directory]',
         '  palette stages <scene> [--select JSON] [--allowed JSON] [--out directory]   review paint, lighting, grade and resolve',
         '  palette compare <scene|checkpoint> <palettes.json> [--out directory]   apply alternatives to one captured shot',
+        '  palette sequence <plan.json> [--out directory]   allocate one pinned palette across multiple shots',
+        '  palette cvd-repair <scene> <plan.json> [--out directory]   repair weak subject/background swatches',
+        '  render/clip output: --output-palette policy.json   resolve the final raster to a shared palette',
+        '  render/clip output: --output-grade stack.json   grade the final raster before output palette resolve',
         '  palette save-look <approved.json> [--pack pack.json] [--out pack.json]   save approved palette findings as a look',
         '  palette check <scene> <plan.json> [--out directory]   export a PNG board and check palette assertions',
         '  palette chart <chart.json> [--type chart] [--format png|data]   export an indexed swatch, bar or pair chart',
@@ -933,7 +1144,11 @@ const CMD = {
         '  inspect|validate|probe <scene|run> --select JSON   inspect, check, or sample a look target',
         '  probe <scene|run> --field look/sample [--select JSON | --entity ID] [--at x,y,z]   explain a baked splat',
         '  trace <scene|run> <name>    trace a route, signal or other exposed query',
-        '    trace <scene|run> world/cause --args JSON   follow recorded decisions, inputs and events',
+        '    trace <scene|run> world/cause [--args JSON | --beat ID]   follow recorded decisions, inputs and events',
+        '  beat <beat-id> <report.json|watch.ndjson> [...] [--out file.json]   find the same event across inspection reports',
+        '    sim render <run|checkpoint|world> --event-effects <sheet.json> --out frame.png   render committed visual effects',
+        '    sim render <run|checkpoint|world> --consequences on|off   show or hide authored persistent visual consequences',
+        '    sim render <run|checkpoint> --beat ID --out frame.png   render the recorded event tick',
         '  field <scene|run> <name> --spec file.json [--explain]  export a line, grid or time series',
         '  authoring inspect <scene> [--authoring snapshot.json] [--part id]   inspect retained parts',
         '  authoring preview <scene> <edits.json> [--authoring snapshot.json] [--image preview.png]   stage and validate edits',
@@ -946,10 +1161,54 @@ const CMD = {
         '    scene sync-prefab <release.json> <world ...> --out NEW_DIRECTORY | --dry-run',
         '    scene apply <scene> <edits.json> --dry-run   preview edited paths and look targets',
         '  sim run|resume|fork|reset|replay|verify|scrub|take|diff|sweep|render ...  run or compare fixed-tick simulations',
-        '    sim plan <world|checkpoint|recording>  report system contracts and the resolved execution order',
+        '    sim live <world|checkpoint|run> --ticks N [--queries queries.json --policy access.json --record run.json]',
+        '    sim view <world|checkpoint|run> --policy access.json --view ID [--ticks N --out view.json]   export a scoped frame',
+        '    sim fork-compare <world|checkpoint|run> <plan.json> --out directory   capture and compare two verified story branches',
+        '    sim seed-matrix <world> <plan.json> [--out report.json]   compare story outcomes, waiting, blockers, and casts across seeds',
+        '    sim run|resume <world|checkpoint|run> [--start-story document/story] [--until-stage document/story/stage]',
+        '      [--until-outcome document/story/outcome] [--until-condition condition.json] [--ticks N]   stop at a story breakpoint',
+        '    sim run|resume|fork|replay <file> --watch-story document/story[,document/story...]|all   stream story values as NDJSON',
+        '      [--watch-values stage,evidence,roles,blockers,choices,changes] [--watch-out file.ndjson]',
+        '    sim plan <world|model|checkpoint|recording>  inspect rates, signal crossings, feedback, baked inputs and resource estimates',
+        '    sim model validate|inspect|compile <model.json>  check, describe, or lower a versioned simulation model',
+        '    sim run|resume|fork <file> [--branch ID]   name the branch in committed events',
         '    sim run <world> --workers N [--profile]   advance eligible systems in deterministic Node worker partitions',
         '    sim run <world> --record file.json [--observations plan.json]   retain reproducible execution evidence',
-        '    sim verify <run> [--workers N]   replay and check the recorded evidence',
+        '    sim verify <run|fixture|story-run-bundle> [--workers N]   replay and check the recorded evidence',
+        '    sim fixture <world|checkpoint|run> --out fixture.json [--from N --ticks N --actions file.json]',
+        '      [--event KIND --event-where JSON | --fault] [--minimize]   package a portable replay and event trace',
+        '    sim block-play <model> --samples N [--resume checkpoint --checkpoint file]   sample and checkpoint a fast kernel',
+        '    sim mass-properties <plan.json> [--asset-pack pack.json --out report.json]   measure physical shape and material properties',
+        '    sim remap <plan.json> [--out report.json]   conservatively transfer extensive state across discretizations',
+        '    sim discretize <plan.json> [--out compiled.json]   compile solver cells, face geometry, and boundary regions',
+        '    sim domain <domain.json> [--world world.json --section tube/index]   assemble or trace sectioned tubes at named sockets',
+        '    sim reduce <plan.json> [--out asset.json]   bake reduced geometry, response taps, or resonant modes',
+        '    sim integrate <plan.json> [--out trace.json]   integrate creator-authored state and locate substep events',
+        '    sim grid-ops <plan.json> [--out report.json]   apply finite-volume operators to a compiled grid, chart, or mesh',
+        '    sim diagnose <plan.json> [--out report.json --fail-on warning|error]   locate stability and conservation issues',
+        '    sim measure <run.json> [--out report.json]   named simulation measurements and CI assertions',
+        '    sim review <recipe.json> --out directory [--require-match]   matched audio, traces, plots, cutaways and first divergence',
+        '    sim budget <plan.json> [--out report.json --require-budget]   measure simulation and story performance against limits',
+        '    sim reference [experiment] [--suite suite.json --out report.json]   run the shipped physics benchmarks',
+        '    sim sensors <run.json> [--out report.json --wav microphones.wav]   record calibrated virtual sensors',
+        '    sim physical-audio <run.json> [--out report.json --stems directory]   route simulation signals into aligned WAV stems',
+        '    sim sound-controls <run.json|controls.json> [--out controls.json] [--at seconds | --sample index]   map and inspect sound automation',
+        '    sim controller <run.json> [--out trace.json]   replay target following, hysteresis, or PID',
+        '    sim fit-targets <plan.json> [--out report.json --require-tolerance]   fit bounded controls to measured targets',
+        '    sim fit-parameters <run.json> [--out report.json --require-tolerance]   fit native runs to weighted reference data',
+        '    sim input-compile <plan.json> [--out score.json]   compile text, IPA, MIDI, recordings, and cues',
+        '    sim input-edit <score.json> <edits.json> [--out score.json]   edit events and rebuild curves',
+        '    sim input-export <score.json> [bindings.json] --kind recording|events|gesture   use editable input scores',
+        '    sim gesture-score <score.json> [--t seconds | --tick N | --from-tick N --to-tick N --every N]   sample authored and limited targets',
+        '    sim boundaries <asset.json> [--t seconds --dt seconds]   inspect reusable boundary and source laws',
+        '    sim solve <plan.json> [--out report.json --require-convergence]   solve dense, tridiagonal, sparse, or bracketed scalar systems',
+        '    sim network <run.json> [--out trace.json]   simulate a lumped effort/flow network and its sources',
+        '    sim waves <run.json> [--out trace.json --wav audition.wav]   render distributed or delay-line pressure and flow',
+        '    sim excite <run.json> [--out trace.json --wav force.wav]   render contact impulses, slip, and excitation forces',
+        '    sim resonator bake <plan.json> | render <run.json> [--out file.json --wav sound.wav]   bake or audition resonant mode assets',
+        '    sim sections <plan.json> [--out report.json]   measure mesh, SDF, or contour sections along a path',
+        '    sim model-changes <plan> [--samples N --resume file --checkpoint file]   play prepared parameter ramps and topology swaps',
+        '    sim block-check <model> <plan> [--candidate trace.json] [--trace-out file.json]   compare sample block partitions',
         '    --trace-steps [N]   retain actual solver inputs and state for debugging',
         '    sim diff <run|world> [<run|world>] --first [--from N] [--ticks N]   locate the first divergence',
         '    sim run <world> --checkpoint file.json --checkpoint-store DIR   reuse snapshot blocks across checkpoints and runs',
@@ -962,6 +1221,7 @@ const CMD = {
         '    sim sweep <world|run> <cases.json>   use look cases to compare one fixed simulation snapshot',
         '    sim sweep <world|checkpoint|run> <observations.json>   sample scheduled observations across seeds and settings',
         '  compare <scene|run> --looks cases.json [--out sheet.png]   compare look variants on the same view',
+        '  compare <scene> --curve-modes --w 160 --h 96 [--t 0 | --from 0 --to 3 --fps 12] [--out directory]',
         '    --comparison side-by-side|swipe|difference   compose exactly two look cases into one image',
         '    --divider 0.5 --swipe-axis x|y --difference-channel luminance|red|green|blue --difference-gain 3',
         '  look inspect <scene|run|look-file> [--renderer headless|webgl]   list bindings, dependencies and targets',
@@ -977,17 +1237,38 @@ const CMD = {
         '    --input-space space --output-space space --input-range min,max --output-range min,max',
         '    --input-out-of-range preserve|clamp|error --output-out-of-range preserve|clamp|error --domain-policy clamp|error|extrapolate',
         '',
+        '  shape capture <recipe.js|shape.json> [--out dir] [--yaw degrees,...] [--pitch degrees] export editable silhouettes',
+        '  shape fit <capture-dir> [--out shape.json] [--growth voxels] fit a shared voxel proxy',
+        '',
         '  scenes                      list every diorama',
+        '  show-bridge [--port 8181] [--osc-in 9002]   open live audio, timecode, stage and projection control',
+        '    --dmx-host IP --dmx-protocol artnet|sacn --universe N   configure a physical lighting destination',
         '  catalog [words]             what the toolkit can do, searchable',
         '  stats <id>                  splat counts, colours used, size, cost per frame, warnings',
         '  render <id> [--t 1.5]       one PNG rendered on the CPU',
         '  bounce-probes bake <scene> [--bounce-probes settings.json] --out probes.json',
+        '  bounce-probes review <scene> --out directory [--from 0 --to 3 --fps 12 --w 184 --h 112]',
+        '  sdf-reference <scene> --out directory [--t 0,1.2 --w 192 --h 120 --samples 32 --bounces 3]',
+        '  pose-correctives capture <scene> --plan sculpt.json --t 1 --out correction.json',
+        '  pose-correctives review <scene> --out directory [--from 0 --to 2.4 --fps 10]',
+        '  render/clip/atlas --pose-correctives patch.json|off   load or bypass puppet corrective sculpts',
+        '  render/clip/atlas --view-poses asset.json|off   load or bypass view-sector pose corrections',
+        '  render/clip --volume-scale 3 --volume-reconstruction object|depth   choose a coarse fog reconstruction',
+        '  fog-reconstruction review <scene> --out directory [--subject object-id --volume-scale 4 --from 0 --to 2.4 --fps 10]',
+        '  render/clip --dynamic-bounce off   reuse the baked probes without sampling moving sources',
         '  render <id> --palette-constraints <file.json|off>   override target palettes and dither settings',
         '  render <id> --coverage-aware on|off   grade target contributions before compositing',
         '  render <id> --look-masks off   bypass masked look bindings',
         '  render, clip, transition-review, sim render: --recipe <shot.json>   save reproducible review inputs',
         '  shot replay <shot-or-bundle.json> --out <image.png> [--root project | --shot ID]   verify the saved render',
         '  shot approve <scene> [--plan plan.json] --out report.json [--frame N] [--report-only]',
+        '  shot grade-match <plan.json> [--out directory]   match chroma from shared objects',
+        '  shot reframe <plan.json> [--out directory]       track safe crops across delivery formats',
+        '  shot match-cut <plan.json> [--out directory]      rank and play shape matches across shot handles',
+        '  shot silhouette-repair <plan.json> [--out dir]   find merged characters and test small camera offsets',
+        '  shot light-approve <plan.json> [--out dir]         fit one light rig across native art grids',
+        '  shot light-paint <scene> --shot-lighting rig.json --out targets.html [--t seconds] [--w W --h H]',
+        '  shot light-fit <scene> --shot-lighting rig.json --targets targets.json --out folder [--evaluations N] [--interactive]',
         '  render <scene.json> --asset-pack <pack-or-bundle.json> [--environment-preset pack/preset]   install and select a reusable look',
         '  ramps <id> [--n 12]         the ramps it is shaded on, and which only get darker without turning; a turning one is offered from the same palette',
         '  values <id> [--t 1.5]       the value check: the picture sorted into dark, middle and light, and whether it reads in three tones',
@@ -995,12 +1276,17 @@ const CMD = {
         '  turn <id> [--n 8] [--t 0]   the diorama from all round, on one sheet',
         '  clip <id> [--from 0 --to 6 --fps 12]   animated PNG (also --text, --feedback-fps 24, --feedback-cuts 2.5,4)',
         '    --camera-pan x,y,z --camera-orbit degrees --px 1   review slow camera motion at native art resolution',
+        '    --camera-orbit-offset yaw,pitch                  offset the authored orbit in degrees',
         '  reel <manifest.json> [--out reel.html] [--clean]   export selected captures as an offline reel',
         '  ghost <id> [--t 2 --spacing 0.12 --n 2 | --ghosts 1.6,1.8]   one moment with those either side laid faintly over it',
         '  acts                        the ready clips, reactions, easings and cues, by name',
         '  motion <id> [--from 0 --to 12]   numbers about how it moves: speed, jumps, what goes underground',
+        '  render <file.ply|.spz> --raw   render a Gaussian splat cloud without palette quantization',
         '  mesh <file.obj|.gltf|.glb>  import and inspect as splats (--uv requires textured GLB stamps, --uv off uses geometry)',
+        '  mesh-uv inspect|simplify <mesh> --out <directory|mesh.json>   inspect UV maps or reduce with seam locks',
         '  export-glb <scene.js|.json|.obj|.gltf|.glb> --out model.glb   write UV-mapped geometry with materials, skins and clips',
+        '    --bake-dir <folder> [--paint-views <plan.json> | --capture-paint <cameras.json>]   export registered UV material maps',
+        '    --rebake-from <material-bake.json> [--chart-edits <plan.json>]   update selected or changed UV charts',
         '  interchange <asset.gltf|.glb|.json> --out <file>    round-trip glTF or PNG-backed raster assets',
         '                              [--res 0.08 --texture-size 1024 --triangles 16000 --duration 4 --fps 30]',
         '  depth <map.png|map.json> [--image aligned.png --out-dir folder]  import a depth map as splats, a mesh and an SDF',
@@ -1016,7 +1302,7 @@ const CMD = {
         '  paint export <id> [--layer name] [view options]  capture a view and the surface under each pixel',
         '  paint absorb <id> [--layer name] [--png file] [--paint-mask file]  pin the painted pixels to the surface',
         '  paint layers|tune|clear <id> [--layer name]  list, adjust or clear corrections',
-        '  paint cause <id> <recipe.json> [--replace]   bake solid edges, contacts and shelter into paint layers',
+        '  paint cause <id> <recipe.json> [--events <run.json>] [--replace]   bake geometry or committed events into paint layers',
         '    layer controls: --angle degrees --feather degrees --opacity fraction --region JSON|file|off',
         '  lint <id ...> [--map]              pixel-art lint: orphans, doubles, jaggies, banding, pillow shading, noise, colours',
         '  review <id> [--ref pic --px 2]     a sheet of fixed shots (four sides, top, low, far, near, close), beside the last one',
@@ -1025,10 +1311,15 @@ const CMD = {
         '  sweep replay <pin.json> --out directory   render the saved case',
         '  sweep nearby <pin.json> <offsets.json> --out directory   vary numeric settings around the saved case',
         '  variants <id> --seeds 3,7,12 [--group silhouette|openness|wear --motion]  render a ranked seed contact sheet',
-        '  atlas <id> [--directions 8 --pitches 0,0.7 --w 96 --h 96 --fps 12 --maps depth,normal,emission,silhouette]  export a transparent sprite atlas',
+        '  atlas <id> [--directions 8 --pitches 0,0.7 --w 96 --h 96 --fps 12 --maps depth,normal,emission,silhouette]',
+        '    --adaptive-views [--min-directions 4 --view-probes 64 --view-error .045 --view-protect JSON --view-review]',
+        '           [--clips plan.json] bake named sprite clips from one seekable source',
+        '             [--cutout-mipmaps coverage|average --alpha-cutoff 0.5]  export a transparent sprite atlas',
         '  camera-review <scene> --from 0 --to 2 --frames 5 --w 160 --h 96   export-sized frames and framing checks',
         '  silhouette-review <scene> --directions 8 --w 96 --h 96   paired export-size views and edge contrast',
         '  transition-review <scene> [--plan file.json] --w 160 --h 90 [--out sheet.png]',
+        '  reference-clip <plan.json> --out directory [--beat ID | --at seconds] [--mode side-by-side|swipe|difference] [--sheet]',
+        ...require('./effect-clip-command.js').usage.map(command=>'  '+command.replace('ink-studio ','')),
         '    compare native frames around midnight, weather beats, or cuts [--scale N --fail-on-flags]',
         '  pose-review <id> [--directions 8 --w 96 --h 96]  review named poses at sprite resolution',
         '  motion-review <id> [--finding kind-or-id] [--out report.json]  inspect motion findings and focused playback ranges',
@@ -1046,9 +1337,148 @@ const CMD = {
         '  music suggest <arrangement.json> [options.json]   propose editable and auditionable changes',
         '  music phrase <options.json>   generate a two- or four-bar melodic phrase',
         '  music production <mode> <recipe.json> [config.json]   arrange, mix, audition and render adaptive music',
+        '  music production cue-map <recipe.json> [map.json]   apply or inspect a cue-wide arrangement map',
+        '  music production voice-lead <recipe.json> <settings.json>   search inner lines around locked outer tracks',
+        '  music production search-locked <recipe.json> <brief.json> --out DIR [--render]   search scoped arrangement edits',
+        '  music production keep-locked <search.json> <selection.json> --out recipe.json   keep an editable locked take',
+        '  music production compose-piece [brief.json] --out DIR [--render]   create competing 90–120 second scores',
+        '  music production search <recipe.json> <brief.json>   shortlist distinct cue, phrase and note revisions',
+        '  music production pocket <recipe.json> <brief.json>   compare written rhythm and microtiming independently',
+        '  music production inspect-instrument <patch.json>   validate modular voice routing and modulation',
+        '  music production instrument-library   list instruments, ranges and gestures',
+        '  music production instrument-pack NAME [settings.json] --out DIR   export a stock instrument and its WAVs',
+        '  music production play-kit <instrument.json> <performance.json> --out DIR   play a portable pad kit',
+        '  music production drop-gestures --out DIR   capture, comp and audition played drop gestures',
+        '  music production drop-studies [dnb|dubstep|rave] --out DIR   print editable dance drop studies and drum auditions',
+        '  music production instrument-benchmark suite.json --clap-host host.json --out DIR   compare instruments on the same performance and mix',
+        '  music production instrument-presets   list ready-to-play phrase-aware patches',
+        '  music production sound-library   list the recorded native sound packs',
+        '  music production sound-pack ID --out DIR   export patches, WAVs, provenance and a mix rack',
+        '  music production groove <recipe.json> [mapping.json]   transfer performance timing, accents and gates',
+        '  music mix render recipe.json --out directory   render routed audio, inserts, automation and taps',
+        '  music mix audition recipe.json --strip ID --insert ID --out directory   print a matched insert comparison and difference',
+        '  music mix meter input.wav [--out report.json]   measure loudness, true peak and mono compatibility',
+        '  music mix monitor input.wav --mode mono|small-speaker|stereo --out directory   audition the mix',
+        '  music rack list|describe [rack]   discover built-in racks or inspect a definition',
+        '  music rack state rack [settings.json] --out state.json   save recalled macro automation',
+        '  music rack render|audition rack recipe.json --out directory   render a rack or compare with bypass',
+        '  music rack plugin-info|plugin-state alias [settings.json] --clap-host manifest.json   inspect or save CLAP state',
+        '  '+require('./music-sound-recipe.js').usage+'   render reproducible one-shot audio',
+        '  '+require('./music-sound-recipe.js').mutationUsage+'   generate a bounded family of one-shots',
+        '  '+require('./music-sound-recipe.js').replayUsage+'   rebuild a kept sound audition',
+        '  '+require('./world-sound-pack.js').usage,
+        '  '+require('./world-sound-pack.js').auditionUsage,
+        '  music instrument analyze|audition|build recipe.json --out path   turn a take bank into labeled playable zones',
+        '  music instrument discover|keep-discovery file.json [selection.json] --out dir',
+        '  music instrument workshop|audition-workshop|keep-workshop file.json [settings.json] --out dir',
+        '  music instrument analyze-session|build-session recipe.json [settings.json] --out dir',
+        '  music instrument audition-session|audition-session-takes recipe.json [settings.json] --out dir',
+        '  music instrument fit|audition-fit recipe.json --out dir   fit and audition editable instruments from a recording',
+        '  music deliver recipe.json --out directory [--strict]   print BWF stems, M&E, loops, cue sheet and editorial timeline',
+        '  music repair <audio-source> settings.json --out output   render before, repaired and removed dialogue',
+        '  music post from-story <handoff.json> --out project.json   open the editable dialogue and printed roles together',
+        '  music post <relink|room|repair|review> <input> <settings.json> --out directory',
+        '  music post export <project.json> [settings.json] --out directory   write a REAPER project and exact Ink sources',
+        '  music post import <handoff-directory> <reaper-return.json> --out directory   apply addressed edits and verify stems',
+        '  music editorial spot-foley recipe.json --out project.json   spot paired Foley takes from committed world contacts',
+        '  music editorial inspect|render project.json --out output   spot and print editorial audio',
+        '  music editorial edit|reconform project.json changes.json --out output   revise or preview a new cut',
+        '  music groove extract <recipe.json> [--out groove.json]   measure a WAV or MIDI performance',
+        '  music groove inspect <score.json> [focus.json] [--json]   show written, played, trigger and audible timing',
+        '  music groove edit <score.json> <edits.json> --out edited.json   trim a sample or adjust a phrase gap',
+        '  music groove audition <score.json> <edits.json> --out directory   print matched mixes and timing tables',
+        '  music motif plan recipe.json --out plan.json   plan four musical roles for a single recording',
+        '  music motif audition recipe.json [settings.json] --out directory   compare roles over one score window',
+        '  music motif keep|render recipe.json selection.json --out directory   replay or keep an editable sample role',
+        '  music timbre analyze|project|match <recipe.json> [settings.json]   derive or compare recording gestures',
+        '  music timbre evolve recipe.json [settings.json] --out directory   hand off one measured sound across playable instruments',
+        '  music timbre audition|arrange <recipe.json> [settings.json] --out directory   play or keep a timbre orchestration',
+        '  music timbre palette <coastal|metal-breath|broken-beat> --out directory   export playable patches and PCM',
+        '  music critique foreground <recipe.json> <settings.json> --out directory   compare arrangement-aware mix moves',
+        '  music critique diagnose cue.json request.json --out clips   compare a masking or groove hypothesis',
+        '  music critique listener-pack|listener-run|listener-score file.json [responses.json] --out path',
+        '  music critique inspect <recipe.json> <request.json> --out directory   listen to and measure an addressed passage',
+        '  music critique compare <recipe.json> <edits.json> --out directory   audition exact repairs against the original',
+        '  music critique apply <recipe.json> <comparison.json> <decision.json> --out directory   keep the chosen edit and reason',
+        '  music critique plan <recipe.json> <brief.json>   measure a passage and propose editable comparisons',
+        '  music critique listen <recipe.json> <plan.json> [settings.json] --out directory   export a blind listening pack',
+        '  music critique prioritize <recipe.json> <questions.json> --out directory   pick consequential blind pairs',
+        '  music critique archive-ballot <memory-directory> <review-key.json> <ballot.json>   retain a judgment and its audio',
+        '  music critique keep <recipe.json> <review-key.json> <decision.json> --out directory   keep a voted edit and reason',
+        '  music critique remember <memory-directory> <reference.json>   archive a contextual blind decision',
+        '  music critique recall <memory-directory> <query.json>   recall matching blind choices and reasons',
+        '  music critique tag <source.wav> <settings.json> --out directory   keep a tagged listening excerpt',
+        '  music critique find <index.json> [query.json]   find listening clips and past decisions by intent',
+        '  music live replay <timeline.json> <route.json> --out directory   render live engine audio and explanations',
+        '  music rehearsal capture <world.run.json> <settings.json>   capture exact world music and cue events',
+        '  music rehearsal compare <timeline.json> <trace|route|world-run.json> --out directory [--capture settings.json]',
+        '  music rehearsal capture-score <timeline.json> <settings.json>   capture standalone clock updates',
+        '  music rehearsal run <timeline.json> <suite.json> --out directory   audit and audition the same recorded traces',
+        '  music rehearsal regression <timeline.json> <routes.json> --out directory [--assert version]',
+        '  music rehearsal keep <timeline.json> <revision.json> [trace.json] --out recipe.json   save a timeline variant',
+        '  music session compose <session.json> <brief.json> --out directory',
+        '  music session audition-phrase <session.json> <settings.json> --out directory',
+        '  music session arrange-performance <session.json> <brief.json> --out directory',
+        '  music session listening-round|listening-evidence <session.json> <request.json> --out directory',
+        '  music session keep-listening-repair <session.json> <pick.json> --out directory',
+        '  music session record-round|keep-round <review-key.json> <ballot-or-pick.json> --out directory',
+        '  music session performance-ballot <session.json> <brief.json> --out directory',
+        '  music session record-ballot <review-key.json> <ballot.json> --out directory',
+        '  music session inspect|trace|edit|render|preview recipe.json [settings.json] --out output   comp and audition score and audio takes',
+        '  music session handoff recipe.json --out directory [--clap-host manifest.json]   export a DAW project, MIDI and stems',
+        '  music session play recipe.json [settings.json] [--port N] [--out kept.json]   play, record and comp takes in the live desk',
+        '  music session jam recipe.json [bank.json] [--port N] [--out arrangement.json]   launch clips and capture a pass',
+        '  music session compare recipe.json comparison.json --out clips',
+        '  music session experiment|keep-experiment session.json settings.json --out dir',
+        '  music session stream recipe.json   keep a warm session for JSON-line edits and auditions',
+        '  music atmosphere plan recipe.json --out plan.json   arrange beds, calls and recurring gestures',
+        '  music atmosphere render recipe.json [plan.json] --out directory   mix an editable plan and print atmosphere stems',
+        '  music atmosphere audition recipe.json comparison.json --out directory   compare density and level over one score',
+        '  music jam branch jam.json branches.json --out branched.json   fork or sweep playback treatments',
+        '  music jam inspect jam.json   list branch ancestry, playback speeds and rack states',
+        '  music jam render|audition|keep library jam.json settings.json --out directory   play, compare or print a passage',
+        '  music jam recover library sample-id --out directory   open a print’s editable source',
+        '  music gestures <ingest|generate|search|audition|keep> <library> <recipe or query>   build and audition a searchable gesture bank',
+        '  music gestures inspect <library> [session]   inspect sessions, takes and aligned recordings',
+        '  music samples <add|search|get> <library> [recipe or ID]   capture and find reusable samples',
+        '  music samples <slice|edit|render|audition> <library> <ID or project> [settings.json]   edit sample audio',
+        '  music samples warp <library> <ID or project> settings.json --out directory   warp or repitch sample audio',
+        '  music samples kit <library> kit.json performance.json --out directory   play a sample kit and export its stems',
+        '  music samples print <library> recipe.json --out directory   print dry and/or wet graph taps as reusable samples',
+        '  music pads program pattern.json [settings.json] --out performance.json   resolve a pad pattern',
+        '  music pads compose score.json --out performance.json [--report trace.json]   compose recorded slices',
+        '  music pads capture recording.json routes.json --out performance.json   capture timestamped pad pulses',
+        '  music pads edit performance.json edits.json --out revised.json   edit captured hits by ID',
         '  music soundfont <file.sf2> <preset.json> --out directory   sample a SoundFont preset with FluidSynth',
         '  music revise <plan.json> <edits.json> [--out revised.json]   revise unpinned parts and bindings',
         '  music reference <plan.json> --part ID --section ID [--out motif.json]   recover an audition idea',
+        '  patch help   edit, wire, inspect and run typed audiovisual patches from the CLI',
+        '  story validate|describe|preview <file.json> [story-id]   validate or inspect versioned story definitions',
+        '  story describe <file.json> [story-id] --inventory      list role schemas and required interfaces',
+        '  story preview <file.json> [story-id] [--format json|text|dot] [--out file] [--strict]   export potential story routes',
+        '  story instantiate <template.json|story-pack-bundle> <instance.json> [--template ID]',
+        '  sim preflight <world.json> [--strict]   check world bindings and story routes before stepping',
+        '  sim scheduler <world|checkpoint|run> [--ticks N] [--incident document/story]   explain incident eligibility and commitments',
+        '  sim why|why-not <world|checkpoint|run> document/story [--offer | --role ID | --actor system/agent | --stage [ID] | --outcome ID]',
+        '    [--spec casting.json] [--ticks N] [--trace]   explain an offer, actor, stage, or ending',
+        '    sim run|preflight <world.json> --storyteller ID   select an authored incident profile',
+        '  story catalog <story.json> [story.json ...]   discover authored incidents',
+        '  story events <recording|fixture|story-run-bundle> [--format json|markdown|timeline|events|envelopes]',
+        '  story cues <recording|fixture|envelopes|story-run-bundle> <plan.json> [--format sheet|timeline] [--out file]',
+        '  story timeline <recording|fixture|envelopes|story-run-bundle> [--story id/name] [--from-tick N --to-tick N]',
+        '    [--plan markers.json] [--out timeline.json]   export editable scene markers',
+        '  '+require('./story-effects.js').usage,
+        '  '+require('./story-audio.js').usage,
+        '  '+require('./story-audition.js').usage,
+        '  '+require('./story-editorial.js').usage,
+        '  '+require('./story-presentation.js').usage,
+        '  story performance <recording|fixture|events|cue-sheet> <plan.json> --out directory [--asset-registry catalog.json]',
+        '  story shots <recording> [--timeline file --story id/name --from-tick N --to-tick N --limit N --out plan.json]',
+        '  story shots-review <recording> <plan.json> --out directory [--all --w N --h N]',
+        '  sim cast <world|checkpoint|run> --spec casting.json   explain who qualifies for a story role',
+        '  patch show <cues.json> [--rehearse] [--report file]   run a cue-driven patch on a projector',
+        '    [--record-interventions journal.ndjson [--intervention-input <recording.json|->]]',
+        '  '+require('./patch-choice-replay.js').usage.replace('ink-studio ',''),
         '  graph nodes [--json]   list registered graph operations and their ports',
         '  graph describe <op> [--json | --example]   show schema, units, limits and a runnable example',
         '  graph validate|plan <project.json> [--inputs values.json]   validate and describe a headless graph',
@@ -1070,13 +1500,16 @@ const CMD = {
         '  graph capture <request.json> [--adapters host.cjs --out file]   capture or send via a registered host adapter',
         '  graph inspect-pxc <project.pxc> [--out info.json]   inspect a Pixel Composer container',
         '  graph import-pxc <project.pxc> --out graph.json [--translate | --adapters host.cjs --using ID]   import saved art or translate editable nodes',
+        '  graph verify-pxc <project.pxc> <references.json> [--out report.json]   compare editable branches to source PNG frames',
         '  graph session <project.json> [--protocol ndjson --out directory]   serve requests using a warm graph',
         '  material-controls <material.json> [--palette colors.json --out report.json]  inspect shared material controls',
         '  light-emitters <lights.json> [--at seconds --out report.json]  inspect shaped lights and cookies',
         '  typography <type.json> [--font font.ttf --at seconds --out report.json]  inspect glyph layout and animation',
         '  camera-impulses <motion.json> [--at seconds --eye x,y,z --yaw radians --pitch radians --out report.json]  inspect camera motion',
         '  camera-rig <scene or world> [--at seconds --camera-shot ID --out report.json]  sample a shot and its clearance',
-        '  take sample <take.json> --frame N [--resume checkpoint.json --checkpoint file.json --out report.json]',
+        '  take sample <take.json> --frame N [--iteration N --resume checkpoint.json --checkpoint file.json --out report.json]',
+        '  take map <clock-map.json> [--format report|timeline] [--out file.json]   map events and dialogue words through an exact editorial cut',
+        '  take render-av <recipe.json> --out directory   publish synchronized picture controls, PNGs and WAV',
         '  timeline <scene> [--at seconds] [--from seconds --to seconds] [--out report.json]  sample tracks and export cues',
         '  authored-contacts <id> [--at seconds] [--out report.json]  inspect contact ranges and socket transfer timing',
         '  motion-fx <id> [--at seconds] [--out report.json]  inspect keyed FX layers and sampled effect output',
@@ -1088,17 +1521,33 @@ const CMD = {
         '    [--source-map file.json --target-map file.json] [--travel scaled|unscaled|in-place] [--fps rate]',
         '    [--bake clip.json] [--preview directory] [--at seconds|--frames count] [--direction index] [--out report.json]',
         '  retarget --profiles  show built-in role templates',
-        '  passes <id> [--channels coverage,depth,normal,objectId,materialId,emission]  save art-pixel render pass previews',
-        '  export-layers <id> [--t 0,1,2 | --from 0 --to 2 --n 3] [--out directory]   export aligned RGBA, depth, normals, IDs and material mattes',
+        '  passes <id> [--channels opaque-surface,part-motion,strands] [--previous seconds]   save art-pixel render passes',
+        '  surface-pixel <id> --at x,y [--t seconds]   inspect the opaque native art-pixel owner',
+        '  strand-pixel <id> --at x,y [--t seconds] [--previous seconds]   inspect visible strand hits on the native art grid',
+        '  strand-review <id> --w 160 --h 96 [--curve-quality file.json] [--from 0 --to 3 --camera-orbit 20] [--out directory]',
+        '  export-deep <id> [--t 0,1,2] [--layers 16] [--reflection id] --out file.exr|directory   export native deep OpenEXR',
+        '  export-layers <id> [--t 0,1,2 | --from 0 --to 2 --n 3] [--part-motion on] [--compositing file.json] [--out directory]   export RGBA and compositing layers',
         '  export-scene <scene|world|take> --out directory [--formats still,loop,replay,embed]',
         '    --audio soundtrack.json [--mux CODEC --adapters host.cjs]   export aligned WAV stems and optional video',
         '    --loop-join   inspect the actual frame join and excluded endpoint on a clip or scene export',
         '    --w width --h height --still-scale 2 --t seconds --from 0 --to 2 --fps 12 --embed-config file.json',
         '  scene-replay <recording.json> --out output.png [--at seconds]   save a frame from a replay',
         '  scene-replay <recording.json> --embed --out embed.html [--embed-config file.json]   package a replay for the web',
-        '  project pack <scene-or-take.json> --out <bundle.json> [--root directory --revision n --asset-pack file --paint file --attachments file]',
+        '  project pack <scene|take|experiment|story-pack|story-run.json> --out <bundle.json> [--root directory --revision N]',
+        '    [--asset-pack file --paint file --attachments file]',
         '  project inspect <bundle.json>   show the bundle version, entry path and retained files',
+        '  assets lock <draft.json> --out catalog.json | assets validate <catalog.json> | assets resolve <catalog.json> <ID> <revision>',
+        '  render @namespace/scene@revision --asset-registry catalog.json   render a pinned scene',
         '  project unpack <bundle.json> --out new-directory   extract a portable project',
+        '  project verify <experiment-or-story-bundle.json> [--out report.json --compare-engine]',
+        '  curve-subdivision-review [--out directory --chrome executable --hardware]  compare dense and adaptive finite spans',
+        '  curve-bake <scene> [--object name --part part --normals on --out directory]  bake curve cards and depth ribbons',
+        '  curve-bake-review [--out directory --chrome executable --hardware]  compare native curves, ribbons, and rebuilt cards',
+        '  strand-lod-review [--out directory --chrome executable --hardware --motion]  compare individual strands, groups and cards',
+        '  strand-shadow-review [--out directory --motion]  compare full and budgeted strand shadows and layered transmission',
+        '  surface-growth-review [--out directory --chrome executable --hardware --motion]  review surface-grown strands through skinning and edits',
+        '  finite-curve-review [--out directory --chrome executable --hardware --orbit]  compare interactive GPU curves with the headless renderer',
+        '  hybrid-depth-review [--out directory --chrome executable --hardware]  capture matched hybrid-depth views and controls',
         '  environment-parity [--fixture observatory --out directory --chrome executable]  compare matched CLI and WebGL environment frames',
         '  passes <id> --channels environment --px1   export sky, fog transmittance, precipitation, reflections and foreground coverage',
         '  render|sheet|clip <id> or sim render <file> --passes environment   write environment passes beside the export',
@@ -1109,17 +1558,25 @@ const CMD = {
         '                              against the pixel-art references (--map: where the stray pixels and drawn edges are)',
         '',
         'any command that plays a diorama takes --poke 2:x,y,z (tap it at 2 seconds, toward that point; several with ;)',
-        'sun options: --live-sun on|off --sun-direction x,y,z --sun-ambient n --sun-intensity n --shadow-map-size n --shadow-bias n --sun-shadows off',
+        'sun options: --live-sun on|off --sun-direction x,y,z --sun-ambient n --sun-intensity n --shadow-map-size n --shadow-bias n --sun-shadows off --shadow-strand-spans n --shadow-strand-layers n',
         'shadow art: --shadow-art file.json|off for baked JSON scenes and live sun',
         'color clusters: --color-clusters file.json|off for material-specific cluster size, grain and protection',
         'pass quality: --pass-quality file.json|off for background, particles and secondary reflections',
         'shot lighting: --shot-lighting on|off|file.json   scope key, fill, rim and negative fill',
         'reflection detail: --reflection-detail on|off   compare the authored core, streaks and distance clusters',
         'brushwork: --brushwork on|off   compare surface-aligned paint at export size',
+        'shadow bands: --shadow-band-paint on|off   compare painted lighting thresholds',
+        'diffuse ramps: --diffuse-ramps on|off   compare authored diffuse ramps',
+        'shade normals: --shade-normals on|off   compare authored diffuse normals',
         'detail-preserving relighting: --relighting on|off|file.json --sky-time seconds',
         'bounce options: --sky-bounce color|preset|off --ground-bounce color|preset|off --sky-bounce-intensity n --ground-bounce-intensity n',
         'cloud options: --cloud-field cirrus|coastal-stratus|cumulus|storm-front|file.json|off --cloud-representation auto|card|impostor|volume|off --cloud-self-shadows on|off --cloud-shadows on|off --cloud-shadow-strength 0..1 --cloud-shadow-softness units',
         'translucent silhouette options: --translucent-silhouettes file.json|off',
+        'curve splats: render or clip a curve-splat-scene JSON with --curve-mode splats|curves. --curve-splats off shows the legacy carriers.',
+        '    --curve-width file.json|off   art-pixel width rules for curve materials',
+        '    --curve-subdivision on|off|pixels   refine finite spans for the target art grid',
+        '    --curve-lod on|off   authored curve distance simplification and aggregation',
+        'motional pixel coverage: --motional-coverage on|off|file.json',
         'celestial options: --celestial-tracks on|off|file.json',
         'sky options: --sky-environment file.json|off --sky-time seconds --sky-profile track=profile --sky-transitions file.json|off --sky-reflections scene|material',
         'weather options: --weather-binding on|off|file.json --retained-weather on|off --weather-fronts on|off --weather-tracks on|off --world-precipitation on|off|file.json --rain-impacts on|off|file.json',
@@ -1127,21 +1584,22 @@ const CMD = {
         'lightning options: --lightning on|off|file.json',
         'exposure options: --scene-exposure on|off|file.json',
         'aerial options: --aerial-perspective on|off --aerial-start units --aerial-density per-unit --aerial-contrast 0..1',
-        'view options: --surface off (no finish layers) --water off --reflections off --reflection-probes off --transmission off --surface-detail-kits off --atmosphere off --edges off (no edge sprites) --yaw --pitch --zoom 2 --target x,y,z --w 900 --h 620 --px 2 (screen pixels per art pixel) --px1 (native art pixels) --tone stipple|off --raw (no palette) --colored (smooth body-colored contours) --fine (inked detail: colours looked up per pixel) --bounce (bounce light baked in) --focus x,y,z[,near,far,coarse] (uneven detail) --follow [stretch,broad] (dabs along the form) --adaptive-sampling on|off|file.json --clean (remove lone pixels) --camera-shot id --ortho [on|off] (override authored projection) --cols 4 --out file.png --seed n',
+        'view options: --surface off (no finish layers) --facing-colors off --directional-colors off --water off --reflections off --reflection-probes off --transmission off --surface-detail-kits off --atmosphere off --edges off (no edge sprites) --yaw --pitch --zoom 2 --target x,y,z --w 900 --h 620 --px 2 (screen pixels per art pixel) --px1 (native art pixels) --tone stipple|off --raw (no palette) --colored (smooth body-colored contours) --fine (inked detail: colours looked up per pixel) --bounce (bounce light baked in) --focus x,y,z[,near,far,coarse] (uneven detail) --follow [stretch,broad] (dabs along the form) --adaptive-sampling on|off|file.json --clean (remove lone pixels) --camera-shot id --ortho [on|off] (override authored projection) --cols 4 --out file.png --seed n',
         'socket emitter options: --atmosphere-emitters on|off|file.json',
         'animated splat options: --splat-fields on|off|file.json',
-        'sprite options: --sprite-atlas on|off|atlas.json --sprite-at x,y,z --sprite-scale n --sprite-atlas-mode card|impostor|scenery',
+        'sprite options: --sprite-atlas on|off|atlas.json --sprite-at x,y,z --sprite-scale n --sprite-atlas-mode card|impostor|scenery --sprite-reconstruction auto|geometry|sprite',
         '                --sprite-cels edits.json|off --sprite-playback once|loop',
         'shaped fog options: --shaped-atmosphere on|off|file.json --volume-cutouts on|off|file.json',
         'atmosphere bands: --atmosphere-depth-bands on|off|file.json',
-        'fog lighting options: --volume-local-lights on|off --volume-local-shadows on|off',
+        'shoreline options: --shore-foam on|off',
+        'lighting options: --highlight-cels on|off --cutout-shadows on|off --shadow-shells on|off --volume-local-lights on|off --volume-local-shadows on|off',
         'silhouette protection: --silhouette-protection on|off|file.json',
         'layered horizon: --horizon-bands on|off|file.json',
         'staging: --fov radians | --focal-length mm [--sensor-height mm] --focus-distance units --composition u,v --camera-staging on|off|file.json --camera-guides [on|off] --depth-of-field [on|off]',
         'art direction: --art-direction on|off|painted-pixel|storm-silhouette|soft-dawn|file.json',
         'shared rendering: --strict-contract [on|off] --step-animation [on|off]',
         'effect palette options: --effect-palettes on|off|file.json',
-        'art options: --palette-remap off --color-curves off --lut <file.cube|file.json|off> --color-stack <file.json|off> --ink on|off|file.json --effects off --emissive-finishes off --stable on|off|file.json --stable-detail on|off|file.json --edge-filter on|off|file.json --contact-shadows on|off|file.json --area-lights on|off|file.json --bounce-probes on|off|file.json --snap on|off --dither-space screen|world|object --dither-spacing n --dither-origin x,y,z --resolve native|coverage|clusters --splat-order center|surface --splat-coverage legacy|continuous|soft --splat-footprints on|off --render-grid hex|triangle|diamond|off --grid-size 8 --grid-angle 0 --grid-aspect 1 --grid-gap 0 --grid-origin x,y --sdf-assist on|off|file.json --stable-transparency on|off|blend --fragment-budget N --inspection file.json|off --inspection-focus id --composite file.json|off --cutaway file.json|off --render-graph file.json|off --shutter on|off|file.json --afterimages file.json|off --reconstruction file.json|off --volume-scale 2 --volume-steps 8 --volume-jitter off|blue-noise|spatiotemporal'
+        'art options: --palette-remap off --color-curves off --lut <file.cube|file.json|off> --color-stack <file.json|off> --ink on|off|file.json --ink-shot file.json --effects off --emissive-finishes off --stable on|off|file.json --stable-detail on|off|file.json --coverage-filter on|off|file.json --surface-history on|off|file.json --protected-pixels on|off|file.json --edge-filter on|off|file.json --contact-shadows on|off|file.json --area-lights on|off|file.json --bounce-probes on|off|file.json --snap on|off --dither-space screen|world|object|view --dither-spacing n --dither-origin x,y,z --resolve native|coverage|clusters --splat-order center|surface --splat-coverage legacy|continuous|soft --splat-footprints on|off --palette-sampling off --semantic-mipmaps off --simulation-material-layers off --relief-lod auto|geometry|normal|painted|off --render-grid hex|triangle|diamond|off --grid-size 8 --grid-angle 0 --grid-aspect 1 --grid-gap 0 --grid-origin x,y --sdf-assist on|off|file.json --surface-decals off --stable-transparency on|off|blend --fragment-budget N --inspection file.json|off --inspection-focus id --composite file.json|off --cutaway file.json|off --render-graph file.json|off --shutter on|off|file.json --afterimages file.json|off --reconstruction file.json|off --volume-scale 2 --volume-steps 8 --volume-jitter off|blue-noise|spatiotemporal'
       ].join('\n')
     );
   },
@@ -1155,6 +1613,23 @@ const CMD = {
     return require('./ornament.js')(pos, opt, lib(), outputFile);
   },
   palette() {
+    if (pos[0] === 'cvd-repair') {
+      if (pos.length !== 3 || ['w', 'h', 't', 'out'].some(key => opt[key] === true) || artPixelSize !== undefined && artPixelSize !== 1)
+        die('Use palette cvd-repair <scene> <plan.json> [--out directory] at native art size');
+      const directory = outputFile('color-vision-palette-repair');
+      const report = require('./color-vision-repair-command.js').run(pos[2], directory, { build: () => buildPreview(pos[1]), pose,
+        view: defaults => view({ w: num('w', defaults.w), h: num('h', defaults.h), t: num('t', defaults.t), transparent: onOffOption('transparent') }) });
+      console.log(report.status + ':', report.weakBefore, '→', report.weakAfter, 'weak pairs. Wrote', directory);
+      return;
+    }
+    if (pos[0] === 'sequence') {
+      if (pos.length !== 2 || Object.keys(opt).some(key => key !== 'out') || opt.out === true)
+        die('Use palette sequence <plan.json> [--out directory]');
+      const directory = outputFile('sequence-palette');
+      const report = require('./sequence-palette-command.js').run(pos[1], directory, { build, pose });
+      console.log(report.palette.length + ' shared swatches across ' + report.shots.length + ' shots. Wrote', directory);
+      return;
+    }
     if (pos[0] === 'plot') return require('./palette-plot.js')(pos.slice(1), opt, lib(), outputFile);
     if (pos[0] === 'fit') return require('./palette-fit.js').fit(pos.slice(1), opt, lib(), outputFile);
     if (pos[0] === 'dither-review') return require('./palette-fit.js').review(pos.slice(1),opt,lib(),outputFile);
@@ -1311,13 +1786,14 @@ const CMD = {
     }
     if (pos[0] === 'shimmer') {
       if (pos.length!==2 || ['from','to','fps','out','window','min-delta','min-coverage','w','h']
-        .some(key=>opt[key]===true) || opt.animate!==undefined && opt.animate!==true)
-        die('Use palette shimmer <scene> [--from 0 --to 3 --fps 12] [--animate] [--out directory]');
+        .some(key=>opt[key]===true) || ['animate','include-view'].some(key=>opt[key]!==undefined&&opt[key]!==true))
+        die('Use palette shimmer <scene> [--from 0 --to 3 --fps 12] [--include-view] [--animate] [--out directory]');
       const world=buildPreview(pos[1]), fps=num('fps',12), directory=outputFile('palette-shimmer');
       const playback=opt.animate && [];
       const {image,report}=require('./palette-shimmer.js').reviewPaletteShimmer(world,{
         from:num('from',0),to:num('to',3),fps,window:num('window',3),minDelta:num('min-delta',.025),
         minCoverage:num('min-coverage',.8),width:num('w',160),height:num('h',96),
+        includeView:opt['include-view']===true,
         view:view({transparent:onOffOption('transparent')}),pose,camera:clipCamera(world)??undefined,
         onFrame:playback ? frame=>playback.push(PNG.packFrame(frame)) : undefined
       });
@@ -1552,7 +2028,18 @@ const CMD = {
   },
   'bounce-probes'() {
     const [action,id] = pos;
-    if (action !== 'bake' || !id) die('bounce-probes bake <scene> [--bounce-probes settings.json] --out probes.json');
+    if (action === 'review' && id && pos.length === 2 && typeof opt.out === 'string') {
+      const directory = outputFile('bounce-probes-review');
+      const names = ['baked.png', 'live.png', 'review.json', 'index.html'];
+      const inputs = [id, opt['bounce-probes']].filter(value => typeof value === 'string').map(file => path.resolve(file));
+      if (names.some(name => inputs.includes(path.join(directory, name)))) die('Write the review separately from its inputs');
+      const report = require('./bounce-probes-review.js').review(buildPreview(id), directory, {
+        pose, view, width: num('w', 184), height: num('h', 112), from: num('from', 0), to: num('to', 3), fps: num('fps', 12)
+      });
+      console.log('Compared', report.samples.length, 'native frames. Wrote', directory);
+      return;
+    }
+    if (action !== 'bake' || !id) die('Use bounce-probes bake <scene> --out probes.json or bounce-probes review <scene> --out directory');
     const world=build(id), override=bounceProbesOption();
     const data=lib().KIT.bounceProbes.bake(world,override===true ? world.bounceProbes : override ?? world.bounceProbes);
     if (!data?.probes.length) die('Bounce probe baking needs at least one authored probe');
@@ -1560,6 +2047,61 @@ const CMD = {
     fs.mkdirSync(path.dirname(file),{recursive:true});
     fs.writeFileSync(file,JSON.stringify(data,null,2)+'\n');
     console.log('baked',data.probes.length,'bounce probes to',file);
+  },
+  'sdf-reference'() {
+    if (pos.length !== 1 || typeof opt.out !== 'string' ||
+        opt.t !== undefined && (typeof opt.t !== 'string' || opt.t.split(',').some(value=>!value.trim())))
+      die('Use sdf-reference <scene> --out directory [--t 0,1.2 --w 192 --h 120 --samples 32 --bounces 3]');
+    if (artPixelSize !== undefined && artPixelSize !== 1) die('SDF reference renders at native art resolution');
+    const directory = outputFile('sdf-reference');
+    const relative = path.relative(directory,path.resolve(pos[0]));
+    if (/^(?:index\.html|review\.json|frame-\d\d-[a-z]+\.png)$/.test(relative))
+      die('Write the SDF reference separately from its inputs');
+    const api = require('./sdf-reference-review.js');
+    const settings = api.settingsFor({ width:num('w',192),height:num('h',120),times:list('t',[0]),
+      samples:num('samples',32),bounces:num('bounces',3),epsilon:num('epsilon',.001),steps:num('steps',160),
+      seed:num('trace-seed',1),exposure:num('reference-exposure',1) });
+    const report = api.review(buildPreview(pos[0],{ retainReferenceSdf:true }),directory,{ ...settings,pose,view });
+    console.log('Traced',report.frames.length,'native reference frames. Wrote',directory);
+  },
+  'pose-correctives'() {
+    const [action,id]=pos;
+    if (pos.length!==2 || !['capture','review'].includes(action) || typeof opt.out!=='string')
+      die('Use pose-correctives capture <scene> --plan sculpt.json --out correction.json or pose-correctives review <scene> --out directory');
+    const world=buildPreview(id), editor=lib().KIT.poseCorrectives.forWorld(world);
+    if (!editor || world.anim?.stateful) die('Pose corrective authoring needs a seekable puppet rig');
+    if (action==='capture') {
+      if (typeof opt.plan!=='string') die('Pose corrective capture needs --plan sculpt.json');
+      const time=num('t',0), file=outputFile('pose-corrective.json'), plan=path.resolve(opt.plan);
+      if (!Number.isFinite(time) || time<0) die('Pose corrective capture needs a finite nonnegative time');
+      if (file===plan || file===path.resolve(id)) die('Write the corrective separately from the sculpt plan and scene');
+      pose(world,time);
+      const asset=editor.capture(JSON.parse(fs.readFileSync(plan,'utf8')));
+      require('./asset-files.js').json(file,{...asset,sourceTime:time});
+      console.log('Captured',asset.rows.length,'corrective splats. Wrote',file);
+      return;
+    }
+    if (artPixelSize!==undefined && artPixelSize!==1) die('Pose corrective review captures native art pixels');
+    const directory=outputFile('pose-corrective-review');
+    const report=require('./pose-corrective-review.js').review(world,editor,directory,
+      { pose,view,width:num('w',140),height:num('h',112),from:num('from',0),to:num('to',2.4),fps:num('fps',10) });
+    console.log('Compared',report.samples.length,'corrective poses. Wrote',directory);
+  },
+  'fog-reconstruction'() {
+    const [action,id]=pos;
+    if (action!=='review' || !id || pos.length!==2 || typeof opt.out!=='string' ||
+        opt.subject!==undefined && (typeof opt.subject!=='string' || !opt.subject.trim()))
+      die('Use fog-reconstruction review <scene> --out directory [--subject object-id --volume-scale 4]');
+    if (artPixelSize!==undefined && artPixelSize!==1) die('Fog review captures native art pixels');
+    const directory=outputFile('fog-reconstruction-review');
+    if (['depth.png','object.png','native.png','review.json','index.html']
+      .some(name=>path.resolve(id)===path.join(directory,name))) die('Write the fog review separately from its input');
+    const world=buildPreview(id);
+    const report=require('./fog-reconstruction-review.js').review(world,directory,{
+      pose,view,width:num('w',192),height:num('h',112),from:num('from',0),to:num('to',2.4),
+      fps:num('fps',10),scale:num('volume-scale',world.volumeQuality?.scale>1 ? world.volumeQuality.scale : 4),subject:opt.subject
+    });
+    console.log('Compared',report.samples.length,'fog frames. Wrote',directory);
   },
   environment() {
     if (pos[0] === 'aesthetics') {
@@ -1665,7 +2207,9 @@ const CMD = {
         source = authored.model(num('seed', options.snapshot?.seed ?? authored.seed), options);
       }
       const result = require('../index.js').exportGlb(source, {
-        out: opt.out, textureSize: num('texture-size', 1024), uvMargin: num('uv-margin', 0.008)
+        out: opt.out, textureSize: num('texture-size', undefined), uvMargin: num('uv-margin', 0.008),
+        bakeDir:opt['bake-dir'],paintViews:opt['paint-views'],capturePaint:opt['capture-paint'],
+        rebakeFrom:opt['rebake-from'],chartEdits:opt['chart-edits']
       });
       console.log(JSON.stringify(result, null, 2));
     } catch (error) {
@@ -1836,6 +2380,94 @@ const CMD = {
     console.log(warn.length ? 'warnings:\n  ' + warn.join('\n  ') : 'no warnings');
   },
   shot() {
+    if (pos[0] === 'light-approve') {
+      if (pos.length !== 2 || Object.keys(opt).some(key => key !== 'out') || opt.out === true)
+        die('Use shot light-approve <plan.json> [--out directory]');
+      const directory = outputFile('native-lighting-approval');
+      const report = require('./native-lighting-approval-command.js').run(pos[1], directory, { build, pose, view, kit: lib() });
+      console.log('Approved', report.summary.after + '/' + report.summary.total, 'grid checks with one rig after',
+        report.work.evaluations, 'candidate evaluations (was', report.summary.before + '/' + report.summary.total + ').');
+      for (const row of report.rows.filter(row => !row.after.passed)) console.log(row.grid + '/' + row.id, row.diagnostic);
+      console.log('Wrote', directory);
+      return;
+    }
+    if (pos[0] === 'silhouette-repair') {
+      if (pos.length !== 2 || Object.keys(opt).some(key => key !== 'out') || opt.out === true)
+        die('Use shot silhouette-repair <plan.json> [--out directory]');
+      const directory = outputFile('silhouette-repair');
+      const report = require('./silhouette-repair-command.js').run(pos[1], directory, { build, pose, view });
+      console.log('Found', report.intervals.length, 'collision intervals.');
+      if (report.repair) console.log('Verified camera orbit offset (yaw,pitch degrees):', report.repair.offsetDegrees.join(','));
+      else if (report.status === 'unsupported-camera') console.log('The repair requires an orbit-authored camera.');
+      else if (report.intervals.length) console.log('No verified repair within the camera offset budget.');
+      else if (report.status === 'unverified') console.log('Some frames could not be verified.');
+      console.log('Wrote', directory);
+      return;
+    }
+    if (pos[0] === 'match-cut') {
+      if (pos.length !== 2 || Object.keys(opt).some(key => key !== 'out') || opt.out === true)
+        die('Use shot match-cut <plan.json> [--out directory]');
+      const directory = outputFile('match-cut');
+      const report = require('./match-cut-command.js').run(pos[1], directory, { build, pose, view });
+      console.log('Compared', report.comparedPairs, 'frame pairs and shortlisted', report.candidates.length, 'cuts');
+      if (report.candidates.length) {
+        const first = report.candidates[0];
+        console.log('Best cut: outgoing frame', first.outgoing.frame, 'to incoming frame', first.incoming.frame,
+          '(' + first.score.toFixed(2) + '/100)');
+      }
+      console.log('Wrote', directory);
+      return;
+    }
+    if (pos[0] === 'reframe') {
+      if (pos.length !== 2 || Object.keys(opt).some(key => key !== 'out') || opt.out === true)
+        die('Use shot reframe <plan.json> [--out directory]');
+      const directory = outputFile('subject-reframe');
+      const report = require('./subject-reframe-command.js').run(pos[1], directory, { build, pose, view });
+      for (const delivery of report.formats)
+        console.log(delivery.label + ': ' + delivery.safeFrames + '/' + report.source.frames + ' safe frames (' +
+          delivery.centerSafeFrames + ' with center crop)');
+      console.log('Wrote', directory);
+      return;
+    }
+    if (pos[0] === 'grade-match') {
+      if (pos.length !== 2 || Object.keys(opt).some(key => key !== 'out') || opt.out === true)
+        die('Use shot grade-match <plan.json> [--out directory]');
+      const directory = outputFile('shared-object-grade');
+      const report = require('./shared-object-grade-command.js').run(pos[1], directory, { build, pose, kit: lib() });
+      console.log('Chroma error', report.beforeError.toFixed(4), '→', report.afterError.toFixed(4) + '. Wrote', directory);
+      return;
+    }
+    if (pos[0] === 'light-paint' || pos[0] === 'light-fit') {
+      const paint = pos[0] === 'light-paint';
+      if (pos.length !== 2 || typeof opt.out !== 'string' ||
+          (paint ? !/\.html$/i.test(opt.out) : typeof opt.targets !== 'string'))
+        die(paint ? 'Use shot light-paint <scene> --out targets.html' :
+          'Use shot light-fit <scene> --targets targets.json --out folder');
+      const { capture, fitShotLighting } = require('./shot-light-fit.js');
+      const output = require('./shot-light-output.js');
+      const plan = paint ? undefined : JSON.parse(fs.readFileSync(path.resolve(opt.targets), 'utf8'));
+      const frame = paint ? { grid: [num('w', 160), num('h', 120)], time: num('t', 0) } : plan;
+      if (!frame || !Number.isFinite(frame.time) || frame.time < 0 ||
+          !paint && (opt.t !== undefined && num('t') !== frame.time ||
+            opt.w !== undefined && num('w') !== frame.grid?.[0] || opt.h !== undefined && num('h') !== frame.grid?.[1]) ||
+          artPixelSize !== undefined && artPixelSize !== 1)
+        die('Painted lighting uses the target time, native art dimensions and --px 1');
+      const world = buildPreview(pos[1]);
+      pose(world, frame.time);
+      const settings = view({ t: frame.time });
+      if (paint) {
+        output.writePainter(path.resolve(opt.out), capture(world, { frame, view: settings }));
+      } else {
+        if (opt.interactive !== undefined && opt.interactive !== true) die('--interactive is a flag');
+        const preview = opt.interactive && output.previewBank();
+        const result = fitShotLighting(world, { plan, view: settings, evaluations: num('evaluations', 64), kit: lib(),
+          onCandidate: preview ? preview.add : undefined });
+        output.writeFit(path.resolve(opt.out), plan, result, preview?.rows);
+        console.log(result.report.status, 'after', result.report.work.evaluations, 'candidate evaluations');
+      }
+      console.log('wrote', path.resolve(opt.out));
+      return;
+    }
     if (pos[0] === 'approve') {
       if (pos.length !== 2 || opt.plan === true || typeof opt.out !== 'string' || !/\.json$/i.test(opt.out) ||
           opt.frame === true || opt['report-only'] !== undefined && opt['report-only'] !== true)
@@ -1867,6 +2499,7 @@ const CMD = {
     Shot.replay(pos[1],{out:opt.out,root:opt.root,entry:__filename});
   },
   render() {
+    const finishOutput = outputFinish();
     const w = buildPreview(), diagnostics = previewPasses(),
       t = num('t', 0);
     const suffixes = reviewSidecars(diagnostics);
@@ -1885,7 +2518,7 @@ const CMD = {
       shot?.finish(f,{suffixes});
       return;
     }
-    const output = save(w.id + '.png', R.upscale(im, opt.px1 ? 1 : im.px));
+    const output = save(w.id + '.png', R.upscale(finishOutput(im), opt.px1 ? 1 : im.px));
     diagnostics?.write(output, { times: [t] });
     shot?.finish(output,{suffixes});
   },
@@ -1969,6 +2602,9 @@ const CMD = {
   },
   atlas() {
     const w = build(pos[0]);
+    if (opt.clips !== undefined && (typeof opt.clips !== 'string' || ['from','to','t'].some(key=>opt[key]!==undefined)))
+      die('--clips needs a JSON plan path and supplies its own times');
+    const clips = opt.clips===undefined ? undefined : JSON.parse(fs.readFileSync(path.resolve(opt.clips),'utf8'));
     const fps = num('fps', 12), from = num('from', num('t', 0)), to = num('to', from);
     if (!Number.isFinite(fps) || fps <= 0 || fps > 240 || !Number.isFinite(from) || !Number.isFinite(to) || to < from)
       die('atlas needs a positive frame rate and an ordered time range');
@@ -1977,11 +2613,29 @@ const CMD = {
     const times = Array.from({ length: frames }, (_, index) => from + index / fps);
     const directory = opt.out ? path.resolve(opt.out) : path.join(OUT, w.id + '-atlas');
     const { spriteAtlas, writeAtlas } = require('./sprite-atlas.js');
-    const atlas = spriteAtlas(w, { width: num('w', 96), height: num('h', 96), directions: num('directions', 8),
+    const cutoutMipmaps = opt['cutout-mipmaps'] === undefined || opt['cutout-mipmaps'] === 'off' ? undefined :
+      { mode: opt['cutout-mipmaps'] === true ? 'coverage' : opt['cutout-mipmaps'], cutoff: num('alpha-cutoff', .5) };
+    if (opt['alpha-cutoff'] !== undefined && !cutoutMipmaps) die('--alpha-cutoff needs --cutout-mipmaps');
+    const chooseViews=onOffOption('adaptive-views');
+    const viewReview=onOffOption('view-review');
+    const controls=['min-directions','view-probes','view-error','view-protect','view-pose-samples'];
+    if (!chooseViews && (viewReview || controls.some(key=>opt[key]!==undefined)))
+      die('View assessment controls need --adaptive-views');
+    if (opt['view-protect']!==undefined && typeof opt['view-protect']!=='string')
+      die('--view-protect needs a JSON array of target selectors');
+    const pitches=opt.pitches===undefined ? undefined : list('pitches');
+    if (viewReview && (clips || times.length!==1 || (pitches?.length ?? 1)!==1))
+      die('--view-review takes one pose time and one elevation');
+    const adaptive=chooseViews ? { minDirections:num('min-directions'),probes:num('view-probes'),
+      tolerance:num('view-error'),poseSamples:num('view-pose-samples'),
+      ...(opt['view-protect']!==undefined && {protect:JSON.parse(opt['view-protect'])}) } : undefined;
+    const settings={ width: num('w', 96), height: num('h', 96), directions: num('directions', 8),
       columns: num('cols', num('directions', 8)), maps: opt.maps ? String(opt.maps).split(',') : [],
       pivot: opt.pivot ? list('pivot') : w.cam.target, view: view(), yaw: num('yaw', w.cam.yaw),
-      pitches:opt.pitches===undefined?undefined:list('pitches'),times,fps,pose });
+      pitches,...(clips===undefined?{times}:{clips}),fps,pose,cutoutMipmaps,normalSpace:opt['normal-space'],adaptive };
+    const atlas=spriteAtlas(w,settings);
     writeAtlas(directory, atlas);
+    if (viewReview) require('./impostor-view-review.js').review(w,atlas,settings,path.join(directory,'review'));
     console.log('wrote', directory, atlas.metadata.frames.length, 'frames');
   },
   'transition-review'() {
@@ -2181,8 +2835,26 @@ const CMD = {
   'render-graph'() {
     return require('./render-graph-plan.js')(pos,opt,lib());
   },
+  patch() {
+    return require('./patch-cli.js')(pos,opt,{kit:lib(),operations:cfg.graphOperations,adapters:cfg.graphAdapters});
+  },
+  story() {
+    return require('./story-document.js').storyCommand(pos,opt,lib);
+  },
+  beat() {
+    return require('./inspection-links.js').command(pos,opt,lib());
+  },
+  assets() {
+    return require('./asset-references.js').command(pos, opt, lib());
+  },
   graph() {
     return require('./graph-cli.js')(pos,opt,{kit:lib(),operations:cfg.graphOperations,adapters:cfg.graphAdapters});
+  },
+  'reference-clip'() {
+    return require('./reference-clip-review.js').command(pos,opt,lib());
+  },
+  'effect-clip'() {
+    return require('./effect-clip-command.js').command(pos,opt,{kit:lib(),operations:cfg.graphOperations,adapters:cfg.graphAdapters});
   },
   music() {
     return require('./music-composer.js')(pos,opt,lib());
@@ -2281,6 +2953,77 @@ const CMD = {
   retarget() {
     require('./retarget.js').run({ K: lib().KIT, build, pos, options: opt, view: view() });
   },
+  'curve-subdivision-review'() {
+    const directory = opt.out ? path.resolve(opt.out) : path.join(OUT,'curve-subdivision-review');
+    const report = require('./curve-subdivision-review.js').run(directory,{ chrome:opt.chrome,hardware:opt.hardware });
+    for (const { distance,webgl } of report.views)
+      console.log(distance, webgl.dense.segments, 'to', webgl.adaptive.segments, 'spans, mean byte error', webgl.error.mean.toFixed(3));
+    console.log('wrote',directory);
+  },
+  'curve-bake'() {
+    const world = buildPreview(), time = num('t',0);
+    pose(world,time);
+    const { bakeCurves,writeCurveBake } = require('./curve-bake.js');
+    const result = bakeCurves(world,{
+      object:opt.object,part:opt.part,width:num('w',96),height:num('h',96),
+      directions:num('directions',8),yaw:num('yaw',world.cam.yaw ?? 0),time,
+      ...(opt.pitches!==undefined && { pitches:list('pitches') }),
+      ...(opt.pivot!==undefined && { pivot:list('pivot') }),
+      padding:num('pad',3),normals:onOffOption('normals') ?? false,cutoutMipmaps:onOffOption('cutout-mipmaps'),
+      ribbon:onOffOption('ribbon')===false ? false : {
+        view:num('ribbon-view',0),alphaCutoff:num('alpha-cutoff',.5),depthTolerance:num('depth-tolerance',.02)
+      }
+    });
+    const directory = opt.out ? path.resolve(opt.out) : path.join(OUT,world.id+'-curve-bake');
+    writeCurveBake(directory,result);
+    console.log('wrote',directory,result.atlas.metadata.frames.length,'card views',
+      result.ribbon ? result.ribbon.strips+' ribbon strips' : '');
+  },
+  'curve-bake-review'() {
+    const directory = opt.out ? path.resolve(opt.out) : path.join(OUT,'curve-bake-review');
+    const report = require('./curve-bake-review.js').run(directory,{ chrome:opt.chrome,hardware:opt.hardware });
+    for (const asset of report.assets)
+      console.log(asset.object,asset.sourceSpans,'native spans,',asset.strips,'ribbon strips,',asset.cardViews,'card views');
+    console.log('wrote',directory);
+  },
+  'strand-lod-review'() {
+    const directory = opt.out ? path.resolve(opt.out) : path.join(OUT,'strand-lod-review');
+    const report = require('./strand-lod-review.js').run(directory,{chrome:opt.chrome,hardware:opt.hardware,motion:opt.motion});
+    for (const {id,webgl} of report.views)
+      console.log(id,webgl.native.segments,'to',webgl.lod.segments,'finite curve spans');
+    console.log('wrote',directory);
+  },
+  'strand-shadow-review'() {
+    const directory = opt.out ? path.resolve(opt.out) : path.join(OUT,'strand-shadow-review');
+    const {views,visibleSpans} = require('./strand-shadow-review.js').run(directory,{motion:opt.motion});
+    console.log(visibleSpans,'visible curve spans,',views.detail.submittedSpans,'to',views.budget.submittedSpans,'shadow spans');
+    console.log(views.layers.peakLayers,'independent translucent layers');
+    console.log('wrote',directory);
+  },
+  'surface-growth-review'() {
+    const directory=opt.out ? path.resolve(opt.out) : path.join(OUT,'surface-growth-review');
+    const report=require('./surface-growth-review.js').run(directory,{chrome:opt.chrome,hardware:opt.hardware,motion:opt.motion});
+    for (const {id,groups,webgl} of report.views)
+      console.log(id,webgl,'visible curve spans,',groups.shoots.attached,'attached clay shoots');
+    console.log('wrote',directory);
+  },
+  'finite-curve-review'() {
+    const directory = opt.out ? path.resolve(opt.out) : path.join(OUT,'finite-curve-review');
+    const report = require('./finite-curve-review.js').run(directory,{ chrome:opt.chrome,hardware:opt.hardware,orbit:opt.orbit });
+    for (const { yaw, curves, error } of report.frames)
+      console.log(yaw, curves.segments, 'visible spans, mean byte error', error.mean.toFixed(3));
+    console.log('wrote',directory);
+  },
+  'hybrid-depth-review'() {
+    const directory = opt.out ? path.resolve(opt.out) : path.join(OUT,'hybrid-depth-review');
+    const report = require('./hybrid-depth-review.js').run(directory, {chrome:opt.chrome,hardware:opt.hardware});
+    for (const [backend, frames] of Object.entries(report.backends)) {
+      console.log(backend, frames.combined.views.length, 'depth views');
+      for (const [id, frame] of Object.entries(frames))
+        if (frame.difference) console.log(' ', id, frame.difference.changed, 'changed pixels');
+    }
+    console.log('wrote',directory);
+  },
   'environment-parity'() {
     const parity = require('./environment-parity.js');
     const result = parity.compare({chrome:opt.chrome,hardware:opt.hardware,fixture:opt.fixture});
@@ -2291,12 +3034,68 @@ const CMD = {
   },
   passes() {
     const w = buildPreview(), t = num('t', 0);
+    const art = require('../src/art-passes.js');
+    const passes = art.select(opt.channels ? String(opt.channels).split(',') : true);
+    const motionFrom = priorArtReference(w, t, { captureMotion:true, capturePartMotion:true,
+      captureStrandMotion:art.needsStrandMotion(passes),captureSurfaceMotion:art.needsSurfaceMotion(passes) });
     pose(w, t);
-    const passes = opt.channels ? String(opt.channels).split(',') : true;
-    const im = R.render(w, view({ t, passes }));
+    const im = R.render(w, view({ t, passes, motionFrom }));
     const directory = opt.out ? path.resolve(opt.out) : path.join(OUT, w.id + '-passes');
     require('./pass-preview.js').writePasses(directory, im, opt.px1 ? 1 : im.px);
     console.log('wrote', directory);
+  },
+  'surface-pixel'() {
+    if (pos.length !== 1 || typeof opt.at !== 'string' || !/^\d+,\d+$/.test(opt.at) || opt.out === true)
+      die('Use surface-pixel <scene> --at x,y [--t seconds] [--out inspection.json]');
+    const world = buildPreview(), t = num('t', 0), [x,y] = list('at');
+    const art = require('../src/art-passes.js');
+    const passes = [...art.opaque.filter(channel => !art.needsSurfaceMotion([channel])), 'partId'];
+    pose(world,t);
+    const frame = R.render(world,view({t,passes}));
+    const report = {scene:world.id,time:t,at:[x,y],hit:art.pick(frame.passes,x,y)};
+    if (opt.out) require('./asset-files.js').json(path.resolve(opt.out),report);
+    else process.stdout.write(JSON.stringify(report,null,2) + '\n');
+  },
+  'strand-pixel'() {
+    if (pos.length !== 1 || typeof opt.at !== 'string' || !/^\d+,\d+$/.test(opt.at) || opt.out === true)
+      die('Use strand-pixel <scene> --at x,y [--t seconds] [--previous seconds] [--out inspection.json]');
+    const world = buildPreview(), t = num('t', 0);
+    const motionFrom = priorArtReference(world, t, { captureStrandMotion: true });
+    pose(world, t);
+    const frame = R.render(world, view({ t, strandPixel: list('at'), motionFrom,
+      captureStrandMotion: !!motionFrom }));
+    const report = { scene: world.id, ...frame.strandPixel };
+    if (opt.out) require('./asset-files.js').json(path.resolve(opt.out), report);
+    else process.stdout.write(JSON.stringify(report, null, 2) + '\n');
+  },
+  'strand-review'() {
+    if (pos.length !== 1 || opt.out === true || opt.w === undefined || opt.h === undefined ||
+        ['w', 'h', 't', 'from', 'to', 'fps'].some(flag => opt[flag] === true))
+      die('Use strand-review <scene> --w WIDTH --h HEIGHT [--t TIME | --from START --to END --fps RATE] [--out directory]');
+    const world = buildPreview(), frame = view(), directory = outputFile('strand-review');
+    const time = num('t'), from = num('from'), to = num('to');
+    const replay = feedbackReplay(world, from ?? time ?? 0, frame);
+    const report = require('./curve-quality-review.js').writeCurveQualityReview(world, {
+      kit: lib(), frame, time, from, to, fps: num('fps',12), camera:clipCamera(world), replay, samplePose:pose
+    }, directory);
+    console.log('wrote', directory, report.frames.length, 'matched samples at', report.width + 'x' + report.height, 'art pixels');
+  },
+  'export-deep'() {
+    if (pos.length!==1 || typeof opt.out!=='string' ||
+        opt.t!==undefined && (typeof opt.t!=='string' || opt.t.split(',').some(t=>!t.trim())) ||
+        ['from','to','n','layers','reflection'].some(key=>opt[key]===true) ||
+        !Number.isSafeInteger(num('n',1)) || num('n',1)<1 || num('n',1)>512)
+      die('Use export-deep <scene> [--t seconds,... | --from seconds --to seconds --n count] --out file.exr|directory');
+    const ts = ['t','from','to','n'].some(key=>opt[key]!==undefined) ? times() : [0];
+    const world = buildPreview();
+    const {file,frames}=require('./deep-openexr.js').exportDeepEXR(world,{
+      out:opt.out,view:view({w:num('w',256),h:num('h',144),px:artPixelSize??1}),times:ts,pose,
+      layers:num('layers'),reflection:opt.reflection,coalesce:onOffOption('coalesce')!==false,
+      allowTruncated:onOffOption('allow-truncated')===true
+    });
+    console.log('wrote',file,frames.length,'frame(s)');
+    for (const frame of frames) if (frame.droppedSamples)
+      console.log('frame at',frame.time,'s dropped',frame.droppedSamples,'samples across',frame.truncatedPixels,'pixels');
   },
   'export-layers'() {
     if (pos.length !== 1 || opt.out === true)
@@ -2306,10 +3105,13 @@ const CMD = {
     if (['from', 'to', 'n'].some(key => opt[key] === true) || !Number.isSafeInteger(num('n', 1)) || num('n', 1) < 1)
       die('Layered exports need numeric range endpoints and a positive frame count');
     const world = buildPreview(), ts = ['t', 'from', 'to', 'n'].some(key => opt[key] !== undefined) ? times() : [0];
+    if (opt.compositing !== undefined && typeof opt.compositing !== 'string') die('--compositing needs a JSON file');
+    const compositing = opt.compositing && JSON.parse(fs.readFileSync(path.resolve(opt.compositing),'utf8'));
     const frame = view(ts.length > 1 ? sequenceHistory() : {});
     const out = opt.out ?? path.join(OUT, world.id + '-layers');
     const { file, manifest } = require('./export-layers.js').exportLayers(world, {
-      out, view: frame, times: ts, native: !!opt.px1, pose, replay: feedbackReplay(world, ts[0], frame)
+      out, view: frame, times: ts, native: !!opt.px1, pose, replay: feedbackReplay(world, ts[0], frame),
+      partMotion: onOffOption('part-motion') === true, strandPasses: onOffOption('strand-passes') === true, compositing
     });
     console.log('wrote', file, manifest.frames.length, 'frame(s)');
   },
@@ -2378,10 +3180,10 @@ const CMD = {
     }
     console.log('wrote', file);
   },
-  project() {
+  async project() {
     const [mode, input] = pos, api = require('./project-bundle.js');
-    if (pos.length !== 2 || !['pack', 'inspect', 'unpack'].includes(mode))
-      die('Use project pack <scene-or-take.json>, inspect <bundle.json>, or unpack <bundle.json> --out new-directory');
+    if (pos.length !== 2 || !['pack', 'inspect', 'unpack', 'verify'].includes(mode))
+      die('Use project pack, inspect, unpack or verify with a JSON document');
     if (mode === 'unpack') {
       const { entry } = api.unpackProject(input, { out: opt.out });
       console.log('unpacked', entry);
@@ -2389,11 +3191,33 @@ const CMD = {
     }
     if (mode === 'inspect') {
       const project = api.readProjectBundle(input), { format, version, attachments } = project.snapshot();
-      process.stdout.write(JSON.stringify({ format, version, ...project.metadata, files: project.files(), attachments, take: project.takeDocument?.() }, null, 2) + '\n');
+      process.stdout.write(JSON.stringify({ format, version, ...project.metadata, files: project.files(), attachments,
+        take: project.takeDocument?.(), experiment: project.experimentDocument?.(),
+        ...(project.storyManifest&&{story:project.storyManifest(),inventory:project.storyInventory(),
+          templates:project.storyTemplates(),resources:project.storyResources()}) }, null, 2) + '\n');
+      return;
+    }
+    if (mode === 'verify') {
+      if (Object.keys(opt).some(key => key !== 'out' && key !== 'compare-engine') ||
+          opt.out !== undefined && (typeof opt.out !== 'string' || !opt.out.trim()) ||
+          opt['compare-engine'] !== undefined && opt['compare-engine'] !== true)
+        die('Use project verify <experiment-or-story-bundle.json> [--out report.json --compare-engine]');
+      if (opt.out && fs.existsSync(opt.out)) {
+        const source = fs.statSync(input), destination = fs.statSync(opt.out);
+        if (source.dev === destination.dev && source.ino === destination.ino) die('Choose a report separate from its experiment bundle');
+      }
+      const project=api.readProjectBundle(input);
+      if(project.storyManifest&&opt['compare-engine'])die('--compare-engine applies to experiment bundles');
+      const report=project.storyManifest?await require('./story-exchange.js').verify(project,lib().KIT):
+        require('./project-experiment.js').verify(project,{compareEngine:opt['compare-engine']??false});
+      if (opt.out) require('./asset-files.js').json(path.resolve(opt.out), report);
+      else process.stdout.write(JSON.stringify(report, null, 2) + '\n');
+      if (!report.passed) process.exitCode = 2;
       return;
     }
     if ([opt.root, opt.revision].includes(true)) die('--root and --revision need values');
-    const { file, project } = api.packProject(input, { out: opt.out, root: opt.root, revision: num('revision', 1),
+    const { file, project } = api.packProject(input, { out: opt.out, root: opt.root,
+      revision: opt.revision === undefined ? undefined : num('revision', 1),
       assetPack: opt['asset-pack'], paint: opt.paint, attachments: opt.attachments });
     console.log('wrote', file, project.files().length, 'file(s)');
   },
@@ -2529,7 +3353,7 @@ const CMD = {
       return R.render(w, view({ ...frame, t, resetRenderHistory }));
     }
     for (const t of ts) {
-      const im = replay ? replay.sample(t, draw) : draw(t);
+      const im = replay ? R.sequenceOutput(frame, ()=>replay.sample(t, draw)) : draw(t);
       diagnostics?.capture(im, opt.px1 ? 1 : im.px);
       imgs.push(displayFrame(im, w));
     }
@@ -2654,6 +3478,12 @@ const CMD = {
   depth() {
     require('./depth.js')(pos[0], opt, lib(), path.join(OUT, 'depth-import'));
   },
+  shape() {
+    require('./turntable-shape.js').command(pos, opt, lib());
+  },
+  'mesh-uv'() {
+    require('./mesh-uv.js').command(pos,opt,{num,list});
+  },
   mesh() {
     const w = build(pos[0]),
       m = w.mesh;
@@ -2700,6 +3530,7 @@ const CMD = {
     save(w.id + '-turn.png', R.grid(imgs, num('cols', 4), labs));
   },
   clip() {
+    const finishOutput = outputFinish();
     const join = onOffOption('loop-join') && require('./loop-join.js');
     const w = buildPreview(), diagnostics = previewPasses(),
       fps = num('fps', 12),
@@ -2720,14 +3551,14 @@ const CMD = {
     }
     for (let k = 0; k < n; k++) {
       const t = from + k / fps;
-      const im = replay ? replay.sample(t, draw) : draw(t, undefined, k / (n - 1));
+      const im = replay ? R.sequenceOutput(frame, ()=>replay.sample(t, draw)) : draw(t, undefined, k / (n - 1));
       diagnostics?.capture(im, opt.px1 ? 1 : im.px);
       ts.push(t);
-      frames.push(displayFrame(im, w));
+      frames.push(displayFrame(finishOutput(im), w));
     }
     const end = from + n / fps;
     const audit = join && join.inspect({ first: frames[0], penultimate: frames[n - 2], last: frames[n - 1],
-      endpoint: displayFrame(replay ? replay.sample(end, draw) : draw(end, undefined, 1), w), from, fps, count: n });
+      endpoint: displayFrame(finishOutput(replay ? replay.sample(end, draw) : draw(end, undefined, 1)), w), from, fps, count: n });
     fs.mkdirSync(path.dirname(f), { recursive: true });
     PNG.animate(f, frames, fps);
     if (audit) {
@@ -3031,12 +3862,13 @@ const CMD = {
       w = build(id),
       c = w.cam || {},
       frames = [];
+    const motionalCoverageHistory = require('../index.js').createMotionalCoverageHistory();
     const st = num('step', mode === 'orbit' ? 0.004 : mode === 'zoom' ? 0.012 : mode === 'pan' ? 0.02 : 1 / 12);
     let px = 0, bg = w.pal[0];
     for (let k = 0; k < n; k++) {
       const t = mode === 'still' ? t0 + k * st : t0;
       pose(w, t);
-      const v = view({ t, w: num('w', 480), h: num('h', 340) }),
+      const v = view({ t, w: num('w', 480), h: num('h', 340), motionalCoverageHistory }),
         T = (v.target || c.target || [0, 0, 0]).slice();
       if (mode === 'orbit') v.yaw = (v.yaw === undefined ? c.yaw || 0 : v.yaw) + k * st;
       if (mode === 'zoom') v.zoom = (v.zoom || 1) * (1 + k * st);
@@ -3073,8 +3905,9 @@ const CMD = {
       );
     const Paint = require('../src/paint-corrections.js'), name = opt.layer;
     if (name !== undefined && !Paint.idOK(name)) die('Paint layer needs a lowercase ID');
-    if (sub === 'cause' && (pos.length !== 3 || name !== undefined || opt.replace !== undefined && opt.replace !== true))
-      die('paint cause <scene> <recipe.json> [--dir path] [--replace]');
+    if (sub === 'cause' && (pos.length !== 3 || name !== undefined || opt.replace !== undefined && opt.replace !== true ||
+        opt.events !== undefined && typeof opt.events !== 'string'))
+      die('paint cause <scene> <recipe.json> [--events <run-or-checkpoint.json>] [--dir path] [--replace]');
     if (sub === 'tune' && name === undefined) die('Paint tune needs --layer name');
     if (sub === 'absorb' && !name && ['angle', 'feather', 'opacity', 'region'].some(key => opt[key] !== undefined))
       die('Paint controls need a named layer');
@@ -3112,19 +3945,50 @@ const CMD = {
     }
     if (sub === 'cause') {
       const recipe = JSON.parse(fs.readFileSync(path.resolve(pos[2]),'utf8'));
-      const generated = lib().KIT.surfaceMarks.bake(world,recipe);
+      const { surfaceMarks, world: { runtime } } = lib().KIT;
+      const source = opt.events && JSON.parse(fs.readFileSync(path.resolve(opt.events),'utf8'));
+      function* committedEvents() {
+        if (source?.version === 1 && source.format === runtime.checkpointFormat &&
+            Array.isArray(source.history) && Array.isArray(source.events)) {
+          yield* source.history;
+          yield* source.events;
+          return;
+        }
+        if (source?.format !== runtime.runFormat) die('--events needs a world run recording or checkpoint');
+        const run = runtime.openRecording(source);
+        yield* run.events;
+        while (run.view().tick < source.end.tick) {
+          run.step();
+          yield* run.events;
+        }
+        if (!runtime.checkpointsEqual(run.checkpoint(),source.end)) die('Event recording diverged from its saved end checkpoint');
+      }
+      const generated = opt.events ? surfaceMarks.bakeEvents(world,committedEvents(),recipe) : surfaceMarks.bake(world,recipe);
       const existing = readPaint(dfile);
       const doc = Array.isArray(existing) ? {decals:existing} : existing;
       const layers = Paint.layers(doc);
+      const added = [], kept = [], report = ({ id, decals, sourceEvent }) => ({
+        id, samples:decals.length, ...(sourceEvent && { sourceEvent })
+      });
       for (const layer of generated.layers) {
         const slot=layers.findIndex(entry=>entry.id===layer.id);
         if (slot<0) layers.push(layer);
-        else if (opt.replace) layers[slot]=layer;
-        else die('Paint layer '+layer.id+' already exists. Use --replace to rebake it.');
+        else if (layer.sourceEvent && JSON.stringify(layers[slot].sourceEvent) === JSON.stringify(layer.sourceEvent)) {
+          if (opt.replace) layers[slot]=layer;
+          else {
+            kept.push(report(layers[slot]));
+            continue;
+          }
+        } else if (opt.replace && !layer.sourceEvent) layers[slot]=layer;
+        else die('Paint layer '+layer.id+' already exists.' + (layer.sourceEvent ? ' Give this run or rule a distinct ID.' :
+          ' Use --replace to rebake it.'));
+        added.push(report(layer));
       }
-      fs.mkdirSync(dir,{recursive:true});
-      save({ ...doc,id:world.id,detail:world.detail,layers });
-      console.log(JSON.stringify({file:dfile,layers:generated.layers.map(layer=>({id:layer.id,samples:layer.decals.length}))},null,2));
+      if (added.length) {
+        fs.mkdirSync(dir,{recursive:true});
+        save({ ...doc,id:world.id,detail:world.detail,layers });
+      }
+      console.log(JSON.stringify({file:dfile,layers:added,...(kept.length && {kept})},null,2));
       return;
     }
     if (sub === 'layers') {
@@ -3293,7 +4157,7 @@ const CMD = {
       kept = old.filter(d => !fresh.some(e => near(d, e)) && !erase.some(e => near(d, e))),
       decals = kept.concat(fresh);
     if (name) {
-      const placement = surface ? {type:'surface'} : {view:source,time:meta.t};
+      const placement = surface ? {type:'surface',sourceEvent:prior.sourceEvent} : {view:source,time:meta.t};
       const correction = Paint.layer({ id: name, ...placement, ...controls(prior), decals });
       if (slot < 0) layers.push(correction);
       else layers[slot] = correction;
@@ -3307,6 +4171,21 @@ const CMD = {
   },
   compare() {
     const [id, ref] = pos;
+    if (opt['curve-modes'] !== undefined) {
+      if (opt['curve-modes'] !== true || pos.length !== 1 || opt.out === true || opt.w === undefined ||
+          opt.w === true || opt.h === undefined || opt.h === true ||
+          ['looks', 'curve-mode', 'curve-splats', 'px', 'up'].some(flag => opt[flag] !== undefined) ||
+          ['t', 'from', 'to', 'fps'].some(flag => opt[flag] === true))
+        die('Use compare <scene> --curve-modes --w WIDTH --h HEIGHT [--t TIME | --from START --to END --fps RATE] [--out directory]');
+      const world = buildPreview(), frame = view(), directory = outputFile('curve-modes');
+      const time = num('t'), from = num('from'), to = num('to');
+      const replay = feedbackReplay(world, from ?? time ?? 0, frame);
+      const result = require('./curve-compare.js').writeCurveComparison(world, {
+        kit: lib(), frame, time, from, to, fps: num('fps', 12), camera: clipCamera(world), replay, samplePose: pose
+      }, directory);
+      console.log('wrote', directory, result.frames.length, 'matched frames at', result.width + 'x' + result.height, 'art pixels per mode');
+      return;
+    }
     if (opt.looks !== undefined || /\.json$/i.test(ref ?? '')) {
       const file = opt.looks ?? ref;
       if (!id || typeof file !== 'string') die('compare needs a scene and --looks cases.json');
@@ -3505,6 +4384,20 @@ async function run() {
     await worldCLI().execute(cmd,pos);
     shotReplay?.verify();
     return;
+  }
+  const splatFiles = cmd === 'snap' ? pos.filter(gaussianFile) : ['render', 'turn', 'sheet', 'clip'].includes(cmd)
+    ? pos.slice(0, 1).filter(gaussianFile) : [];
+  if (splatFiles.length) {
+    const ink = require('../index.js');
+    const { gaussianSplatWorld } = await import('../src/gaussian-splats.mjs');
+    for (const file of new Set(splatFiles)) {
+      const cloud = await ink.readGaussianSplat(path.resolve(file));
+      const name = path.basename(file), id = name.replace(/\W+/g, '-');
+      gaussianScenes.set(file, {
+        id, name, seed: 1,
+        build: () => gaussianSplatWorld(cloud, { size: num('size', 6), up: opt.up })
+      });
+    }
   }
   if (/\.glb$/i.test(pos[0] || '') && opt.uv !== 'off') {
     try {

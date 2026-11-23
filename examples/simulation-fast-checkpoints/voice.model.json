@@ -1,0 +1,18 @@
+{
+  "format": "ink-studio/simulation-model",
+  "version": 1,
+  "id": "checkpoint-voice",
+  "revision": 1,
+  "seed": 42,
+  "numerics": { "dt": 0.000020833333333333333, "blockSize": 512 },
+  "domain": {}, "parameters": {}, "initial": {}, "boundaries": {},
+  "operators": { "osc": { "kind": "checkpoint-voice", "revision": 1 } },
+  "inputs": { "gain": "osc/gain" },
+  "outputs": { "voice": "osc/voice", "notes": "osc/notes" },
+  "commands": [
+    { "tick": 1, "input": "gain", "value": 0.12 },
+    { "tick": 1260, "input": "gain", "value": 0.32 },
+    { "tick": 2001, "input": "gain", "value": 0.19 }
+  ],
+  "probes": {}
+}

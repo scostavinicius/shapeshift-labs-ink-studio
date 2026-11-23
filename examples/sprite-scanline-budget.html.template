@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Moth Signal · Sprite scanline budgets</title>
+<style>
+  :root{color-scheme:dark;background:#101620;color:#eadfc5;font:15px/1.5 system-ui,sans-serif}
+  main{width:min(1096px,calc(100% - 32px));margin:28px auto}
+  canvas{background:#121a26;width:100%;height:auto;display:block;image-rendering:pixelated;cursor:crosshair}
+  .controls{display:flex;align-items:center;gap:10px 20px;flex-wrap:wrap;margin:15px 0}
+  label{display:flex;align-items:center;gap:7px}
+  input{accent-color:#f9ce82}
+  input[type=range]{width:clamp(85px,16vw,175px)}
+  button{font:inherit;background:#263347;color:inherit;border:1px solid #4b6170;border-radius:4px;padding:5px 15px;cursor:pointer}
+  button:hover{background:#364b5c}
+  :focus-visible{outline:2px solid #f9ce82;outline-offset:2px}
+  #status{color:#fadcaa;font-variant-numeric:tabular-nums;margin:5px 0}
+  #hint{color:#a7bec0;margin:5px 0}
+</style>
+</head>
+<body>
+<main>
+  <canvas id="view" width="548" height="184" tabindex="0" aria-describedby="hint"
+    aria-label="Moth Signal. Compare unlimited sprites, a per-row budget and the dropped rows."></canvas>
+  <div class="controls">
+    <button type="button" id="play">Play</button>
+    <label>Frame <input type="range" id="frame" min="0" max="59" step="1" value="12"></label>
+    <label>Sprites per row <input type="range" id="limit" min="0" max="11" value="4">
+      <output id="limit-value" for="limit">4</output></label>
+    <label><input type="checkbox" id="rotate" checked> Rotate ties</label>
+    <label><input type="checkbox" id="priority" checked> Prioritize courier</label>
+  </div>
+  <p id="status">Loading Moth Signal…</p>
+  <p id="hint">Click a row in either view or use ↑ and ↓ to inspect its sprites. Each column in the chart represents one sprite.</p>
+</main>
+<script type="module">
+try {
+  /* DEMO */
+} catch (error) {
+  document.querySelector('#status').textContent = error.message;
+}
+</script>
+</body>
+</html>

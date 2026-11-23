@@ -106,5 +106,5 @@
     }
     return {takes,report:{start,end,sampleRate,target:common,takes:takes.map(take=>({id:take.id,...take.report}))}};
   }
-  P.musicProduction=Object.freeze({...A,audition,meters});
+  P.musicProduction=Object.freeze({...A,audition,meters,loudness});
 })(KIT.procedural);

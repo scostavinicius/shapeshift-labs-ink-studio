@@ -6,7 +6,7 @@ const { surfacePoint } = require('./scene-optics.js');
 const { policyChoice } = require('./palette-pixel.js');
 
 function createMaskResolve(world, grid, overlay, policies, grade, visit, inspect) {
-  const { w, h, time, x, y, z, depth, rayAt, span, ditherPixelStep } = grid;
+  const { w, h, time, x, y, z, depth, rayAt, span, ditherView, ditherPixelStep } = grid;
   const sample = sampleFrames(world, time), frames = new Map();
   const scene = Array.from(world.pal, color => [color >> 16, color >> 8 & 255, color & 255].map(n => n / 255));
   const weights = new Float32Array(w * h), colors = new Uint32Array(w * h);
@@ -20,9 +20,9 @@ function createMaskResolve(world, grid, overlay, policies, grade, visit, inspect
     const point = frame.normal ? surfacePoint(rayAt(px + .5, py + .5), frame.normal, cx, cy, cz, -depth[i], span) : [cx, cy, cz];
     const offset = frame.localOffset(point[0] - cx, point[1] - cy, point[2] - cz);
     const position = [frame.rest[0] + offset[0], frame.rest[1] + offset[1], frame.rest[2] + offset[2]];
-    const site = { position, worldPosition: point, normal: frame.normal, time };
+    const site = { position, worldPosition: point, normal: frame.normal, ditherView, time };
     if (policy.tuning?.fade) site.footprint = space => ditherFootprint(rayAt, px + .5, py + .5, point, frame.normal,
-      ditherPixelStep, space === 'object' ? frame.localOffset : undefined);
+      ditherPixelStep, space === 'object' ? frame.localOffset : space === 'view' ? ditherView : undefined);
     const amount = policy.mask(site);
     if (!amount) return;
     if (visit) visit(pixel, policy, amount);

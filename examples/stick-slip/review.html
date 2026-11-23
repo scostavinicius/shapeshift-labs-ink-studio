@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Iron Gate · Ink Studio</title>
+<style>
+:root{color-scheme:dark;--sky:#191817;--panel:#232321;--rule:#424541;--ink:#fff1da;--muted:#c5c0b4;--breakaway:#f2b36e;--slip:#9cd2bd;--catch:#d4b4ed}*{box-sizing:border-box}body{margin:0;background:var(--sky);color:var(--ink);font:15px/1.45 system-ui,sans-serif}main{max-width:1000px;margin:auto;padding:38px 26px 30px}h1{margin:0;font:clamp(3rem,8vw,5.5rem)/.91 Georgia,serif;letter-spacing:-.065em}p{color:var(--muted);margin:10px 0}header{margin-bottom:20px}header p{max-width:69ch}.panel{background:var(--panel);border:1px solid var(--rule);border-radius:13px}.gate{overflow:hidden}.gate svg{display:block;width:100%;height:auto}.control{margin-top:12px;padding:15px 16px}.transport,.group,.legend{display:flex;flex-wrap:wrap;align-items:center;gap:7px}.transport output{margin-left:auto;color:var(--muted);font-variant-numeric:tabular-nums}button{font:inherit;color:var(--ink);background:#30312d;border:1px solid #555650;border-radius:7px;padding:7px 10px;cursor:pointer}button:hover{border-color:var(--slip)}button[aria-pressed=true]{background:var(--slip);color:#232624;border-color:var(--slip)}button:focus-visible,input:focus-visible{outline:2px solid var(--breakaway);outline-offset:3px}#play{background:var(--breakaway);color:#28201a;border-color:var(--breakaway);font-weight:650;min-width:77px}.chart{width:100%;height:104px;display:block;margin:12px 0 0}.timeline{width:100%;margin:7px 0 0;accent-color:var(--breakaway)}.legend{gap:10px;font-size:.82rem;color:var(--muted);margin:5px 0 10px}.legend i{display:inline-block;width:8px;height:8px;margin-right:4px;border-radius:50%}.jumps button{font-size:.85rem;padding:5px 9px}.metrics{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:12px}.metric{padding:11px 13px}.metric span{display:block;color:var(--muted);font-size:.84rem}.metric output{font:1.38rem Georgia,serif}.summary{font-size:.85rem;margin:12px 0}@media(max-width:620px){main{padding:25px 13px}.transport{gap:5px}.group button{font-size:.82rem;padding:5px 7px}.control{padding:11px}.metric{padding:9px}.metric span{font-size:.74rem}.metric output{font-size:1.07rem}.gate text{font-size:17px}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>The Iron Gate</h1>
+<p>Listen for the first breakaway, the chatter along the rail, and the lower knock as the gate catches. Heavy and Light use the same movement at different loads.</p>
+</header>
+<section class="panel gate" aria-label="Animated gate and rail contact">
+<svg viewBox="0 0 910 246" role="img" aria-labelledby="gate-title">
+<title id="gate-title">Sliding iron gate and the contact shoe flashing at each release pulse</title>
+<defs><pattern id="masonry" width="82" height="42" patternUnits="userSpaceOnUse"><path d="M0 1H82M42 1V21m-20 0H82m-60 0V42" fill="none" stroke="#3d4039" stroke-width="1"/></pattern><pattern id="slats" width="34" height="136" patternUnits="userSpaceOnUse"><path d="M0 0H9V136H0Z" fill="#41423b"/><path d="M11 0V136" stroke="#b29472" opacity=".29"/></pattern></defs>
+<rect x="39" y="29" width="832" height="165" fill="#2d3029" stroke="#55564b"/>
+<rect x="39" y="29" width="832" height="165" fill="url(#masonry)"/>
+<rect x="75" y="47" width="760" height="137" rx="2" fill="#20221d" stroke="#616251"/>
+<path d="M47 192H863m-816 12H863" stroke="#94917b" stroke-width="2"/>
+<path d="M52 209H858" stroke="#55564d" stroke-width="4" stroke-dasharray="16 5"/>
+<g id="door" transform="translate(105,0)">
+<rect x="0" y="56" width="315" height="120" rx="3" fill="#33352d" stroke="#a28b72" stroke-width="2"/>
+<rect x="6" y="61" width="302" height="110" fill="url(#slats)"/>
+<path d="M8 66H307M8 164H307M12 160 300 70" stroke="#a28b72" stroke-width="4" opacity=".7"/>
+<path d="M260 103h23v29h-23z" fill="#252722" stroke="#d0a878" stroke-width="2"/>
+<rect x="229" y="175" width="73" height="19" rx="4" fill="#665746" stroke="#aa9479"/>
+<circle cx="281" cy="185" r="4" fill="#252621"/>
+<circle id="pulse" cx="271" cy="194" r="13" fill="none" stroke="#f2b36e" stroke-width="2.7" opacity="0"/>
+</g>
+<text x="46" y="233" fill="#c5c0b4" font-size="14">Rail</text><text x="861" y="233" text-anchor="end" fill="#c5c0b4" font-size="14">Contact shoe flashes on each release</text>
+</svg>
+</section>
+<section class="panel control" aria-label="Audio comparison and friction timeline">
+<div class="transport">
+<button id="play" type="button">Play</button>
+<div class="group" role="group" aria-label="Contact comparison">
+<button type="button" data-mode="heavy" aria-pressed="true">Heavy</button><button type="button" data-mode="light" aria-pressed="false">Light</button><button type="button" data-mode="steady" aria-pressed="false">Loop only</button>
+</div>
+<output id="time" aria-label="Playback time"></output>
+</div>
+<svg class="chart" viewBox="0 0 870 104" preserveAspectRatio="none" role="img" aria-labelledby="chart-title">
+<title id="chart-title">Normal load and synthesized pulse times</title>
+<path d="M0 91H870" stroke="#52534d"/><path id="load" fill="none" stroke="#aaa69c" stroke-width="1" opacity=".86"/>
+<g id="events"></g><path id="cursor" stroke="#faf1de" stroke-width="1.1"/>
+</svg>
+<input class="timeline" id="timeline" type="range" min="0" max="6.72" step=".01" value="0" aria-label="Playback position">
+<div class="legend"><span><i style="background:#aaa69c"></i>Normal load</span><span><i style="background:var(--breakaway)"></i>Breakaway</span><span><i style="background:var(--slip)"></i>Slip</span><span><i style="background:var(--catch)"></i>Catch</span></div>
+<div class="group jumps" role="group" aria-label="Jump to a contact phase">
+<button type="button" data-jump="release">First release</button><button type="button" data-jump="slide">Slide</button><button type="button" data-jump="catch">Catch</button>
+</div>
+</section>
+<div class="metrics">
+<div class="panel metric"><span>Normal load</span><output id="pressure"></output></div>
+<div class="panel metric"><span>Slip speed</span><output id="velocity"></output></div>
+<div class="panel metric"><span>Friction state</span><output id="state"></output></div>
+</div>
+<p id="summary" class="summary"></p>
+<audio id="audio" preload="auto" aria-label="Iron Gate audition"></audio>
+</main>
+<script>
+const demo=/*INK_STICK_SLIP_DEMO*/;
+const get=id=>document.getElementById(id), audio=get('audio'), timeline=get('timeline'), play=get('play');
+const controls=[...document.querySelectorAll('[data-mode]')], x=t=>t/demo.duration*870;
+const colors={breakaway:'#f2b36e',slip:'#9cd2bd',catch:'#d4b4ed'}, svg='http://www.w3.org/2000/svg';
+let mode='heavy', seekAfterLoad=null, resume=false, animation=0;
+function draw(){
+  const {telemetry,events}=demo.cases[mode];
+  get('load').setAttribute('d',telemetry.map((row,i)=>(i?'L':'M')+x(row.time).toFixed(2)+' '+(91-row.load*.14).toFixed(2)).join(''));
+  const drawing=events.map(row=>{
+    const node=document.createElementNS(svg,'path'), at=x(row.onsetSample/demo.rate);
+    const height=11+Math.min(43,row.gain*42);
+    node.setAttribute('d',`M${at} 91v${-height}`);node.setAttribute('stroke',colors[row.phase]);
+    node.setAttribute('stroke-width',row.phase==='slip'?'1':'2.2');return node;
+  });
+  get('events').replaceChildren(...drawing);
+  const count=events.length;
+  get('summary').textContent=count?`${count} synthesized pulses across the two pushes. The markers show the release times.`:
+    'The contact load and motion still drive the scrape loop. The synthesized pulse layer is bypassed.';
+}
+function show(t){
+  const {telemetry,events}=demo.cases[mode], row=telemetry[Math.min(telemetry.length-1,Math.round(t/demo.dt))];
+  get('door').setAttribute('transform',`translate(${105+row.offset*245},0)`);
+  const pulse=events.findLast(item=>item.onsetSample<=t*demo.rate), age=pulse?t-pulse.onsetSample/demo.rate:1;
+  get('pulse').setAttribute('opacity',String(Math.max(0,1-age/.095)));
+  if(pulse)get('pulse').setAttribute('stroke',colors[pulse.phase]);
+  get('pressure').value=Math.round(row.load)+' N';get('velocity').value=row.speed.toFixed(2)+' m/s';
+  get('state').value={idle:'Released',stick:'Sticking',slip:'Slipping'}[row.state];
+  get('time').value=`${t.toFixed(2)} s / ${demo.duration.toFixed(2)} s`;
+  timeline.value=t;get('cursor').setAttribute('d',`M${x(t)} 0V104`);
+}
+function follow(){show(audio.currentTime);if(!audio.paused)animation=requestAnimationFrame(follow);}
+function seek(t){if(audio.readyState)audio.currentTime=t;else seekAfterLoad=t;show(t);}
+function choose(next){
+  if(audio.getAttribute('src')&&mode===next)return;
+  seekAfterLoad=seekAfterLoad??audio.currentTime;
+  resume=resume||!audio.paused;
+  mode=next;
+  controls.forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.mode===mode)));
+  audio.src=demo.clips[mode];draw();show(seekAfterLoad);
+}
+audio.addEventListener('loadedmetadata',()=>{
+  if(seekAfterLoad!==null){audio.currentTime=seekAfterLoad;seekAfterLoad=null;}
+  if(resume){resume=false;audio.play().catch(()=>{});}
+  show(audio.currentTime);
+});
+audio.addEventListener('play',()=>{play.textContent='Pause';cancelAnimationFrame(animation);follow();});
+audio.addEventListener('pause',()=>{play.textContent='Play';cancelAnimationFrame(animation);show(seekAfterLoad??audio.currentTime);});
+audio.addEventListener('ended',()=>{play.textContent='Replay';show(demo.duration);});
+play.addEventListener('click',()=>{if(audio.paused)audio.play().catch(()=>{});else audio.pause();});
+timeline.addEventListener('input',()=>seek(Number(timeline.value)));
+controls.forEach(button=>button.addEventListener('click',()=>choose(button.dataset.mode)));
+const jumps={release:demo.markerTimes.release-.16,slide:1.72,catch:demo.markerTimes.catch-.19};
+for(const button of document.querySelectorAll('[data-jump]'))button.addEventListener('click',()=>seek(jumps[button.dataset.jump]));
+choose('heavy');
+</script>
+</body>
+</html>

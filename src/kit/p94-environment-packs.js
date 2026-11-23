@@ -9,7 +9,7 @@
     'atmosphere','shapedAtmosphere','atmosphereDepthBands','volumeCutouts','volumeLighting','volumeQuality','splatFields','atmosphereEmitters'
   ];
   const lookFields = ['horizonBands','effectPalettes','artDirection','stable','silhouetteProtection',
-    'surfaceLightRamps','colorCurves','colorStack','paletteRemap','effects','shadowArt','ink','contactShadows','edgeFilter'];
+    'surfaceLightRamps','colorCurves','colorStack','paletteRemap','effects','shadowArt','ink','contactShadows','edgeFilter','curveWidth','motionalCoverage'];
   const parts = (value, allowed) => Object.fromEntries(allowed.filter(name => value?.[name] !== undefined).map(name => [name,value[name]]));
   const claims = (value, allowed) => object(value) && Object.keys(value).every(name => allowed.includes(name));
   const namespaced = (value, pack) => typeof value === 'string' && key.test(value) && (pack === undefined || value.startsWith(pack+'/'));
@@ -134,6 +134,8 @@
     ArtInk.prepare(look?.ink,palette);
     ContactShadows.prepare(look?.contactShadows);
     EdgeFilter.prepare(look?.edgeFilter);
+    CurveWidth.prepare(look?.curveWidth);
+    MotionalCoverage.prepare(look?.motionalCoverage);
   }
 
   function resolveBinding(binding, catalog) {

@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Tideglass Observatory · Sector-based rooms</title>
+<style>
+  :root{color-scheme:dark;background:#0e151e;color:#dfecd4;font:15px/1.5 system-ui,sans-serif}
+  main{width:min(1116px,calc(100% - 30px));margin:28px auto}
+  canvas{width:100%;height:auto;display:block;image-rendering:pixelated;background:#101824;cursor:crosshair}
+  .controls{display:flex;align-items:center;gap:10px 18px;flex-wrap:wrap;margin:14px 0}
+  label{display:flex;align-items:center;gap:7px}
+  input{accent-color:#a3d4bf}
+  input[type=range]{width:clamp(90px,24vw,230px)}
+  button{font:inherit;background:#263848;color:inherit;border:1px solid #5d717b;border-radius:4px;padding:5px 15px;cursor:pointer}
+  button:hover{background:#3a505e}
+  button:disabled{opacity:.5;cursor:default}
+  :focus-visible{outline:2px solid #a3d4bf;outline-offset:2px}
+  #status,#hint{color:#a4c5bd;margin:5px 0}
+</style>
+</head>
+<body>
+<main>
+  <canvas id="view" width="372" height="202" tabindex="0" aria-describedby="hint"
+    aria-label="Tideglass Observatory camera and polygon floor plan"></canvas>
+  <div class="controls">
+    <button type="button" id="play">Play</button>
+    <label>Frame <input type="range" id="frame" min="0" max="107" step="1" value="14"></label>
+    <label>Shutter <input type="range" id="door" min="0" max="1" step=".01" value="0">
+      <output id="door-value" for="door">0%</output></label>
+    <button type="button" id="follow">Follow cue</button>
+  </div>
+  <p id="status">Loading Tideglass Observatory…</p>
+  <p id="hint">Change the shutter or scrub the walkthrough. Click the camera view or use the arrow keys to pick a surface.</p>
+</main>
+<script type="module">
+try {
+  /* DEMO */
+} catch (error) {
+  document.querySelector('#status').textContent=error.message;
+}
+</script>
+</body>
+</html>

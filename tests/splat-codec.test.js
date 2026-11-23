@@ -67,6 +67,21 @@ test('codec validates headers, complete sections and row limits before decoding'
   assert.throws(() => codec.encode(Float32Array.of(NaN, ...Array(15).fill(0))), /finite/);
 });
 
+test('a host can match the row count to its scene metadata before reading the payload', () => {
+  const data = new Float32Array(16 * 5);
+  for (let i = 0; i < 5; i++) data[i * 16 + 7] = 0x112200 + i;
+  const bytes = codec.encode(data);
+  assert.deepEqual(codec.decode(bytes, { expectedCount: 5, maxRows: 5 }), { count: 5, data });
+  assert.equal(codec.decode(codec.encode(new Float32Array(0)), { expectedCount: 0 }).count, 0);
+  const header = bytes.subarray(0, 8);
+  assert.throws(() => codec.decode(header, { expectedCount: 4 }), /Expected 4 splat rows, got 5/);
+  assert.throws(() => codec.decode(header, { expectedCount: 6 }), /Expected 6 splat rows, got 5/);
+  assert.throws(() => codec.decode(header, { expectedCount: 5 }), /column/);
+  assert.throws(() => codec.decode(bytes, { expectedCount: 5, maxRows: 4 }), /row limit exceeded/);
+  for (const value of [-1, 1.5, NaN, '5', 4_000_001])
+    assert.throws(() => codec.decode(bytes, { expectedCount: value }), /Invalid expected splat row count/);
+});
+
 test('compressed Old Idol retains its pixel appearance from multiple cameras', () => {
   const scene = SCENES.find(s => s.id === 'idol');
   const world = scene.build(scene.seed);

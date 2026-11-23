@@ -1,0 +1,6 @@
+{
+  "id": "instrument-casing",
+  "solids": [
+    { "kind": "box", "id": "case", "at": [0.46, 0.033, 0], "half": [0.068, 0.019, 0.049], "round": 0.007, "mat": "stone" }
+  ]
+}

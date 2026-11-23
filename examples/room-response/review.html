@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>The Service Passage · Ink Studio</title>
+<style>
+:root{color-scheme:dark;--paper:#141916;--surface:#1b221d;--ink:#f5efe2;--muted:#adb7aa;--edge:#3b4740;--amber:#f3bc75;--sage:#a9d3ae;--fog:#788c82}
+*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.45 system-ui,sans-serif}
+main{max-width:980px;margin:auto;padding:42px 28px 32px}h1{margin:0 0 10px;font:clamp(2.5rem,7vw,5rem)/.95 Georgia,serif;letter-spacing:-.055em}h2{margin:0;font:1rem/1.4 system-ui,sans-serif}
+p{margin:.5rem 0;color:var(--muted)}header p{max-width:67ch;margin-bottom:24px}.map{width:100%;height:auto;display:block;background:var(--surface);border:1px solid var(--edge);border-radius:14px}
+.panel{margin-top:12px;padding:15px 19px;border:1px solid var(--edge);border-radius:14px;background:var(--surface)}.transport{display:flex;gap:12px;align-items:center;flex-wrap:wrap}button{font:inherit;color:var(--ink);background:#222b25;border:1px solid var(--edge);border-radius:7px;padding:7px 11px;cursor:pointer;white-space:nowrap}button:hover{border-color:var(--muted)}button:focus-visible,a:focus-visible,input:focus-visible{outline:2px solid var(--sage);outline-offset:3px}button[aria-pressed=true]{background:#c9d5c0;color:#151c16;border-color:#c9d5c0}#play{min-width:84px;background:var(--amber);border-color:var(--amber);color:#232018;font-weight:650}.mode{display:flex;gap:5px}#time{margin-left:auto;color:var(--muted);font-variant-numeric:tabular-nums}
+figure{margin:14px 0 0}.scope{width:100%;height:88px;display:block}.scrub{width:100%;margin:0;accent-color:var(--amber)}figcaption{display:flex;gap:14px;flex-wrap:wrap;color:var(--muted);font-size:.85rem}.dot{display:inline-block;width:.58rem;height:.58rem;border-radius:50%;margin-right:.25rem}.cue{display:flex;gap:6px;flex-wrap:wrap;margin-top:14px}.cue button{font-size:.87rem}
+.levels{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:11px}.level label{font-size:.83rem;color:var(--muted);display:flex;justify-content:space-between;gap:4px;flex-wrap:wrap}.bar{height:5px;background:#344038;border-radius:4px;margin-top:7px}.bar i{display:block;background:var(--amber);height:100%;width:0;border-radius:4px}.level:nth-child(n+3) i{background:var(--sage)}.hint{font-size:.88rem;margin:10px 0 0}a{color:var(--sage)}
+@media(max-width:560px){main{padding:26px 14px}.panel{padding:12px}.levels{grid-template-columns:repeat(2,1fr)}#time{font-size:.78rem}.transport{gap:6px}.transport button{padding:6px 7px}.map text{font-size:20px}}
+</style>
+</head>
+<body>
+<main>
+<header>
+<h1>The Service Passage</h1>
+<p>Follow the listener out of a stone vault and into a felt-lined booth. The second strike keeps ringing after the listener leaves the vault. Switch to Dry to hear the same walk with the room responses bypassed.</p>
+</header>
+<svg class="map" viewBox="0 0 900 240" role="img" aria-labelledby="map-title">
+<title id="map-title">Overhead plan of the stone vault, doorway, and felt booth</title>
+<defs>
+  <pattern id="stone" width="22" height="17" patternUnits="userSpaceOnUse"><path d="M0 0H22M11 0V17" fill="none" stroke="#45453a" stroke-width=".7"/></pattern>
+  <pattern id="felt" width="9" height="9" patternUnits="userSpaceOnUse"><path d="M0 9 9 0" stroke="#3d5145" stroke-width=".75"/></pattern>
+</defs>
+<rect x="35" y="29" width="415" height="182" rx="4" fill="#32332a" stroke="#938164" />
+<rect x="35" y="29" width="415" height="182" rx="4" fill="url(#stone)" />
+<rect x="450" y="46" width="415" height="151" rx="4" fill="#293c31" stroke="#789986" />
+<rect x="450" y="46" width="415" height="151" rx="4" fill="url(#felt)" />
+<rect x="367" y="99" width="166" height="46" rx="3" fill="#474138" stroke="#bda889" stroke-dasharray="4 4" />
+<path d="M450 29V99m0 46V211" stroke="#d1c2a6" stroke-width="4" />
+<path id="route" d="M172 122H690" stroke="#dcd4c0" stroke-width="1.25" stroke-dasharray="3 5" opacity=".75" />
+<text x="56" y="64" fill="#f3bc75" font-size="17" font-weight="600">Stone vault</text>
+<text x="844" y="75" text-anchor="end" fill="#a9d3ae" font-size="17" font-weight="600">Felt booth</text>
+<text x="450" y="172" text-anchor="middle" fill="#ddd4c2" font-size="14" paint-order="stroke" stroke="#1b221d" stroke-width="6">Doorway</text>
+<g id="probes" fill="none" stroke-width="1.5"></g>
+<circle id="halo" cx="172" cy="122" r="13" fill="#141916" stroke="#f9ecce" stroke-width="1" />
+<circle id="listener" cx="172" cy="122" r="6" fill="#f9ecce" />
+</svg>
+<section class="panel" aria-label="Audio comparison and timeline">
+<div class="transport">
+<button type="button" id="play">Play</button>
+<div class="mode" role="group" aria-label="Audition mode">
+<button type="button" data-mode="wet" aria-pressed="true">Room response</button>
+<button type="button" data-mode="dry" aria-pressed="false">Dry</button>
+</div>
+<output id="time" aria-label="Playback time">0.00 s / 7.00 s</output>
+</div>
+<figure>
+<svg class="scope" viewBox="0 0 870 88" preserveAspectRatio="none" role="img" aria-labelledby="wave-title">
+<title id="wave-title">Peak envelopes of the dry strikes, vault return, and combined room return</title>
+<rect id="tail-band" y="1" height="86" fill="#f3bc75" opacity=".11" />
+<g id="strikes" stroke="#829187" stroke-dasharray="3 4" opacity=".6"></g>
+<path d="M0 44H870" stroke="#3b4740" />
+<path id="dry-wave" stroke="#a5ada5" fill="none" />
+<path id="wet-wave" stroke="#a9d3ae" fill="none" />
+<path id="vault-wave" stroke="#f3bc75" fill="none" />
+<path id="head" d="M0 0V88" stroke="#f9ecce" />
+</svg>
+<input class="scrub" id="scrub" aria-label="Playback position" type="range" min="0" max="7" step=".01" value="0">
+<figcaption><span><i class="dot" style="background:#a5ada5"></i>Dry strikes</span><span><i class="dot" style="background:#a9d3ae"></i>Room return</span><span><i class="dot" style="background:#f3bc75"></i>Vault return</span></figcaption>
+</figure>
+<div class="cue" role="group" aria-label="Jump to part of the walk">
+<button type="button" data-time="1.88">Vault strike</button>
+<button type="button" data-time="3.05">Tail after doorway</button>
+<button type="button" data-time="3.97">Booth strike</button>
+</div>
+</section>
+<section class="panel" aria-labelledby="send-label">
+<h2 id="send-label">New audio sent to each probe</h2>
+<div class="levels" id="levels"></div>
+<p class="hint" id="tail-note"></p>
+</section>
+<audio id="audio" preload="auto" aria-label="Service Passage audio"></audio>
+</main>
+<script>
+const demo=/*INK_ROOM_RESPONSE_DEMO*/;
+const {trace}=demo, {duration,travel,tailWindow,impulseNames,labels}=trace;
+const get=id=>document.getElementById(id), audio=get('audio'), play=get('play'), scrub=get('scrub');
+const controls=[...document.querySelectorAll('[data-mode]')], width=870, timeX=t=>t/duration*width;
+const mapX=x=>450+x*83, svgNS='http://www.w3.org/2000/svg';
+let mode='wet', pendingTime=null, pendingPlay=false, request=0;
+function draw(name,channel){
+  const path=trace.peaks.map((row,i)=>{
+    const x=(i+.5)/trace.peaks.length*width, amp=42*Math.min(1,Math.sqrt(row[channel])*1.4);
+    return 'M'+x.toFixed(2)+' '+(44-amp).toFixed(2)+'v'+(2*amp).toFixed(2);
+  }).join('');
+  get(name).setAttribute('d',path);
+}
+draw('dry-wave',0);draw('wet-wave',1);draw('vault-wave',2);
+get('tail-band').setAttribute('x',timeX(tailWindow[0]));
+get('tail-band').setAttribute('width',timeX(tailWindow[1]-tailWindow[0]));
+for(const time of trace.strikes){
+  const node=document.createElementNS(svgNS,'path');
+  node.setAttribute('d','M'+timeX(time)+' 0V88');
+  get('strikes').append(node);
+}
+const points=new Map(Object.values(trace.roomResponse.rooms).flatMap(room=>room.probes.map(probe=>[probe.impulse,probe.at])));
+const meters=impulseNames.map((name,i)=>{
+  const point=document.createElementNS(svgNS,'path'), x=mapX(points.get(name)[0]);
+  point.setAttribute('d',`M${x-5} 122l5 -5 5 5 -5 5Z`);point.setAttribute('stroke',i<2?'#f3bc75':'#a9d3ae');
+  get('probes').append(point);
+  const level=document.createElement('div');level.className='level';
+  level.innerHTML='<label><span>'+labels[i]+'</span><output>0%</output></label><div class="bar"><i></i></div>';
+  get('levels').append(level);
+  return {name,text:level.querySelector('output'),bar:level.querySelector('i'),point};
+});
+get('tail-note').textContent=`The shaded interval is after the doorway and before the next strike. The vault return alone measures ${trace.carriedDb.toFixed(1)} dBFS RMS there.`;
+function refresh(time){
+  const u=Math.max(0,Math.min(1,(time-travel.start)/(travel.end-travel.start)));
+  const x=mapX(travel.from+(travel.to-travel.from)*u*u*(3-2*u));
+  get('halo').setAttribute('cx',x);get('listener').setAttribute('cx',x);
+  get('head').setAttribute('transform',`translate(${timeX(time)},0)`);
+  scrub.value=time;
+  get('time').value=time.toFixed(2)+' s / '+duration.toFixed(2)+' s';
+  const row=trace.path.findLast(row=>row.sample<=time*trace.sampleRate)??trace.path[0];
+  for(const {name,text,bar,point} of meters){
+    const send=mode==='dry'?0:(row.sends.find(send=>send.asset===name)?.gain??0);
+    const percent=Math.round(send/trace.roomResponse.wet*100);
+    text.value=percent+'%';bar.style.width=percent+'%';point.setAttribute('opacity',.36+.64*percent/100);
+  }
+}
+function loop(){refresh(audio.currentTime);if(!audio.paused)request=requestAnimationFrame(loop);}
+function source(next){
+  if(audio.getAttribute('src')&&mode===next)return;
+  pendingTime=pendingTime??audio.currentTime;
+  pendingPlay=pendingPlay||!audio.paused;
+  mode=next;
+  for(const button of controls)button.setAttribute('aria-pressed',String(button.dataset.mode===mode));
+  audio.src=demo[next];
+  refresh(pendingTime);
+}
+audio.addEventListener('loadedmetadata',()=>{
+  if(pendingTime!==null){audio.currentTime=pendingTime;pendingTime=null;}
+  if(pendingPlay){pendingPlay=false;audio.play().catch(()=>{});}
+  refresh(audio.currentTime);
+});
+audio.addEventListener('play',()=>{play.textContent='Pause';cancelAnimationFrame(request);loop();});
+audio.addEventListener('pause',()=>{play.textContent='Play';cancelAnimationFrame(request);refresh(pendingTime??audio.currentTime);});
+audio.addEventListener('ended',()=>{play.textContent='Replay';refresh(duration);});
+play.addEventListener('click',()=>{if(audio.paused)audio.play().catch(()=>{});else audio.pause();});
+function seek(time){if(audio.readyState)audio.currentTime=time;else pendingTime=time;refresh(time);}
+scrub.addEventListener('input',()=>seek(Number(scrub.value)));
+for(const button of controls)button.addEventListener('click',()=>source(button.dataset.mode));
+for(const button of document.querySelectorAll('[data-time]'))button.addEventListener('click',()=>seek(Number(button.dataset.time)));
+source('wet');
+</script>
+</body>
+</html>

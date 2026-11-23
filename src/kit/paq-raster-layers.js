@@ -54,7 +54,7 @@
     state[3] = oldAlpha + alpha * (1 - oldAlpha);
   }
 
-  function stack({width, height, layers, ordering = 'stack', softness = 0, bias = 0} = {}) {
+  function compositeStack({width, height, layers, ordering = 'stack', softness = 0, bias = 0} = {}, spriteOptions) {
     dimensions(width, height);
     if (!['stack', 'depth', 'height'].includes(ordering) || !Array.isArray(layers) || layers.length > maxLayers ||
         !Number.isFinite(softness) || softness < 0 || !Number.isFinite(bias))
@@ -62,6 +62,10 @@
     const pixels = width * height;
     if (pixels * layers.length > maxVisits) throw new RangeError('Raster stack exceeds its layer visit budget');
     const ordered = Array.from(layers, (layer, i) => prepareLayer(layer, ordering, i));
+    const budget = spriteOptions && SpriteScanlineBudget.evaluate(ordered.map(({x, y, raster, opacity}, index) => ({
+      id: layers[index].id, priority: layers[index].priority, top: y,
+      bottom: opacity && x < width && x + raster.width > 0 ? y + raster.height : y
+    })), {height, ...spriteOptions});
     const color = new Uint8Array(pixels * 4), scalar = ordering === 'stack' ? null : new Float64Array(pixels);
     const hits = [], entries = ordered.map(layer => ({layer, at: 0, alpha: 0, level: 0}));
     const state = new Float64Array(4);
@@ -72,7 +76,8 @@
       for (const entry of entries) {
         const {layer} = entry, u = x - layer.x, v = y - layer.y;
         const raster = layer.raster;
-        if (!layer.opacity || u < 0 || v < 0 || u >= raster.width || v >= raster.height) continue;
+        if (!layer.opacity || u < 0 || v < 0 || u >= raster.width || v >= raster.height ||
+            budget && !budget.allows(layer.index, y)) continue;
         const pixel = v * raster.width + u, at = pixel * raster.channels;
         const alpha = readAlpha(raster, at) * layer.opacity * (layer.mask ? layer.mask(pixel) : 1);
         if (!alpha) continue;
@@ -104,13 +109,55 @@
         if (scalar) scalar[i] = level;
       }
     }
-    return {value: image(width, height, 4, color), ...(scalar && {[ordering]: image(width, height, 1, scalar)})};
+    return {value: image(width, height, 4, color), ...(scalar && {[ordering]: image(width, height, 1, scalar)}),
+      ...(budget && {report: budget.report})};
+  }
+
+  function stack(options) {
+    return compositeStack(options);
+  }
+
+  function spriteLayer({width, height, sprites, budget = false, frame, time} = {}) {
+    const result = compositeStack({width, height, layers: sprites}, budget === false ? null : {budget, frame, time});
+    return {report: {enabled: budget !== false, ...result.report}, value: result.value};
   }
 
   function blend(background, foreground, options = {}) {
     const {width, height, pivot} = view(background);
     const {value} = stack({width, height, layers: [{source: background}, {...options, source: foreground}]});
     return pivot ? {...value, pivot: pivot.slice()} : value;
+  }
+
+  function mix(source, edited, mask, {amount=1,maskMode='alpha',invert=false,keepTransparentRGB=false,channels=15}={}) {
+    const value=R.rgba(source), {width,height,data}=value;
+    aligned(edited,width,height);
+    if (!Number.isFinite(amount) || amount<0 || amount>1 || !['alpha','mean'].includes(maskMode) ||
+        typeof invert!=='boolean' || typeof keepTransparentRGB!=='boolean' ||
+        !Number.isSafeInteger(channels) || channels<0 || channels>15)
+      throw new RangeError('Invalid raster mix amount, channel selection or mask mode');
+    const next=R.rgba(edited).data;
+    let gate;
+    if (mask!=null) {
+      aligned(mask,width,height);
+      gate=R.rgba(mask).data;
+    }
+    for (let i=0;i<data.length;i+=4) {
+      let weight=1;
+      if (gate) {
+        const a=gate[i+3]/255;
+        weight=maskMode==='alpha' ? a : (gate[i]+gate[i+1]+gate[i+2])*a/765;
+        if (invert) weight=1-weight;
+      }
+      const t=weight*amount;
+      const fromAlpha=data[i+3], toAlpha=next[i+3];
+      for (let c=0;c<4;c++) {
+        if (!(channels&(1<<c))) continue;
+        if (c<3 && keepTransparentRGB && !toAlpha) continue;
+        data[i+c]=c<3 && keepTransparentRGB && !fromAlpha ? next[i+c] :
+          byte(data[i+c]+(next[i+c]-data[i+c])*t);
+      }
+    }
+    return value;
   }
 
   function rotated(source, angle) {
@@ -169,5 +216,5 @@
     return {...value, pivot: [-x, -y]};
   }
 
-  Object.assign(R, {blend, stack, spriteStack});
+  Object.assign(R, {blend, mix, stack, spriteLayer, spriteStack});
 })(KIT.procedural);

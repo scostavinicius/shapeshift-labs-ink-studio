@@ -648,7 +648,7 @@
            and then swayed, so a coat can ride bones and still stir */
         const windy =
           kraw % 16 === 11 && D[o + 12] === 1 && Math.abs(D[o + 13] - 1.9) < 1e-4 && Math.abs(D[o + 14] - 0.022) < 1e-4;
-        if (kraw % 16 === 0 || windy) {
+        if ((kraw % 16 === 0 && !CurveSplat.isRow(D, o)) || windy) {
           D[o + 11] = windy ? kraw + 2 : kraw + 12;
           D[o + 12] = bid[j];
           D[o + 13] = w2 && w2[j] > 0 ? bid2[j] : 0;
@@ -849,6 +849,9 @@
             D[q + 10] = m20 * g + m21 * h + m22 * i;
             rows[ids[j] >> 9] = 1;
           }
+          for (const binding of o.meshBindings ?? []) binding.pose(Mx);
+          for (const binding of o.curveBindings ?? []) binding.pose(W, { bones: Mx, time: t, dt, rows });
+          if (o.correctPose) an.bones=o.correctPose(Mx);
           return true;
         }
       };

@@ -1,0 +1,22 @@
+{
+  "format": "ink-studio/simulation-model-changes",
+  "version": 1,
+  "id": "tube-workbench",
+  "initial": "tube",
+  "variants": {
+    "tube": { "file": "tube.model.json", "revision": 1 },
+    "fork": { "file": "fork.model.json", "revision": 1 },
+    "chamber": { "file": "chamber.model.json", "revision": 1 }
+  },
+  "parameters": { "bore": { "buffer": "bore", "min": 0.2, "max": 1 } },
+  "outputs": { "audio": "wave", "diameter": "diameter" },
+  "changes": [
+    { "type": "parameter", "parameter": "bore", "sample": 21600, "value": 0.28, "duration": 24000, "curve": "smoothstep" },
+    { "type": "swap", "variant": "fork", "sample": 64800, "policy": "crossfade", "duration": 8400 },
+    { "type": "swap", "variant": "chamber", "sample": 108000, "policy": "remap", "mapping": [
+      { "from": "pressure", "to": "pressure", "count": 3 },
+      { "from": "velocity", "to": "velocity", "count": 3 },
+      { "from": "phase", "to": "phase", "count": 1 }
+    ] }
+  ]
+}

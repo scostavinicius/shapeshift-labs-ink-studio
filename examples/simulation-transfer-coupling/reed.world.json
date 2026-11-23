@@ -1,0 +1,25 @@
+{
+  "format": "ink-studio/world",
+  "version": 1,
+  "id": "reed-coupling-bench",
+  "seed": 23,
+  "dt": 0.00008333333333333333,
+  "history": { "enabled": false },
+  "systems": {
+    "mouth": { "kind": "bench-air-chamber", "config": { "kind": "mouth" } },
+    "bore": { "kind": "bench-air-chamber", "config": { "kind": "bore" } },
+    "reed": { "kind": "bench-reed" },
+    "feedback": {
+      "kind": "transfer-coupling",
+      "config": {
+        "law": "reed-flow",
+        "revision": 1,
+        "iteration": { "maxIterations": 16, "relaxation": 0.55, "onLimit": "error" },
+        "links": {
+          "air": { "from": "mouth/air", "to": "bore/air", "tolerance": 1e-10, "relativeTolerance": 0.00025 },
+          "push": { "from": "mouth/reaction", "to": "reed/drive", "tolerance": 1e-10, "relativeTolerance": 0.00025 }
+        }
+      }
+    }
+  }
+}

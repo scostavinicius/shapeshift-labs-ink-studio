@@ -121,7 +121,8 @@
     const fields = new Map(), traces = new Map();
     const base = {world, states:visible, signals, tick, time:view.time ?? tick * world.dt};
     const locations = new Map(), active = new Set();
-    let spatialIndex, spatialBatchRead, aliases, appearance, picker, renderScene;
+    let spatialIndex, spatialBatchRead, aliases, appearance, picker, renderScene, continuityReport;
+    let evaluatingCallback = false;
     const navigationSources=new Map();
     const scene = () => renderScene ??= (visual ? visual() : W.visual({makeBuilder,makeSculpt},view,api));
     const transfers = () => W.transfers.bind(systems);
@@ -133,13 +134,15 @@
     function location(id) {
       if (locations.has(id)) return locations.get(id);
       const entity = own(world.entities,id) && world.entities[id];
-      let point = null, socketTurn = null, material, deformation;
+      let point = null, socketTurn = null, material, deformation, velocity, angular;
       if(!own(overlay?.entities,id))for (const system of Object.keys(systems)) {
         const pose = systems[system].pose?.(states[system],id);
         if (pose === false) { locations.set(id,null); return null; }
         if (pose) {
           point = pose.position ?? pose;
           socketTurn = pose.rotation ?? null;
+          if(!pose.fixed&&vector(pose.velocity))velocity=pose.velocity;
+          if(!pose.fixed&&vector(pose.angular))angular=pose.angular;
           if(pose.bend)deformation={bend:pose.bend,half:pose.half};
           if (pose.materialAsset!==undefined) material={materialAsset:pose.materialAsset,materialWetness:pose.materialWetness};
           break;
@@ -156,9 +159,11 @@
           const offset=host.bend&&!entity.anchor?.socket?W.durability.bendPoint(host,point):point;
           point = K.V.add(origin,host.rotation ? K.M.app(host.rotation,offset) : offset);
           socketTurn = host.rotation;
+          angular = host.angular;
+          velocity = velocityAt(host,point);
         }
       }
-      const pose = point ? {point,rotation:socketTurn,entity,material,...deformation} : null;
+      const pose = point ? {point,rotation:socketTurn,entity,material,velocity,angular,...deformation} : null;
       locations.set(id,pose);
       return pose;
     }
@@ -168,10 +173,15 @@
       const offset = W.durability.bendPoint(pose,pose.entity.sockets[name]);
       return K.V.add(pose.point,pose.rotation ? K.M.app(pose.rotation,offset) : offset);
     }
-    function fieldFrame({entity,socket:name}) {
+    function velocityAt(pose,point) {
+      if(!pose.angular)return pose.velocity;
+      const tangential=K.V.cross(pose.angular,K.V.sub(point,pose.point));
+      return pose.velocity?K.V.add(pose.velocity,tangential):tangential;
+    }
+    function fieldFrame({entity,socket:name},{motion=false}={}) {
       const pose = location(entity);
       const point = pose && socket(pose,name);
-      return point && {point,rotation:pose.rotation};
+      return point && {point,rotation:pose.rotation,...(motion&&{velocity:velocityAt(pose,point)})};
     }
     function target(spec = {}) {
       if (vector(spec)) return {point:spec.slice()};
@@ -204,7 +214,10 @@
       }
     }
     add(fields,'world',{
-      entity:{type:'record',read:({target:site}) => own(world.entities,site.entity) ? ok(world.entities[site.entity]) : missing('unknown entity','missing')},
+      entity:{type:'record',read:({target:site,args}) => {
+        const entity = args.entity ?? site.entity;
+        return own(world.entities,entity) ? ok(world.entities[entity]) : missing('unknown entity','missing');
+      }},
       ...(world.simulationChunks&&{chunks:{type:'record',selector:true,read({target:site,args}){
         const snapshot=view.simulationChunks;
         if(!snapshot)return missing('simulation chunks are unavailable');
@@ -223,6 +236,8 @@
             system.simulationRepresentation&&own(states,key)?[[key,system.simulationRepresentation(states[key])]]:[])));
         }}
       }),
+      ...(world.regionContinuity!==undefined&&{'region-continuity':{type:'record',qualified:true,read:()=>view.regionContinuity?
+        ok(continuityReport??=W.regionContinuity.report(view.regionContinuity,view,api)):missing('Region continuity is unavailable')}}),
       ...((world.dataInputs !== undefined || dataInputs) && { data: { type: 'value', read({target, args, time}) {
         dataInputs ??= K.dataInputs.prepare(world.dataInputs);
         const options = target.point && args.at === undefined ? { ...args, at: target.point } : args;
@@ -251,13 +266,104 @@
           (entity===undefined||[event.entity,event.body,event.place].includes(entity))&&condition(where,event));
         return ok({events:events.slice(0,limit),matched:events.length,dropped});
       }},
+      events:{type:'records',qualified:true,read:({args})=>{
+        const {retained=false,after=-1,before=tick,kind,branch,story,subject,where,limit=10000}=args;
+        check(typeof retained==='boolean'&&Number.isSafeInteger(after)&&Number.isSafeInteger(before)&&before>=after&&
+          Number.isSafeInteger(limit)&&limit>=0&&[kind,branch,story,subject].every(value=>value===undefined||typeof value==='string'),
+        'Invalid committed event range or filter');
+        const latest=view.events??[];
+        const rows=retained?[...new Map([...history,...latest].map(row=>[row.id,row])).values()]:latest;
+        const events=rows.filter(row=>row.tick>after&&row.tick<=before&&(kind===undefined||row.kind===kind))
+          .map(row=>W.committedEvents.read(row,world.id,view.eventStream))
+          .filter(row=>(branch===undefined||branch===row.branch)&&(story===undefined||story===row.story)&&
+            (subject===undefined||row.subjects.some(ref=>ref.id===subject))&&condition(where,row));
+        return ok({events:events.slice(0,limit),matched:events.length,scope:retained?'retained':'latest',
+          ...(retained&&{dropped})});
+      }},
+      ...(world.facts!==undefined&&{facts:{type:'record',qualified:true,read:({args})=>
+        W.worldFacts.inspect(view.worldFacts,tick,args)}}),
+      ...(world.knowledge!==undefined&&{knowledge:{type:'record',qualified:true,read:({args})=>
+        W.worldKnowledge.inspect(view.knowledge,view.knowledgePolicy,tick,args)}}),
+      ...(world.beliefs!==undefined&&{beliefs:{type:'record',qualified:true,read:({args})=>
+        W.worldBeliefs.inspect(view.beliefs,view.beliefPolicy,tick,args)}}),
+      ...(world.memories!==undefined&&{
+        memories:{type:'record',qualified:true,read:({args})=>W.worldMemories.inspect(view.memories,view.memoryPolicy,tick,args)},
+        relationship:{type:'record',qualified:true,read:({args})=>W.worldMemories.relationship(view.memories,view.memoryPolicy,tick,args)}
+      }),
+      ...(world.custody!==undefined&&{custody:{type:'record',qualified:true,read:({args})=>
+        W.worldCustody.inspect(view.custody,view.custodyPolicy,tick,args)}}),
+      ...(world.siteHistory!==undefined&&{'site-history':{type:'record',qualified:true,read:({args})=>
+        W.worldSiteHistory.inspect(view.siteHistory,view.siteHistoryPolicy,tick,args)}}),
       account:{type:'record',read:({args}) => {
         const balance = transfers().inspect(states,args.account);
         return balance ? ok(balance.at===undefined?balance:{...balance,position:W.worksites.frame(api,balance.at)?.point??null}) :
           missing('unknown transfer account','missing');
       }},
+      'transfer-feasibility':{type:'record',qualified:true,read:({args}) => {
+        const {requester='world',...spec}=args;
+        check(requester==='world'||own(systems,requester),'Unknown transfer requester');
+        return ok(transfers().preview(states,spec,requester));
+      }},
       transfers:{type:'record',read:()=>ok({tick:view.transfers?.[0]?.tick??tick,receipts:view.transfers??[]})},
       ...(view.weatherTrackState && { 'weather-tracks':{type:'record',read:()=>ok(view.weatherTrackState)} }),
+      ...(view.storyTriggers && { 'story-triggers':{type:'record',read:()=>ok(view.storyTriggers)} }),
+      ...(view.storyLifecycle && { 'story-lifecycle':{type:'record',read:()=>ok(W.storyLifecycle.inspect(view.storyLifecycle,tick,view.storyDocuments ?? world.storyDocuments))} }),
+      'story-objective':{type:'record',qualified:true,read:({args})=>
+        W.storyLifecycle.objective(view.storyLifecycle,view.storyDocuments??world.storyDocuments,args,tick)},
+      'incident-catalog':{type:'record',qualified:true,read:({args})=>ok(W.incidentCatalog.find(view.incidentCatalog,args,
+        {lifecycle:view.storyLifecycle,triggers:view.storyTriggers,candidates:view.incidentCandidates}))},
+      'incident-candidates':{type:'record',qualified:true,read:({args})=>
+        W.incidentCandidates.inspect(view.incidentCandidatePolicies,view.incidentCandidates,tick,args)},
+      ...(view[W.schedulerInspector.source]&&{scheduler:{type:'record',qualified:true,read:({args})=>
+        W.schedulerInspector.inspect(view,api,args)}}),
+      'incident-pressure':{type:'record',qualified:true,read:()=>
+        W.incidentPressure.inspect(view.incidentPressure,view.storyLifecycle,tick)},
+      'incident-cooldowns':{type:'record',qualified:true,read:({args})=>
+        W.incidentCooldowns.inspect(view.incidentCooldowns,view.storyLifecycle,tick,args)},
+      'incident-anchors':{type:'record',qualified:true,read:()=>
+        W.incidentAnchors.inspect(view.incidentAnchors,view.incidentCandidates,tick,view.storyteller)},
+      'incident-variety':{type:'record',qualified:true,read:()=>
+        W.incidentVariety.inspect(view.incidentVariety,view.storyteller?.profiles[view.storyteller.active].variety,view.incidentCandidates,tick)},
+      storyteller:{type:'record',qualified:true,read:()=>
+        W.storyteller.inspect(view.storyteller,view.storytellerCandidates,view.incidentCandidates,tick)},
+      'incident-selections':{type:'record',qualified:true,read:({args})=>
+        W.incidentSelection.inspect(view.incidentCandidates,tick,args)},
+      'story-candidates':{type:'record',qualified:true,read:({args})=>ok(W.storyCasting.cast(args,api,base))},
+      ...(world.storyCallbacks!==undefined&&{'story-callbacks':{type:'record',qualified:true,read:({args})=>{
+        if (!view.storyCallbacks) return missing('Story callbacks are unavailable');
+        if (evaluatingCallback) return missing('Story callbacks cannot evaluate recursively');
+        evaluatingCallback = true;
+        try { return W.storyCallbacks.inspect(view.storyCallbacks,args,api); }
+        finally { evaluatingCallback = false; }
+      }}}),
+      'story-commitments':{type:'record',qualified:true,read:({args})=>
+        W.storyCommitments.inspect(view.storyCommitmentDefinitions,view.storyLifecycle,args)},
+      'story-handoffs':{type:'record',qualified:true,read:({args})=>
+        W.storyHandoffs.inspect(view.storyHandoffDefinitions,view.storyLifecycle,args)},
+      'story-settlements':{type:'record',qualified:true,read:({args})=>
+        W.storySettlement.inspect(view.storySettlementDefinitions,view.storyLifecycle,args)},
+      'story-consequences':{type:'record',qualified:true,read:({args})=>
+        W.storyConsequences.inspect(view.storyLifecycle,args)},
+      'story-beats':{type:'record',qualified:true,read:({args})=>
+        W.storyBeats.inspect(view.storyBeats,view.storyLifecycle,view.storyDocuments,args)},
+      'story-decisions':{type:'record',qualified:true,read:({args})=>
+        W.storyDecisions.inspect(view.storyDecisions,view.storyLifecycle,view.storyDocuments,args)},
+      'story-feasibility':{type:'record',qualified:true,read:({args})=>
+        W.storyFeasibility.inspect(view.storyFeasibilityRules,view.storyFeasibility,tick,api,args)},
+      'story-references':{type:'record',qualified:true,read:({args})=>W.storyReferences.inspect(view.storyReferences,args)},
+      'story-reference-target':{type:'record',qualified:true,read:({args})=>W.storyReferences.target(view.storyReferences,api,args)},
+      ...(world.storyTemplates !== undefined && { 'story-templates':{type:'record',qualified:true,read:({args:{id}}) => {
+        const records = view.storyTemplates ?? {};
+        return id === undefined ? ok(records) : own(records,id) ? ok(records[id]) :
+          missing('unknown story template instance','missing');
+      }} }),
+      ...((world.storyDocuments !== undefined || world.storyTemplates !== undefined) && { 'story-roles':{type:'record',qualified:true,read:({args}) => {
+        const {story, role} = args, records = view.storyRoles ?? {};
+        if (story === undefined && role === undefined) return ok(records);
+        if (!own(records,story)) return missing('unknown story with roles','missing');
+        const slots = records[story];
+        return role === undefined ? ok(slots) : own(slots,role) ? ok(slots[role]) : missing('unknown story role','missing');
+      }} }),
       signal:{type:'value',read:({args}) => {
         const port=typeof args.port==='string'?portOf(world,args.port):null;
         return own(signals,port)?ok(signals[port]):missing('unknown signal port');
@@ -288,8 +394,13 @@
         return ok(picker.ray({...args,origin:args.origin??(Array.isArray(target)?target:target?.point)}));
       }},
       cause:{selector:true,run:({target,args}) => view.causality ?
-        W.causality.trace(view.causality,world,tick,args,target?.entity??args.entity) :
+        W.causality.trace(view.causality,world,tick,args,target?.entity??args.entity,view.eventStream) :
         missing('causal recording is not enabled for this snapshot')},
+      ...(world.facts!==undefined&&{'fact-causes':{qualified:true,run:({args})=>W.worldFacts.trace(view.worldFacts,args)}}),
+      ...(world.knowledge!==undefined&&{knowledge:{qualified:true,run:({args})=>W.worldKnowledge.trace(view.knowledge,args)}}),
+      ...(world.custody!==undefined&&{custody:{qualified:true,run:({args})=>W.worldCustody.trace(view.custody,args)}}),
+      ...(world.siteHistory!==undefined&&{'site-history':{qualified:true,run:({args})=>
+        W.worldSiteHistory.trace(view.siteHistory,view.siteHistoryPolicy,args)}}),
       'causal-inspection':{selector:true,qualified:true,run:({target,args})=>
         W.causalInspection.inspect(view,api,transfers().describe(),target,args)},
       signal:{run:({args}) => {
@@ -400,6 +511,14 @@
         id,...world.systems[id],inputs:systems[id].inputs ?? {},outputs:systems[id].outputs ?? {},
         actions:sorted(systems[id].actions ?? {})
       })),actions:['world/input','world/patch','world/event',...(accounts.length ? ['world/transfer'] : []),
+        ...(view.worldFacts ? ['world/'+W.worldFacts.action] : []),
+        ...(view.knowledge ? ['world/'+W.worldKnowledge.action] : []),
+        ...(view.beliefs ? W.worldBeliefs.actions.map(action=>'world/'+action) : []),
+        ...(view.memories ? ['world/'+W.worldMemories.action] : []),
+        ...(view.custody ? W.worldCustody.actions.map(action=>'world/'+action) : []),
+        ...(view.siteHistory ? W.worldSiteHistory.actions.map(action=>'world/'+action) : []),
+        ...(view.storyLifecycle ? W.storyLifecycle.actions.map(name=>'world/'+name) : []),
+        ...(view.incidentCandidatePolicies ? ['world/'+W.incidentCandidates.action] : []),
         ...(world.simulationChunks?W.simulationChunks.actions.map(name=>'world/'+name):[])]};
     }
     function spatial({point,radius,where} = {}) {
@@ -444,7 +563,14 @@
         ...(description?.spatial && {type:description.type,spatial:description.spatial}),
         ...(grid ? {grid} : {}),samples:points.map(point => ({point,...api.probe(field,point,args)}))};
     }
-    const api = Object.freeze({inspect,spatial,spatialBatch,anyAgent:(...args)=>occupancy().anyAgent(...args),target,frame:fieldFrame,field,sampler,neighborhood,navigation,navigationSource,
+    function workEffect({action,args={}},batch) {
+      const [system,name]=W.data.endpoint(action);
+      const effects=own(systems,system)&&systems[system].workEffects, hook=own(effects,name)&&effects[name]?.blocker;
+      if(!hook||!own(states,system))return missing('work effect has no snapshot check');
+      if(W.simulationAggregate.isAggregate(states[system]))return missing('work effect solver is aggregated');
+      return ok(hook(states[system],args,batch,{id:system,query:api,tick,time:base.time,dt:world.dt})??null);
+    }
+    const api = Object.freeze({inspect,spatial,spatialBatch,anyAgent:(...args)=>occupancy().anyAgent(...args),target,frame:fieldFrame,field,sampler,neighborhood,navigation,navigationSource,workEffect,
       simulationClock:name=>view.simulationChunks?.clocks[name],
       renderVolume:name=>own(systems,name)?systems[name].volumeFrame?.(states[name]):null,
       renderWater:name=>own(systems,name)?systems[name].waterFrame?.(states[name]):null,

@@ -2,6 +2,7 @@
 (function (K) {
   const A = AreaLights,
     C = LightCookies;
+  K.shadowCutouts = ShadowCutouts;
   const finish = raw => {
     A.prepare([raw]);
     return raw;

@@ -1,0 +1,17 @@
+{
+  "format": "ink-studio/shot-lighting",
+  "version": 1,
+  "key": {
+    "at": [0.72, 1.93, 1.74], "normal": [-0.55, -0.22, -0.8],
+    "shape": "disk", "size": [0.24, 0.28], "color": "#80e0d0",
+    "intensity": 8, "radius": 3.8, "sampleGrid": 2, "shadows": false,
+    "receive": {"include": [{"object": "visor"}]}
+  },
+  "fill": {
+    "at": [-1.72, 2.55, 1.55], "normal": [0.54, -0.42, -0.66],
+    "size": [1.16, 0.88], "color": "#a8c9f4", "intensity": 0.4,
+    "radius": 4.4, "sampleGrid": 2, "shadows": false,
+    "receive": {"include": [{"object": "visor"}, {"object": "operator"}]}
+  },
+  "exposureEV": -0.4
+}

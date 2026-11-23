@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Cinder Foundry · Ink Studio</title>
+<style>
+:root{color-scheme:dark;--bg:#18232d;--card:#202c37;--line:#3d5060;--cream:#f4e5c9;--dim:#b6c2bd;--hot:#ffc482;--mint:#94d2c0}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--cream);font:14px system-ui,sans-serif}
+main{max-width:1024px;margin:auto;padding:22px 24px}
+header{display:flex;align-items:end;justify-content:space-between;gap:16px;margin-bottom:16px}
+h1,h2,p,dl,dd{margin:0}
+h1{font:normal 39px/1 Georgia,serif;letter-spacing:-.7px;margin-bottom:6px}
+header p{color:var(--dim)}
+button,input{accent-color:var(--hot)}
+button{color:inherit;cursor:pointer;font:inherit}
+button:focus-visible,input:focus-visible{outline:2px solid var(--hot);outline-offset:3px}
+.control{padding:7px 11px;border:1px solid #5e6c70;border-radius:4px;background:#2e404a;white-space:nowrap}
+.control:hover{background:#405563}
+.layout{display:grid;grid-template-columns:minmax(0,680px) minmax(238px,1fr);align-items:start;gap:14px}
+figure{min-width:0;margin:0}
+#scene{width:100%;height:auto;aspect-ratio:340/184;object-fit:cover;display:block;image-rendering:pixelated;border:1px solid #52717a;border-radius:5px}
+.scrub{display:flex;align-items:center;gap:12px;padding-top:10px}
+#timeline{flex:1;min-width:40px;margin:0}
+#time{font:11px/1.4 ui-monospace,monospace;color:var(--hot);width:64px;text-align:right}
+nav{display:flex;gap:7px;margin-top:9px;flex-wrap:wrap}
+.stage{padding:5px 8px;border:1px solid #415765;border-radius:4px;background:#223440;color:#b1c2c5;font-size:12px}
+.stage:hover,.stage[aria-current=true]{background:#604b40;color:#ffe3ae;border-color:#b5926b}
+aside{background:var(--card);border:1px solid var(--line);border-radius:5px;padding:14px}
+h2{font-size:11px;color:var(--dim);text-transform:uppercase;letter-spacing:.09em;margin-bottom:8px}
+#status{font:normal 23px Georgia,serif;margin-bottom:6px}
+#detail{min-height:39px;color:var(--dim);font-size:12px;line-height:1.4}
+.parcel{border-top:1px solid var(--line);padding-top:12px;margin-top:7px}
+dl div{display:flex;justify-content:space-between;gap:10px;padding:4px 0}
+dt{color:#b5c3c6;font-size:12px}
+dd{font:12px ui-monospace,monospace;text-align:right}
+#temp{color:var(--hot)}
+#conserve{margin-top:12px;padding-top:9px;border-top:1px solid var(--line);color:var(--mint);font-size:12px;line-height:1.4}
+@media(max-width:755px){main{padding:16px}.layout{grid-template-columns:1fr}h1{font-size:33px}header p{font-size:13px}}
+</style>
+</head>
+<body>
+<main>
+<header><div><h1>Cinder Foundry</h1><p>Follow one blue-glass parcel from kiln to cooling bed.</p></div><button id="play" type="button" class="control">Play simulation</button></header>
+<div class="layout">
+  <figure>
+    <img id="scene" width="340" height="184" alt="Ink Studio pixel render of a small foundry">
+    <figcaption>
+      <div class="scrub"><input id="timeline" type="range" min="0" step="1" aria-label="Simulation tick"><output id="time" for="timeline"></output></div>
+      <nav aria-label="Simulation stages">
+        <button id="start" type="button" class="stage">In the kiln</button>
+        <button id="flight" type="button" class="stage">Rigid in flight</button>
+        <button id="land" type="button" class="stage">Impact and deposit</button>
+      </nav>
+    </figcaption>
+  </figure>
+  <aside aria-label="Material inspection">
+    <h2>Representation</h2>
+    <div id="status"></div>
+    <p id="detail"></p>
+    <div class="parcel">
+      <h2>Tracked blue glass</h2>
+      <dl>
+        <div><dt>Parcel</dt><dd id="parcel"></dd></div>
+        <div><dt>Temperature</dt><dd id="temp"></dd></div>
+        <div><dt>Wetness</dt><dd id="wetness"></dd></div>
+        <div><dt id="location-label">Cell address</dt><dd id="location"></dd></div>
+        <div><dt>Patch mass</dt><dd id="mass"></dd></div>
+      </dl>
+    </div>
+    <p id="conserve"></p>
+  </aside>
+</div>
+</main>
+<script>
+/* STUDY */
+const el=id=>document.getElementById(id), image=el('scene'), scrub=el('timeline'), play=el('play');
+const start=0, air=Math.round((lift.tick+impact.tick)/2), end=frames.length-1;
+const points=[[el('start'),start],[el('flight'),air],[el('land'),impact.tick]];
+const labels={cells:'Material cells',rigid:'One rigid piece','cells-returned':'Back in the lattice'};
+const messages={cells:'Seven connected cells are heated in the kiln.',
+  rigid:'The compound turns as one body. Each parcel keeps its own heat and material state.',
+  'cells-returned':'Impact at '+impact.speed.toFixed(1)+' world units/s returned all seven parcels to nearby cells.'};
+let tick=air, origin, animation;
+scrub.max=end;
+function show(next) {
+  tick=next;
+  const row=frames[tick], carried=row.phase==='rigid';
+  image.src=images[tick];
+  image.alt='Pixel art foundry · '+labels[row.phase]+' · tick '+tick;
+  scrub.value=tick;
+  el('time').value='TICK '+String(tick).padStart(2,'0');
+  el('status').textContent=labels[row.phase];
+  el('detail').textContent=messages[row.phase];
+  el('parcel').textContent='#'+row.parcel;
+  el('temp').textContent=Math.round(row.temperature)+' °C';
+  el('wetness').textContent=Math.round(row.wetness*100)+'%';
+  el('location-label').textContent=carried?'World position':'Cell address';
+  el('location').textContent=(carried?row.point.map(n=>n.toFixed(2)):row.cell).join(', ');
+  el('mass').textContent=row.mass.toFixed(3);
+  el('conserve').textContent=Math.abs(row.error)<1e-6?'Mass and heat ledger balanced. Heat exchanged with air is accounted for.':
+    'Heat balance residual '+row.error.toExponential(2);
+  for(const [button,index] of points)button.setAttribute('aria-current',String(frames[index].phase===row.phase));
+}
+function pause(){
+  cancelAnimationFrame(animation);
+  animation=undefined;
+  play.textContent='Play simulation';
+}
+function advance(now){
+  origin??=now-tick*1000/24;
+  const next=Math.min(end,Math.floor((now-origin)*24/1000+1e-7));
+  if(next!==tick)show(next);
+  if(next<end)animation=requestAnimationFrame(advance);
+  else pause();
+}
+scrub.oninput=()=>{pause();show(Number(scrub.value))};
+for(const [button,index] of points)button.onclick=()=>{pause();show(index)};
+play.onclick=()=>{
+  if(animation!==undefined){pause();return}
+  if(tick!==0)show(0);
+  origin=undefined;
+  play.textContent='Pause';
+  animation=requestAnimationFrame(advance);
+};
+show(air);
+</script>
+</body>
+</html>

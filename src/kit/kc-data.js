@@ -610,6 +610,16 @@
       bad('finish.look.edgeFilter', error.message);
     }
     try {
+      CurveWidth.prepare(look?.curveWidth);
+    } catch (error) {
+      bad('finish.look.curveWidth', error.message);
+    }
+    try {
+      MotionalCoverage.prepare(look?.motionalCoverage);
+    } catch (error) {
+      bad('finish.look.motionalCoverage', error.message);
+    }
+    try {
       TranslucentSilhouettes.prepare(look?.translucentSilhouettes);
     } catch (error) {
       bad('finish.look.translucentSilhouettes', error.message);
@@ -665,6 +675,16 @@
     } catch (error) {
       bad('finish.pixelStamps', error.message);
     }
+    if (look?.protectedPixels !== undefined) try {
+      K.protectedPixels.prepare(look.protectedPixels,undefined,{scenePalette:st.palette,paletteRoles:st.roles});
+    } catch (error) {
+      bad('finish.look.protectedPixels',error.message);
+    }
+    if (st.finish.highlightCels !== undefined) try {
+      K.highlightCels.prepare(st.finish.highlightCels, { scenePalette: st.palette, paletteRoles: st.roles });
+    } catch (error) {
+      bad('finish.highlightCels', error.message);
+    }
     try {
       ArtEffects.prepare(look?.effects, st.palette);
     } catch (error) {
@@ -679,6 +699,16 @@
       ColorClusters.prepare(look?.colorClusters);
     } catch (error) {
       bad('finish.look.colorClusters', error.message);
+    }
+    try {
+      ShotCorrections.prepare(look?.shotCorrections);
+    } catch (error) {
+      bad('finish.look.shotCorrections', error.message);
+    }
+    try {
+      BoundaryCels.prepare(look?.boundaryCels, { scenePalette: st.palette, paletteRoles: st.roles });
+    } catch (error) {
+      bad('finish.look.boundaryCels', error.message);
     }
     try {
       SplatOrder.transparency(look?.stableTransparency);
@@ -794,14 +824,17 @@
           catch (error) { bad(path + '.albedo', error.message); }
         }
         if (m.model !== undefined) {
-          const q = m.model, at = path + '.model', channels = { color: 1, emission: 1, roughness: 1, metallic: 1 };
+          const q = m.model, at = path + '.model', channels = { color: 1, emission: 1, roughness: 1, metallic: 1, normal:1, masks:1 };
           if (!q || typeof q !== 'object' || Array.isArray(q)) bad(at, 'model material channels need an object');
           else {
             keys(q, at, channels);
             for (const [channel, value] of Object.entries(q)) {
               const valid = channel === 'color' || channel === 'emission' ?
                 isVec(value, 3) && value.every(v => v >= 0 && (channel === 'emission' || v <= 1)) :
-                isNum(value) && value >= 0 && value <= 1;
+                channel === 'normal' ? isVec(value,3) && Math.hypot(...value)>0 :
+                channel === 'masks' ? value && typeof value === 'object' && !Array.isArray(value) &&
+                  Object.entries(value).every(([id,n])=>PaintCorrections.idOK(id) && isNum(n) && n>=0 && n<=1) :
+                  isNum(value) && value >= 0 && value <= 1;
               if (!valid) bad(at + '.' + channel, 'invalid model material channel');
             }
           }
@@ -1708,7 +1741,7 @@
     const moving = spec.solids.filter(s => s.part), authoredBounds = new Map();
     const staticBake = cache && !moving.length && !effects.length && !spec.tap && !marks &&
       !presentation.breakables && !S.keepRenderSdf && !st0.finish.paint && !globalThis.INK_DECAL_NEXT &&
-      !globalThis.INK_RETAIN_RENDER_SDF && !globalThis.INK_RAMPS;
+      !globalThis.INK_RETAIN_RENDER_SDF && !globalThis.INK_RETAIN_REFERENCE_SDF && !globalThis.INK_RAMPS;
     const bakeKey = staticBake ? cacheAPI.sceneKey(spec, st0,
       activeSolids.filter(s => s.kind === 'mesh').map(s => env.assets[s.asset])) : undefined;
     const baked = staticBake && cache.read('splats', bakeKey, cacheAPI.isPacked);

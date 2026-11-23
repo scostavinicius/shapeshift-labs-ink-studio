@@ -1,0 +1,13 @@
+{
+  "format": "ink-studio/simulation-model",
+  "version": 1,
+  "id": "note-clock",
+  "revision": 1,
+  "seed": 12,
+  "numerics": { "dt": 0.000010416666666666666, "blockSize": 1600 },
+  "domain": {}, "parameters": {}, "initial": {}, "boundaries": {},
+  "operators": { "solver": { "kind": "note-clock", "revision": 1 } },
+  "inputs": {},
+  "outputs": { "note": "solver/note" },
+  "probes": {}
+}

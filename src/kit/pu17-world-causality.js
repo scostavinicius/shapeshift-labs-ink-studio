@@ -48,7 +48,8 @@
     }
     function input(name,port,value,sample,location) {
       const parents=sample.parents, before=retained.get(inputHeads[port]);
-      const data={value,source:sample.source??null,delay:sample.delay??0,sample:sample.mode??'hold'};
+      const data={value,source:sample.source??null,delay:sample.delay??0,sample:sample.mode??'hold',
+        ...(sample.latencyTicks!==undefined && {latencyTicks:sample.latencyTicks})};
       if (before?.type==='input' && equal(before.data,data) && equal(before.parents,parents)) return before.id;
       const ref=add('input',name,'signal-sampled',data,parents,{port,...location});
       inputHeads[port]=ref;
@@ -64,14 +65,15 @@
     function collect(port,parents) {
       if (parents.length) buffers[port]=refs([...(buffers[port]??[]),...parents]);
     }
-    function consume(port) {
+    function consume(port,retain=false) {
       const parents=buffers[port]??[];
-      delete buffers[port];
+      if (!retain) delete buffers[port];
       return parents;
     }
-    function publish(port,value) {
+    function publish(port,value,early=false) {
       if (!staged[port]) return;
       for (const edge of reducers.get(port)??[]) {
+        if (Boolean(edge.earlyEvent)!==early) continue;
         const type=ports.inputs[edge.to].type;
         if (!carries(value,type)) continue;
         if (edge.delay) delayed[edge.to]=refs([...(delayed[edge.to]??[]),staged[port]]);
@@ -140,7 +142,7 @@
       completePhase();
       for (const [port,descriptor] of Object.entries(ports.inputs))
         if (descriptor.type==='event') delete manual[port];
-      for (const edge of incoming.values()) if (edge.delay) {
+      for (const edge of incoming.values()) if (edge.delay && !edge.crossing) {
         const parents=W.rates.buffered(edge)?delayed[edge.to]??[]:
           outputHeads[edge.from]?[outputHeads[edge.from]]:[];
         delays[edge.to]=[...delays[edge.to].slice(1),parents];
@@ -151,12 +153,15 @@
         outputs:outputHeads,inputs:inputHeads,manual,delays,buffers,actions});
     }
 
-    return {scope,output,completePhase,publish,collect,consume,held,delayedRefs,finish,...(inspection&&{balance}),
+    return {scope,output,completePhase,publish,collect,consume,held,delayedRefs,finish,publication:port=>staged[port],...(inspection&&{balance}),
       ran:name=>{delete actions[name];},
       action(system,ref) {actions[system]=refs([...(own(actions,system)?actions[system]:[]),ref]);},
       manual(port,ref,append) {manual[port]=append?refs([...(manual[port]??[]),ref]):[ref];},
       command:(system,item)=>add('command',system,'scheduled-command',{action:item.action,args:item.args,
         ...(item.id!==undefined && {commandId:item.id})}),
+      eventReference(id) {
+        for (const row of retained.values()) if (row.event===id) return row.id;
+      },
       event:(row,causes,location,basis)=>add('event',row.system,row.kind,row,causes,{event:row.id,basis,...location})};
   }
 
@@ -172,7 +177,7 @@
       if (!incoming.has(port)) manual[port]=[inputs[port]];
     }
     for (const port of Object.keys(ports.outputs)) outputs[port]=root('output',port,values[port]);
-    for (const edge of incoming.values()) if (edge.delay) {
+    for (const edge of incoming.values()) if (edge.delay && !edge.crossing) {
       const value=ports.outputs[edge.from].default;
       const parents=W.rates.buffered(edge)?[]:[equal(value,values[edge.from])?outputs[edge.from]:
         defaults[edge.from]??=root('default',edge.from,value)];
@@ -184,8 +189,7 @@
   function validate(state,tick,ports,incoming,systems,{limit}) {
     check(record(state) && Array.isArray(state.nodes) && state.nodes.length<=limit &&
       Number.isSafeInteger(state.dropped) && state.dropped>=0,'Malformed causal checkpoint');
-    const before='c.'+(tick+1)+'.0';
-    const reference=value=>validRef(value)&&earlier(value,before);
+    const reference=value=>savedReference(value,tick);
     const references=list=>Array.isArray(list)&&list.length<=fanIn&&list.every(reference);
     let prior;
     for(const row of state.nodes) {
@@ -200,30 +204,33 @@
       [state.actions,systems,references,false]
     ]) check(record(bag) && (!complete||Object.keys(bag).length===Object.keys(keys).length) &&
       Object.entries(bag).every(([key,value])=>own(keys,key)&&match(value)),'Invalid saved causal references');
-    const delayed=[...incoming.values()].filter(edge=>edge.delay);
+    const delayed=[...incoming.values()].filter(edge=>edge.delay && !edge.crossing);
     check(record(state.delays) && Object.keys(state.delays).length===delayed.length && delayed.every(edge=>
       Array.isArray(state.delays[edge.to]) && state.delays[edge.to].length===edge.delay &&
       state.delays[edge.to].every(references)),'Invalid saved delayed causal references');
   }
 
-  function trace(state,world,tick,args,entity) {
-    const {id:ref,event,port,kind,system,direction,atTick=tick,maxDepth=32,limit=256}=args;
+  function trace(state,world,tick,args,entity,stream) {
+    const {id:ref,event,beatId,port,kind,system,direction,atTick=tick,maxDepth=32,limit=256}=args;
+    const beat=beatId===undefined?undefined:W.inspectionLinks.parse(beatId);
     const key=port===undefined?null:W.data.portOf(world,port);
     const portType=direction??(key!==null&&own(state.outputs,key)?'output':'input');
-    check([ref,event,port,kind].filter(value=>value!==undefined).length===1 &&
+    check([ref,event,beatId,port,kind].filter(value=>value!==undefined).length===1 &&
       [ref,event,port,kind,system,entity].every(value=>value===undefined || typeof value==='string') &&
       (direction===undefined || key!==null&&['input','output'].includes(direction)) &&
       Number.isSafeInteger(atTick)&&atTick>=0&&atTick<=tick && Number.isSafeInteger(maxDepth)&&maxDepth>=0&&maxDepth<=256 &&
       Number.isSafeInteger(limit)&&limit>=1&&limit<=2000,
-    'Causal trace needs one of id, event, port or kind and a bounded tick or traversal limit');
+    'Causal trace needs one of id, event, beatId, port or kind and a bounded tick or traversal limit');
+    check(beatId===undefined||beat&&!beat.projected,'Causal trace needs a native beat ID');
+    const matchesBeat=row=>beat.world===world.id&&row.event===beat.id&&W.committedEvents.branchAt(stream,row.tick)===beat.branch;
     const root=state.nodes.findLast(row=>row.tick<=atTick && (system===undefined||row.system===system) &&
       (entity===undefined||[row.data.entity,row.data.body,row.data.place].includes(entity)) &&
-      (ref!==undefined?row.id===ref:event!==undefined?row.event===event:key!==null?row.port===key&&row.type===portType:row.kind===kind));
+      (ref!==undefined?row.id===ref:beat?matchesBeat(row):event!==undefined?row.event===event:key!==null?row.port===key&&row.type===portType:row.kind===kind));
     if (!root) return W.query.missing(state.dropped?'No matching retained cause':'No matching cause','missing');
-    const {status,...graph}=walk(state,[root.id],maxDepth,limit);
+    const {status,...graph}=walk(state,[root.id],maxDepth,limit,{world:world.id,stream});
     return W.query.ok({status,root:root.id,...graph});
   }
-  function walk(state,roots,maxDepth,limit) {
+  function walk(state,roots,maxDepth,limit,{world,stream}={}) {
     const byId=new Map(state.nodes.map(row=>[row.id,row])), nodes=[], gaps=[], edges=[], visited=new Set();
     const queue=roots.map(ref=>[ref,0,null]);
     for(let i=0;i<queue.length;i++){
@@ -233,11 +240,14 @@
       const reason=ref===clipped?'fan-in':!row?'retention':depth>maxDepth?'depth':nodes.length>=limit?'node-budget':null;
       if(reason){gaps.push({id:ref,reason});continue;}
       visited.add(ref);
-      nodes.push(row);
+      const beatId=world&&id(row.event)?W.inspectionLinks.make({
+        world,branch:W.committedEvents.branchAt(stream,row.tick),id:row.event}):undefined;
+      nodes.push(beatId?{...row,beatId}:row);
       for(const parent of row.parents)queue.push([parent,depth+1,ref]);
     }
     return {status:gaps.length?'partial':'complete',nodes,edges,
       gaps:[...new Map(gaps.map(row=>[row.id,row])).values()],dropped:state.dropped};
   }
-  W.causality=Object.freeze({policy,begin,initial,validate,trace,walk});
+  const savedReference = (value,tick) => validRef(value) && earlier(value,'c.'+(tick+1)+'.0');
+  W.causality=Object.freeze({policy,begin,initial,validate,trace,walk,savedReference});
 })(KIT);

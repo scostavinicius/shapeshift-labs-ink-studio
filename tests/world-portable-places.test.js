@@ -41,6 +41,23 @@ test('the workshop keeps moved geometry through reload and visits from different
   });
 });
 
+test('portable entrances retain a painted mask and mirror the return aperture', async () => {
+  const session = create();
+  session.registerInstance(spec);
+  await session.enter('field');
+  const entry = session.openEntrance({ id: 'painted', to: { place: spec.id, anchor: 'door' },
+    at: { origin: [4, 1.25, 8] }, aperture: { ...aperture, maskThreshold: 1,
+      mask: { width: 3, height: 1, channels: 1, data: [1, 1, 0] } } });
+  assert(await cross(session, entry));
+  const saved = roundTrip(session.checkpoint());
+  assert.deepEqual(saved.portable.entrances[0].aperture.mask.data, [255, 255, 0]);
+  session.dispose();
+  const restored = create();
+  await restored.restore(saved);
+  assert.deepEqual(restored.linksFrom(spec.id)[0].opening.mask.data, [0, 255, 255]);
+  restored.dispose();
+});
+
 test('templates keep independent instance checkpoints and open entrances survive reload', async () => {
   const session = create();
   const first = session.registerInstance(spec);

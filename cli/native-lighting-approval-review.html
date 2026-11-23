@@ -1,0 +1,208 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Native lighting approval · Ink Studio</title>
+<style>
+:root { color-scheme:dark; color:#f0eeea; background:#14191f; font:15px/1.45 system-ui,sans-serif; --ink:#1d2630; --line:#374552; --muted:#b9c4d0; --jade:#9af0d4; --warm:#ffcd90; }
+* { box-sizing:border-box; }
+body { margin:0; }
+main { width:min(1160px,100% - 48px); margin:36px auto; }
+header { display:flex; align-items:end; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:16px; }
+h1,h2,p { margin:0; }
+h1 { font-size:clamp(40px,5.55vw,69px); font-weight:680; letter-spacing:-.064em; line-height:1.02; margin:3px 0 10px; }
+h2 { font-size:.95rem; }
+.product { text-transform:uppercase; font-size:.76rem; letter-spacing:.13em; font-weight:760; color:var(--warm); }
+.meta,.hint,.value { color:var(--muted); }
+.actions,.tabs,.toolbar { display:flex; align-items:center; flex-wrap:wrap; gap:7px; }
+.toolbar { justify-content:space-between; margin:14px 0 11px; gap:9px; }
+button { font:inherit; color:inherit; background:#26323e; border:1px solid #455563; border-radius:7px; padding:7px 11px; cursor:pointer; }
+button:hover { border-color:var(--warm); }
+button:focus-visible,input:focus-visible { outline:2px solid var(--jade); outline-offset:2px; }
+button[aria-pressed=true],#rig { color:#242019; background:var(--warm); border-color:var(--warm); font-weight:680; }
+input { accent-color:var(--jade); }
+.callout { display:flex; align-items:center; flex-wrap:wrap; gap:8px 12px; color:var(--warm); padding:8px 10px; background:#2b2527; border:1px solid #684e43; border-radius:7px; }
+.callout button { color:var(--warm); background:#352a28; border-color:#7f5d4c; padding:4px 8px; font-size:.82rem; }
+.plates { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.panel { background:var(--ink); border:1px solid var(--line); border-radius:10px; overflow:hidden; min-width:0; }
+.heading { padding:9px 12px; display:flex; flex-wrap:wrap; gap:3px 8px; align-items:baseline; justify-content:space-between; }
+.counter { color:var(--jade); font:.79rem ui-monospace,monospace; }
+.stage { background:#111b25; }
+.stage img { width:100%; height:100%; display:block; image-rendering:pixelated; }
+table { width:100%; border-collapse:collapse; margin-top:13px; font-size:.9rem; }
+thead th { font-weight:550; color:var(--muted); }
+th,td { text-align:left; vertical-align:top; padding:9px 10px; }
+th:nth-child(2),th:nth-child(3),td:nth-child(2),td:nth-child(3) { width:20%; }
+tbody th,tbody td { border-top:1px solid var(--line); }
+tbody th { font-weight:660; }
+.detail { border:0; color:var(--muted); font-weight:450; padding:0 10px 11px; }
+.detail button { margin:4px 0 0; padding:3px 9px; font-size:.79rem; }
+.status { font-weight:650; }
+.status[data-pass=true] { color:var(--jade); }
+.status[data-pass=false] { color:var(--warm); }
+.value { display:block; margin-top:2px; font:.78rem/1.45 ui-monospace,monospace; }
+.swatch { display:inline-block; height:.76em; width:.76em; margin-right:.42em; border:1px solid #a8a8ad; border-radius:2px; }
+#legend { margin:8px 0; }
+[hidden] { display:none !important; }
+@media(max-width:700px) {
+  main { width:calc(100% - 26px); margin:23px auto; }
+  .plates { grid-template-columns:minmax(0,1fr); gap:9px; }
+  .toolbar { margin-top:10px; }
+  .heading,th,td { padding-left:7px; padding-right:7px; }
+  th:nth-child(2),th:nth-child(3),td:nth-child(2),td:nth-child(3) { width:24%; }
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <p class="product">Ink Studio · Native lighting approval</p>
+      <h1 id="title"></h1>
+      <p id="summary" class="meta"></p>
+    </div>
+    <div class="actions"><button id="rig" type="button">Download fitted rig</button><button id="report" type="button">Download report</button></div>
+  </header>
+  <div class="callout" id="unresolved" hidden><span id="unresolved-label"></span><button id="jump" type="button">Review unresolved</button></div>
+  <div class="toolbar">
+    <div id="grids" class="tabs" role="group" aria-label="Native art grid"></div>
+    <label class="hint"><input id="evidence" type="checkbox"> Show check evidence</label>
+  </div>
+  <div class="plates">
+    <section class="panel" aria-labelledby="before-title">
+      <div class="heading"><h2 id="before-title">Starting rig</h2><span id="before-count" class="counter"></span></div>
+      <div class="stage"><img id="before" alt="Native render with the starting light rig"></div>
+    </section>
+    <section class="panel" aria-labelledby="fitted-title">
+      <div class="heading"><h2 id="fitted-title">One fitted rig</h2><span id="fitted-count" class="counter"></span></div>
+      <div class="stage"><img id="fitted" alt="Native render with the fitted light rig"></div>
+    </section>
+  </div>
+  <p id="legend" class="hint" hidden>Edge colors mark contour contrast. Green marks exact swatch pixels and magenta marks other colors on that subject.</p>
+  <table aria-label="Checks at the selected art grid">
+    <thead><tr><th scope="col">Constraint</th><th scope="col">Starting rig</th><th scope="col">Fitted rig</th></tr></thead>
+    <tbody id="checks"></tbody>
+  </table>
+</main>
+<script type="application/json" id="approval-data">/*APPROVAL_DATA*/</script>
+<script>
+const get = id => document.getElementById(id);
+const {report, rig, images} = JSON.parse(get('approval-data').textContent);
+const {grids, rows, summary, work} = report;
+const failed = rows.filter(row => !row.after.passed);
+const labels = new Map(grids.map(grid => [grid.id, grid.label]));
+const checkLabels = new Map(rows.map(row => [row.id, row.label]));
+const names = {pixels:'visible px',samples:'edge samples',share:'exact share',colorP10:'color P10',lightnessP10:'lightness P10',
+  croppedEdges:'cropped edges', weakColorShare:'weak color share',weakLightnessShare:'weak lightness share'};
+const metrics = {minPixels:'pixels',minSamples:'samples',minShare:'share',minColorP10:'colorP10',minLightnessP10:'lightnessP10',
+  maxCroppedEdges:'croppedEdges',maxWeakColorShare:'weakColorShare',maxWeakLightnessShare:'weakLightnessShare'};
+let current = grids[0].id;
+get('title').textContent = report.title;
+document.title = report.title + ' · Ink Studio';
+get('summary').textContent = summary.before + ' → ' + summary.after + ' of ' + summary.total +
+  ' checks passed · ' + grids.length + ' native grids · ' + work.evaluations + ' candidate rigs';
+get('unresolved').hidden = failed.length === 0;
+get('unresolved-label').textContent = failed.length + (failed.length === 1 ? ' unresolved grid check' : ' unresolved grid checks');
+const buttons = grids.map(grid => {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = grid.label + ' · ' + grid.width + ' × ' + grid.height;
+  button.addEventListener('click', () => { current = grid.id; draw(); });
+  get('grids').append(button);
+  return button;
+});
+
+function download(value, filename) {
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([JSON.stringify(value,null,2) + '\n'], {type:'application/json'}));
+  link.download = filename;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+function display(metric, value) {
+  if (value === null) return 'unmeasured';
+  if (metric === 'share' || metric.endsWith('Share')) return (value * 100).toFixed(1) + '%';
+  return metric.endsWith('P10') ? value.toFixed(3) : String(value);
+}
+function cell(result, keys) {
+  const cell = document.createElement('td'), status = document.createElement('span'), value = document.createElement('span');
+  status.className = 'status';
+  status.dataset.pass = result.passed;
+  status.textContent = result.passed ? 'Pass' : 'Unmet';
+  value.className = 'value';
+  value.textContent = keys.map(key => display(key,result.metrics[key]) + ' ' + names[key]).join(' · ');
+  cell.append(status,value);
+  return cell;
+}
+function details(row) {
+  const failedMetrics = row.after.failures.map(item => names[item.metric] + ' ' + display(item.metric,item.actual) +
+    ' · requires ' + (item.comparison === 'min' ? '≥ ' : '≤ ') + display(item.metric,item.limit)).join(' / ');
+  if (row.diagnostic === 'incompatible-swatch-shares')
+    return 'Exact colors claim more than 100% of the same subject with ' + row.conflictingChecks.map(id => checkLabels.get(id)).join(', ') + '. ' + failedMetrics;
+  if (row.diagnostic === 'trade-off-observed') {
+    const others = row.witness.regressed.map(item => checkLabels.get(item.id) + ' at ' + labels.get(item.grid));
+    const result = row.after.failures.map(item => display(item.metric,row.witness.metrics[item.metric]) +
+      ' ' + names[item.metric]).join(' · ');
+    return 'Another tested rig passed with ' + result + ' and lost ' + others.join(', ') + '. ' + failedMetrics;
+  }
+  if (row.diagnostic === 'subject-not-visible') return 'The selected subject had no visible pixels on this grid during the search.';
+  if (row.diagnostic === 'no-background-samples') return 'The selected edges had no usable background samples on this grid.';
+  return 'The search did not meet this check. ' + failedMetrics + '. Best trial · ' +
+    row.bestObserved.failures.map(item => display(item.metric,item.actual) + ' ' + names[item.metric]).join(' / ');
+}
+function draw() {
+  const grid = grids.find(grid => grid.id === current);
+  const local = rows.filter(row => row.grid === current), mode = get('evidence').checked ? 'evidence' : 'image';
+  buttons.forEach((button,i) => button.setAttribute('aria-pressed', grids[i].id === current));
+  get('legend').hidden = mode === 'image';
+  for (const [side, key] of [['before','before'],['fitted','after']]) {
+    const image = get(side);
+    image.parentElement.style.aspectRatio = grid.width + ' / ' + grid.height;
+    image.src = images[current][side][mode];
+    get(side + '-count').textContent = local.filter(row => row[key].passed).length + '/' + local.length + ' checks';
+  }
+  get('checks').replaceChildren(...local.flatMap(row => {
+    const tr = document.createElement('tr'), name = document.createElement('th');
+    name.scope = 'row';
+    const shown = row.type === 'swatch' ? ['share'] : Object.keys(row.limits).map(key => metrics[key]).filter(key => key !== 'pixels' && key !== 'samples');
+    if (!shown.length) shown.push('samples');
+    if (row.swatch) {
+      const swatch = document.createElement('i');
+      swatch.className = 'swatch';
+      swatch.style.background = row.swatch;
+      name.append(swatch);
+    }
+    name.append(document.createTextNode(row.label));
+    const target = document.createElement('span');
+    target.className = 'value';
+    target.textContent = Object.entries(row.limits).map(([key,limit]) =>
+      (key.startsWith('min') ? '≥ ' : '≤ ') + display(metrics[key],limit) + ' ' + names[metrics[key]]).join(' · ');
+    if (row.type === 'readability') target.title = 'P10 measures the 10th-percentile contour contrast.';
+    name.append(target);
+    tr.append(name,cell(row.before,shown),cell(row.after,shown));
+    if (row.after.passed) return [tr];
+    const diagnosis = document.createElement('tr'), note = document.createElement('td');
+    note.colSpan = 3;
+    note.className = 'detail';
+    note.textContent = details(row);
+    if (row.witness) {
+      const line = document.createElement('div'), button = document.createElement('button');
+      button.textContent = 'Download alternate rig';
+      button.addEventListener('click', () => download(row.witness.rig, 'alternate-rig.json'));
+      line.append(button);
+      note.append(line);
+    }
+    diagnosis.append(note);
+    return [tr,diagnosis];
+  }));
+}
+
+get('jump').addEventListener('click', () => { current = failed[0].grid; draw(); });
+get('evidence').addEventListener('change', draw);
+get('rig').addEventListener('click', () => download(rig,'rig.json'));
+get('report').addEventListener('click', () => download(report,'approval.json'));
+draw();
+</script>
+</body>
+</html>

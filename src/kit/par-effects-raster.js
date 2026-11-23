@@ -46,6 +46,11 @@
     return value;
   };
 
+  E.compositeVideo = function compositeVideo(source, { time = 0, ...options } = {}) {
+    const value = image(source), { width: w, height: h, data } = value;
+    return { ...value, data: CompositeVideo.filter({ w, h, rgba: data }, CompositeVideo.prepare(options), time).rgba };
+  };
+
   E.operations=Object.freeze({
     'fx.kernelBlur':raster((source,options)=>({value:E.kernelBlur(source,options)})),
     'fx.pathBlur':{
@@ -63,6 +68,11 @@
       inputs:{source:'raster',options},outputs:{value:'raster'},time:true,
       run({source,options},{seed,time}){return {value:E.tvStatic(source,{seed,time,...options})};}
     },
+    'fx.compositeVideo': {
+      description: 'Decode horizontal luma and chroma bands with phase-driven composite color fringes.',
+      inputs: { source: 'raster', options }, outputs: { value: 'raster' }, time: true,
+      run({ source, options }, { time }) { return { value: E.compositeVideo(source, { time, ...options }) }; }
+    },
     'fx.tileScramble':{
       seed: 'options',
       inputs:{source:'raster',options},outputs:{value:'raster',addresses:'raster'},time:true,
@@ -75,10 +85,28 @@
     },
     'fx.tileStrideSlip':raster(E.tileStrideSlip,{value:'raster',addresses:'raster'}),
     'fx.scanlineRemap':raster(E.scanlineRemap,{value:'raster',addresses:'raster'}),
+    'fx.emissionBands': {
+      description: 'Send colored contour waves through a distance field with separate crest and halo rasters.',
+      inputs: { source: { type: 'any', default: null }, mask: { type: 'any', default: null }, options },
+      outputs: { value: 'raster', crest: 'raster', mask: 'raster', halo: 'raster' }, time: true,
+      run({ source, mask, options }, { time }) {
+        const { width, height, ...settings } = options;
+        return KIT.emissionBands.create({ ...settings, field: source ?? undefined, mask: mask ?? undefined })
+          .frame({ width, height, time });
+      }
+    },
     'fx.rasterSchedule':{
       description:'Write palette slots, source offsets and pixel sizes on specified output rows.',
       inputs:{source:'raster',options},outputs:{value:'displayRaster'},time:true,
       run({source,options},{time}){return {value:E.rasterSchedule(source,{time,...options})};}
+    },
+    'fx.tileAttributes': {
+      description: 'Color a one-bit layer with paintable tile palettes and prioritized coverage writes.',
+      inputs: { source: 'raster', palette: 'palette', writes: { type: 'array<record>', default: [] }, options },
+      outputs: { value: 'displayRaster' },
+      run({ source, palette, writes, options }) {
+        return { value: E.tileAttributes.compile(source, palette, options).frame({ writes }).value };
+      }
     },
     'fx.blockSubstitute':{
       inputs:{source:'raster',banks:options,options},outputs:{value:'raster',mask:'raster'},
@@ -100,6 +128,19 @@
     'fx.paletteFault':{
       inputs:{source:'raster',palette:'palette',options},outputs:{value:'raster',indices:'raster'},
       run({source,palette,options}){return E.paletteFault(source,palette,options);}
+    },
+    'fx.moveRegions':{
+      description:'Move paint by stable label ID, composite overlapping pieces by depth, and mask newly exposed pixels.',
+      inputs:{source:'raster',labels:'raster',transforms:{type:'array<record>',default:[]},options},
+      outputs:{value:'raster',labels:'raster',gaps:'raster'},
+      run({source,labels,transforms,options}){return E.moveRegions(source,labels,transforms,options);}
+    },
+    'fx.relight':{
+      description:'Transfer colored raster emission onto a masked receiver with optional normals and height.',
+      inputs:{emission:'raster',normals:{type:'any',default:null},height:{type:'any',default:null},
+        mask:{type:'any',default:null},options},
+      outputs:{value:'displayRaster',irradiance:'linearRaster',intensity:'raster'},
+      run({emission,normals,height,mask,options}){return E.relight(emission,{...options,normals,height,mask});}
     },
     'fx.trackRegions': {
       inputs: { frames: 'array<raster>', options },

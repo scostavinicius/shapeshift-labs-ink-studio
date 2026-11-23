@@ -396,6 +396,7 @@
   // in its group is in the air, the foot steps: up, over and down to where its home will be. Feet in the air report lift 0..1..0.
   //   K.gait({ feet: [{ home: [x, z], group: 0 }, ...], reach: 0.5, time: 0.22, lift: 0.35, lead: 0.5, ground: (x, z) => y })
   K.gait = def => {
+    if (def.motionMatching) return K.motionMatching.bind(def);
     const feet = def.feet.map(f => ({
         home: f.home,
         group: f.group || 0,
