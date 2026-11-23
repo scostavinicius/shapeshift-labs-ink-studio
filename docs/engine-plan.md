@@ -500,6 +500,85 @@ O robô vence em 66 s, com 11 mortes e 2 quedas. O jogo é duro de propósito.
 
 Testes: [`cripta.test.mjs`](../engine/test/cripta.test.mjs) e o validador.
 
+## Etapas 26+ — o segundo merge do original (2026-11-23)
+
+Em 2026-11-23 entraram mais 473 commits do original (merge `a486e1a0`). A maior parte é estúdio de música, ferramentas de cinema (planos, cortes, editorial) e ciência de simulação. Para os jogos, o usuário escolheu as quatro frentes abaixo; a etapa 26 vem antes e confere o que os jogos ganham sem mudar nada.
+
+| Etapa | O quê | Estado |
+|---|---|---|
+| 26 | Renderizador: o que os jogos ganham sozinhos (ordem local de translúcidos #381, vãos de 1 pixel #382, rampas de luz #414) | ✅ |
+| 27 | Sons por receita do kit (`soundRecipe`: impacto, pegar, pulo, carga, aviso), com variação por semente a cada golpe | ✅ |
+| 28 | Marcas de golpe nas superfícies (`surfaceDecals` #480, ou o equivalente que caiba no renderizador dos jogos) | ✅ |
+| 29 | Fios: grama, cabelo, capas (`curveSplats` #451 e seguintes), presos ao corpo ou à física | ✅ (fios grossos; finos descartados) |
+| 30 | Criaturas procedurais: corpo ramificado (`proceduralBody` #428) e pés por `motionMatching` | ✅ (corpo que se arrasta; pés ficam de fora) |
+| 31 | Missões declarativas: o formato de história do kit (`StoryDocument`) com um executor da engine | ⏳ |
+
+Mesmo critério das etapas 12+: cada coisa é medida no navegador; se custar caro ou não aparecer no renderizador dos jogos, fica registrada como "medida e descartada", com o motivo.
+
+### Etapa 26 — O que os jogos ganham sozinhos · ✅ concluída
+
+- **Nada visível muda sozinho.** As novidades do renderizador são todas pedidas pela cena ou pelo quadro:
+  - a **ordem local de translúcidos** (#381, `splatOrder: 'surface'`) corrige splats transparentes que se cruzam, mas volta à ordem normal acima de 32 767 splats (`maxSplats`), e os jogos daqui têm de 50 mil a 126 mil. Também não vale com água, portais ou proxies. Fica de fora;
+  - a **proteção de vãos de 1 pixel** (#382, `protectGaps`) é uma regra por `tag` em `detailBudgets`, para frestas desenhadas de propósito. Nenhum jogo daqui tem uma;
+  - as **rampas de luz difusa** (#414) e as **normais pintadas** (#411) são materiais de autoria; as rampas `g` das tochas (etapas 21–22) já cobrem o que os jogos usam.
+- **O que importa é que nada piorou:** depois do merge, a paridade ficou no mesmo patamar da etapa 14 (jogos de 98,2% a 99,8%), o `hash` das partidas é igual no Edge e no Node, e a arena roda a 60 fps no replay inteiro.
+
+### Etapa 27 — Sons por receita do kit · ✅ concluída
+
+- **O kit tem receitas de som com semente** (`KIT.procedural.mediaGraph.soundRecipe`, #391 e seguintes): seis famílias (`impact`, `pickup`, `jump`, `charge`, `confirm`, `warning`), cada uma gerada em JS puro em 5 a 33 ms, e um `mutate` que dá variações limitadas da mesma receita.
+- **Na engine** ([`audio.ts`](../engine/src/ui/audio.ts)):
+  - seis sons novos com os nomes das famílias, para o `def.sounds` dos jogos;
+  - o `hit` agora é um `impact` mais grave e seco, em vez do oscilador;
+  - cada som tem **4 tomadas** (a receita e 3 variações), tocadas em rodízio: o mesmo golpe não soa igual duas vezes seguidas, como no rodízio de tomadas do original (#400). O rodízio é do som, não usa a sorte do jogo;
+  - as 28 tomadas são feitas depois da primeira tecla, **uma por tick** (o pior caso é 25 ms, a do `charge`), para nenhum quadro travar. Se um som toca antes, ele faz a primeira tomada na hora;
+  - sem as receitas no kit, o `hit` volta ao oscilador de antes.
+- **Os jogos:** a arena e a masmorra avisam ondas e inimigos que acordam com `warning`, e a cura soa `confirm`. Na cripta, a relíquia soa `pickup`, o selo que se abre soa `charge` e o chefe chamando reforços soa `warning`.
+- **O `check`** avisa quando o `def.sounds` aponta para um som que não existe (código `sound`, com a lista dos que existem).
+- **Fora:** o áudio de contato contínuo (arrastar, rolar, raspar #401), as reflexões, o Doppler e as salas com eco pedem o mundo simulado e os cues do kit, como o player espacial já descartado na etapa 23.
+- Testes: [`ui.test.mjs`](../engine/test/ui.test.mjs) confere que cada som rende 4 tomadas diferentes, sempre as mesmas, e o aviso do `check`; o `npm run live` confere que a página fez as 28 tomadas e a arena continua a 60 fps.
+
+### Etapa 28 — Marcas de golpe · ✅ concluída
+
+- **Os decalques do kit (`K.surfaceDecals`, #480): medidos e descartados para os jogos.**
+  - Funcionam no Node: uma marca projetada no campo de distância da cena (receptor `sdf`) sai em cerca de 3 ms, e depois de projetada custa quase nada por quadro.
+  - Mas no navegador **não aparecem**, nem no estilo padrão nem no `colored`. O renderizador entrega os decalques como camadas de superfície, desenhadas só no caminho de material por pixel, que os jogos não usam. É o mesmo limite dos carimbos UV da etapa 24.
+  - E o documento de decalques é fixo no `bind`: uma marca nova a cada golpe pediria refazer a ligação e projetar tudo de novo.
+- **O que entrou: marcas no próprio chão** ([`effects.ts`](../engine/src/game/effects.ts)), pelo mesmo caminho do chão queimado (etapa 7): um pintor do stage escurece os splats do chão.
+  - `game.effects.mark(x, z, raio, força)` escurece um salpicado de splats do chão, mais denso e escuro no meio. Fica até o fim da partida;
+  - cada golpe que acerta marca o chão logo atrás de quem apanhou (raio 0,45), e uma queda marca mais (raio 0,85);
+  - quais splats pegam a marca vem de um hash do splat e do lugar, nunca da sorte do jogo: a mesma partida marca os mesmos splats, e nenhum jogo muda;
+  - `effects.marks: false` desliga. As marcas não custam nada por quadro: só os splats marcados são repintados, uma vez.
+- Teste em [`combat.test.mjs`](../engine/test/combat.test.mjs): o golpe marca parte dos splats do chão em volta (um salpicado, não um disco), longe nada muda, duas partidas iguais dão o mesmo `hash`, e `marks: false` não marca nada.
+
+### Etapas 29 e 30 — Fios e criaturas procedurais · ✅
+
+As duas viraram uma coisa só: um corpo de curva grossa preso a uma cadeia física, atrás de um ator comum.
+
+**O que foi medido primeiro (sondagem com 300 folhas de grama e uma corda entre dois postes):**
+- `K.curveSplats.draw` funciona na montagem da cena: 300 folhas viram 30 mil segmentos em 65 a 113 ms.
+- **No navegador, o passe de curvas analíticas do renderizador falha** ("exceeded the tile budget") e a página não desenha nenhum quadro. Ele guarda no máximo 1 024 trechos por tile de 8 × 8 pixels, e a grama de um jogo passa disso.
+- **O conserto, já na engine:** [`upstream.ts`](../engine/src/render/upstream.ts) passa `curveMode: 'splats'` em todo quadro, e as curvas são desenhadas como os splats comuns que as carregam. Com isso, 60 fps e 1,7 ms por quadro. Um jogo ainda pode pedir as curvas analíticas por `frame.extra`.
+- **Na escala de pixel dos jogos** (pixel de arte de cerca de 0,15 unidade), as folhas finas se juntam num tapete verde e a corda de 0,1 de diâmetro some. Fios só aparecem com espessura de um pixel de arte ou mais, como os corpos de curva grossa do `proceduralBody` (etapa 30).
+- **O render do terminal** (`shot`, `sheet`, paridade) desenhava as curvas pelo passe de curvas finitas, mais finas que no navegador. Agora também usa `curveMode: 'splats'`, e as duas imagens batem.
+
+**O que entrou:**
+- **`actors.<nome>.tail`** ([`tails.ts`](../engine/src/game/tails.ts)). A cabeça é o `K.character` do ator, então perseguir, golpear, vida, combate e save funcionam como antes. O corpo é uma cadeia de `K.proceduralBody`:
+  - a primeira junta é puxada para onde o ator está;
+  - as outras seguem com gravidade, atrito e contato com o chão do mapa de colisão (o SDF é a altura do chão);
+  - a cadeia é desenhada por `K.curveSplats.bind`, com os splats reservados na montagem logo depois dos do ator e posados a cada passo a partir das juntas.
+- **Sólido para os outros atores**: quem encosta é empurrado para fora das juntas, nunca para dentro de uma parede. Com `solid: false` passa por cima.
+- **`slither(cérebro)`**: balança o andar de outro cérebro de um lado para o outro, para o corpo ficar em curvas. A fase vem do relógio do jogo e do id do ator, sem dados.
+- **Exemplo [`ninho`](../engine/examples/ninho/game.ts)**: uma serpente na arena, que vence quem a matar.
+- **Determinismo**: as juntas e os splats do corpo estão em `world.data`, então entram no `hash`. Duas partidas iguais dão o mesmo corpo (testado).
+
+**O que ficou de fora:**
+- **Fios finos** (grama, cabelo, corda): somem ou viram tapete na escala dos jogos, como medido acima.
+- **Pés por `motionMatching`**: os atores da engine andam pelo `K.character`; trocar o passo dele é outra etapa.
+- **A pose do corpo no save**: ao carregar, o corpo volta esticado atrás da cabeça.
+- **Corpos ramificados** (barbatanas, tentáculos): o kit suporta, mas um ator tem uma cadeia só.
+
+**Testes** ([`tails.test.mjs`](../engine/test/tails.test.mjs)): o corpo segue o ator e fica no chão, com os splats sobre a cadeia; o mesmo jogo dá o mesmo hash; o jogador não atravessa o corpo (e atravessa com `solid: false`); o corpo some com o ator e volta com o próximo; no ninho, a serpente persegue e morre aos golpes.
+
 ### O que fica de fora (e por quê)
 
 - **Grafos de nós e tradução do Pixel Composer:** são ferramentas de autoria offline.

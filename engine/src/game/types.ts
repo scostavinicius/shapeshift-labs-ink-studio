@@ -101,6 +101,29 @@ export interface ActorDef {
   hp?: number;
   /** what one of its blows takes off (default 1) */
   damage?: number;
+  /**
+   * a body that trails behind it (stages 29-30): a serpent's length, a worm, a tail. A chain of the kit's procedural body
+   * lying on the ground, drawn as one thick curve; the actor's own sculpt is the head. Other actors cannot walk through it.
+   */
+  tail?: TailOptions;
+}
+
+/** A trailing body (ActorDef.tail). */
+export interface TailOptions {
+  /** joints along it, 3..24 (default 9): more bend more smoothly */
+  joints?: number;
+  /** from the head to the tip, in world units (default 2.4) */
+  length?: number;
+  /** its width: a number tapers from it at the head to a fifth at the tip (default 0.36); a list is widths head to tip */
+  width?: number | number[];
+  /** how far above the actor's feet the chain is pulled from (default 0.3) */
+  lift?: number;
+  /** its colour, '#rrggbb' (default '#5fc08a') */
+  color?: string;
+  /** colours along it, [0..1 from the head, '#rrggbb'] (default: the one colour) */
+  pigment?: [number, string][];
+  /** other actors are pushed off it (default true) */
+  solid?: boolean;
 }
 
 // ---------------------------------------------------------------------------------------------------------- combat
@@ -142,6 +165,8 @@ export interface EffectsOptions {
   debris?: number;
   /** the ground's memory (default true) */
   eco?: boolean;
+  /** blows mark the ground where they land, and a fall more (stage 28; default true) */
+  marks?: boolean;
   /** how readily the ground burns where there is ground, 0..1 (default 0.5; under 0.05 nothing burns) */
   fuel?: number;
   /** the weather the ground's memory runs in: rain 0..1 slows fire and (above 0.7) puts it out; winter > 0.5 frosts it */
@@ -158,6 +183,8 @@ export interface Effects {
   freeze(x: number, z: number, r: number, dur: number): void;
   /** throw an actor's body to pieces from where it stands */
   shatter(a: Actor, power?: number): void;
+  /** darken the ground at (x, z), radius r, strength k 0..1 (default 0.6): a mark that stays (stage 28) */
+  mark(x: number, z: number, r: number, k?: number): void;
 }
 
 /**

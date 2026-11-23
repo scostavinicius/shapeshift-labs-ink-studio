@@ -9,6 +9,7 @@ import type { Ink, Vec3 } from '../../types/ink-studio';
 import { createGame, type RunningGame } from './game';
 import type { SceneFn } from './level';
 import type { GameDef } from './types';
+import { SOUND_NAMES } from '../ui/audio';
 
 export interface Problem {
   level: 'error' | 'warning';
@@ -160,6 +161,9 @@ export function checkDefinition(def: GameDef<any>): Problem[] {
     if (r !== undefined && !(r >= 0 && r <= 1)) out.push(warn('weather', 'effects.weather.rain', `rain ${r}`, 'rain is 0 (dry) to 1 (pouring)'));
     if (e.fuel !== undefined && !(e.fuel >= 0 && e.fuel <= 1)) out.push(warn('fuel', 'effects.fuel', `fuel ${e.fuel}`, 'fuel is 0 (nothing burns) to 1'));
   }
+  for (const [event, sound] of Object.entries(def.sounds || {}))
+    if (!(SOUND_NAMES as readonly string[]).includes(sound))
+      out.push(warn('sound', `sounds.${event}`, `no sound "${sound}": the event plays nothing`, `sounds: ${SOUND_NAMES.join(', ')}`));
   return out;
 }
 

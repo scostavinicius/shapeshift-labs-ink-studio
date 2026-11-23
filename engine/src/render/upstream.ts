@@ -174,6 +174,9 @@ export class UpstreamRenderer {
       }
     }
     const frame: Record<string, unknown> = {
+      // curve splats (stage 29) as the ordinary splats they carry: the analytic curve pass fails outright past its tile
+      // budget, and a game's grass is far past it
+      curveMode: 'splats',
       ...this.frame.extra,
       width: view.W,
       height: view.H,

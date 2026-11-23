@@ -167,6 +167,10 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
       actor.pos = [ch.st.x, ch.st.y, ch.st.z];
       // draw it where it stands now (K.character writes its splats when it is updated: otherwise it shows from the next step)
       ch.update(0, { ...NO_INPUT }, core.t);
+      if (slot.tail) {
+        slot.tail.spawn(actor.pos, ch.st.face);
+        slot.tail.pose(world);
+      }
       slotOf.set(actor.id, slot);
       markSlot(world.anim && world.anim.rows, slot);
       entities.push(actor);
@@ -335,6 +339,19 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
             e.ch.st.z = e.pos[2] = nz;
           }
         }
+      // 3a. trailing bodies (stages 29-30) follow their actors, and other actors are pushed off them, never into a wall
+      for (const a of actors) {
+        const tail = slotOf.get(a.id)!.tail;
+        if (!tail || !tail.live) continue;
+        tail.step(dt, a.pos, world);
+        for (const b of standing) {
+          if (b === a) continue;
+          const to = tail.pushOut(b.pos, b.radius);
+          if (!to || wall(to[0], to[1], b.pos[1])) continue;
+          b.ch.st.x = b.pos[0] = to[0];
+          b.ch.st.z = b.pos[2] = to[1];
+        }
+      }
       // 3b. blows land, the dead fall, the player comes back
       combat?.step(game, actors, dt, effects);
       // 3c. blows on breakable things

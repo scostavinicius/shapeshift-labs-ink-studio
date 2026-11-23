@@ -15,7 +15,7 @@ export interface EffectPools {
 export function effectOptions(o: EffectsOptions | true | undefined): Required<EffectsOptions> | null {
   if (!o) return null;
   const e = o === true ? {} : o;
-  return { fx: e.fx ?? 400, debris: e.debris ?? 800, eco: e.eco ?? true, fuel: e.fuel ?? 0.5, weather: e.weather ?? {} };
+  return { fx: e.fx ?? 400, debris: e.debris ?? 800, eco: e.eco ?? true, marks: e.marks ?? true, fuel: e.fuel ?? 0.5, weather: e.weather ?? {} };
 }
 
 /** Set the pools aside in the builder (before B.finish). */
@@ -43,6 +43,13 @@ const ecoCell = (x: number, z: number) => {
     iz = Math.floor(z) + ECO_OFZ;
   return ix < 0 || iz < 0 || ix >= ECO_N || iz >= ECO_NZ ? -1 : iz * ECO_N + ix;
 };
+
+// the cells marks look splats up in (stage 28): any size of level, keyed by integer cell
+const MARK_CELL = 0.5;
+const markKey = (cx: number, cz: number) => (cx + 32768) * 65536 + (cz + 32768);
+const markCell = (x: number, z: number) => markKey(Math.floor(x / MARK_CELL), Math.floor(z / MARK_CELL));
+/** what a blow's mark darkens the ground toward: soot, a little warm */
+const SCUFF = [0.12, 0.1, 0.09];
 
 const CHAR = [0.1, 0.075, 0.07],
   EMBER = [0.95, 0.42, 0.12],
@@ -74,9 +81,9 @@ export class GameEffects implements Effects {
     this.ground = new Uint8Array(world.count);
     this.env = { rain: o.weather.rain ?? 0, winter: o.weather.winter ?? 0 };
     const st = world.anim as any;
-    if (this.eco && st && st.repaint && st.base) {
+    if ((this.eco || o.marks) && st && st.repaint && st.base) {
       // what can burn: the level's ground
-      this.eco.reset({ fuel: (x: number, z: number) => (collision.ground(x, z) > -1e8 ? o.fuel : 0) });
+      if (this.eco) this.eco.reset({ fuel: (x: number, z: number) => (collision.ground(x, z) > -1e8 ? o.fuel : 0) });
       // the ground's splats: the ones lying on the surface the collision map found
       const D = world.data;
       for (let i = 0; i < world.count; i++) {
@@ -85,19 +92,28 @@ export class GameEffects implements Effects {
         if (D[o + 3] <= 0 || y < -40) continue;
         const g = collision.ground(D[o], D[o + 2]);
         if (g < -1e8 || Math.abs(y - g) > 0.35) continue;
+        this.ground[i] = 1;
+        const m = markCell(D[o], D[o + 2]),
+          ml = this.markCells.get(m);
+        if (ml) ml.push(i);
+        else this.markCells.set(m, [i]);
         const c = ecoCell(D[o], D[o + 2]);
         if (c < 0) continue;
-        this.ground[i] = 1;
         const l = this.cells.get(c);
         if (l) l.push(i);
         else this.cells.set(c, [i]);
       }
-      this.seen = new Uint8Array(this.eco.tex);
-      const tex = this.eco.tex as Uint8Array,
-        ground = this.ground;
+      if (o.marks) this.scuff = new Float32Array(world.count);
+      if (this.eco) this.seen = new Uint8Array(this.eco.tex);
+      const tex = this.eco ? (this.eco.tex as Uint8Array) : null,
+        ground = this.ground,
+        scuff = this.scuff;
       st.add({
         paint(i: number, rgba: number[]) {
           if (!ground[i]) return;
+          // a blow's mark (stage 28): the ground darkened toward soot, before the ground's memory paints over it
+          if (scuff && scuff[i] > 0) for (let a = 0; a < 3; a++) rgba[a] += (SCUFF[a] - rgba[a]) * scuff[i];
+          if (!tex) return;
           const D2 = st.base as Float32Array,
             c = ecoCell(D2[i * 16], D2[i * 16 + 2]);
           if (c < 0) return;
@@ -113,6 +129,45 @@ export class GameEffects implements Effects {
         }
       });
     }
+  }
+
+  /** for each cell of MARK_CELL units, the ground splats in it (for marks) */
+  private markCells = new Map<number, number[]>();
+  /** how dark each ground splat's mark is, 0..1 (null when marks are off) */
+  private scuff: Float32Array | null = null;
+
+  /**
+   * Mark the ground at (x, z), radius r, strength k (0..1): a broken patch of darker ground splats, darkest in the
+   * middle, that stays (stage 28). Which splats take the mark comes from a hash of the splat and the place, never from
+   * the game's dice, so a mark changes no game; the same blow always marks the same splats.
+   */
+  mark(x: number, z: number, r: number, k = 0.6): void {
+    const scuff = this.scuff,
+      st = this.world.anim as any;
+    if (!scuff || !(r > 0) || !(k > 0)) return;
+    const D = st.base as Float32Array,
+      changed: number[] = [],
+      salt = (Math.floor(x * 64) * 73856093) ^ (Math.floor(z * 64) * 19349663);
+    const lo = (v: number) => Math.floor((v - r) / MARK_CELL),
+      hi = (v: number) => Math.floor((v + r) / MARK_CELL);
+    for (let cx = lo(x); cx <= hi(x); cx++)
+      for (let cz = lo(z); cz <= hi(z); cz++) {
+        const list = this.markCells.get(markKey(cx, cz));
+        if (!list) continue;
+        for (const i of list) {
+          const d = Math.hypot(D[i * 16] - x, D[i * 16 + 2] - z);
+          if (d >= r) continue;
+          const near = 1 - d / r,
+            // a speckle: each splat a coin of its own, more of them taking the mark toward the middle
+            coin = (Math.imul(i ^ salt, 2654435761) >>> 0) / 4294967296;
+          if (coin > near * 1.3) continue;
+          const v = Math.min(0.8, k * (0.45 + 0.55 * near));
+          if (v <= scuff[i]) continue;
+          scuff[i] = v;
+          changed.push(i);
+        }
+      }
+    if (changed.length) st.repaintAll(changed);
   }
 
   /** bind the pools to the world (once, right after B.finish) */

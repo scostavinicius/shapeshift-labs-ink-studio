@@ -72,6 +72,7 @@ Os três exemplos completos, do menor ao maior:
 |---|---|
 | `engine/examples/farol-walk/` | uma cena pronta, um personagem, colisão (não atravessa o farol nem cai da ilha) |
 | `engine/examples/farol-fight/` | combate, inimigos que perseguem, efeitos (faíscas, pedaços, chão queimado), linhas de HUD |
+| `engine/examples/ninho/` | uma serpente: a cabeça é um ator comum e o corpo é uma cadeia física que se arrasta atrás (`actors.<nome>.tail`), com o cérebro `slither` |
 | `engine/examples/yard/` | **um nível escrito do zero**, um gerador de inimigos durante a partida, um portão que dá a vitória, chão que congela, `def.brains` para o save |
 | `engine/examples/beacons/` | feito por uma IA **sem contexto, lendo só este guia**: acender três faróis com triggers, inimigos que acordam a cada farol aceso, vitória e derrota, e um roteiro (`win.json`) que vence |
 | `engine/examples/arena/` | **o jogo completo de demonstração**: arena circular, três ondas, dois tipos de inimigo, um chefe que chama reforços, cura entre ondas, vitória e derrota, mira assistida, e um **robô** (`bot.ts`) que vence e gravou o `win.json` |
@@ -87,15 +88,15 @@ Os três exemplos completos, do menor ao maior:
 | `id`, `name` | nome curto (obrigatório) e título |
 | `scene` | caminho de uma cena do repositório ou a função da cena (obrigatório) |
 | `seed` | a semente; por padrão, a da cena |
-| `actors` | `{ nome: { spec, max?, hp?, radius?, damage? } }`: personagens (`K.character`), reservados antes de o mundo ficar pronto |
+| `actors` | `{ nome: { spec, max?, hp?, radius?, damage?, tail? } }`: personagens (`K.character`), reservados antes de o mundo ficar pronto. `tail`: um corpo que se arrasta atrás (serpente, verme, cauda), veja a seção 4 |
 | `spawns` | pontos com nome: `[x, y \| null, z]` |
 | `init(game)` | põe o elenco em cena; devolve `game.state` (obrigatório) |
 | `step(game, dt)` | as regras, a cada passo |
 | `camera` | `{ stiffness, minPitch, maxPitch, minDist, maxDist, bounds }`: a câmera segue o jogador com mola |
 | `combat` | `{ invuln: 0.6, arc: 70, respawn: 1.5, respawnAt, knock, assist }`, ou `false`; ligado por padrão. `assist` (graus) é a mira assistida do jogador: ao golpear, ele se vira para o inimigo mais próximo dentro desse ângulo (180 = qualquer lado) |
-| `effects` | `true` ou `{ fx: 400, debris: 800, eco: true, fuel: 0.5, weather: { rain, winter } }` |
+| `effects` | `true` ou `{ fx: 400, debris: 800, eco: true, marks: true, fuel: 0.5, weather: { rain, winter } }`. `marks`: cada golpe que acerta deixa uma mancha escura no chão, e uma queda deixa uma maior; ficam até o fim da partida (`game.effects.mark(x, z, raio)` faz uma à mão) |
 | `hud` | `{ lines(game) => string[], message(evento, game) => string \| null \| undefined }` |
-| `sounds` | `{ evento: som }`. Sons: `swing`, `hit`, `death`, `respawn`, `blip`, `save`, `crash`. Cada som vem do lugar do evento (de `at`, do `target` ou do `id` dele): sai pelo lado certo e fica mais baixo de longe, ouvido do ponto que a câmera segue |
+| `sounds` | `{ evento: som }`. Sons: `swing`, `hit`, `death`, `respawn`, `blip`, `save`, `crash` e, das receitas do kit, `impact`, `pickup`, `jump`, `charge`, `confirm`, `warning` (cada um com 4 variações tocadas em rodízio). Um nome que não existe faz o `check` avisar. Cada som vem do lugar do evento (de `at`, do `target` ou do `id` dele): sai pelo lado certo e fica mais baixo de longe, ouvido do ponto que a câmera segue |
 | `brains` | `{ kind: brain }`: os cérebros dos atores que nascem **durante** a partida (para o save trazê-los de volta) |
 | `collision` | `{ cell: 0.25, bakes: 'all' \| [0, 2], block: [caixas], open: [caixas], region }` |
 | `breakables` | `[{ tag, hits: 1, mode: 'debris' \| 'rubble', pieces: 0.3, push: 3, by: [times] }]`: coisas que um golpe quebra (seção 5) |
@@ -248,6 +249,15 @@ type Brain = (self: Actor, game: Game, dt: number) => Partial<StepInput>;
   - **ao perder o alvo**, vai até onde o viu por último e procura em volta por `memory` segundos;
   - **sem alvo**, patrulha `patrol`: uma lista de pontos `[x, z]`, ou `'spots'` para os pontos livres da masmorra.
   - A rota e a memória ficam em `self.data.brain`, então o save e o `hash` as guardam.
+- `slither(cérebro, { swing: 40, rate: 0.9 })` embrulha outro cérebro e faz o ator andar balançando de um lado para o outro (`swing` em graus, `rate` balanços por segundo). Golpes e paradas ficam como estão. Serve para serpentes com `tail`.
+- **Corpo que se arrasta (`actors.<nome>.tail`)**: o ator continua um `K.character` comum (anda, luta, tem vida; o `sculpt` dele é a cabeça). Atrás dele vem uma cadeia de juntas do corpo procedural do kit, deitada no chão do nível e desenhada como uma curva grossa:
+  ```ts
+  serpent: { spec: cabeca, hp: 6, tail: { joints: 12, length: 4.2, width: 0.62, color: '#2f7a5a', pigment: [[0, '#2f7a5a'], [1, '#5fc08a']] } }
+  ```
+  - `joints` (3 a 24, padrão 9), `length` (padrão 2,4), `width` (um número afina até um quinto na ponta; uma lista dá a largura de cada junta), `lift` (altura de onde a cabeça puxa, padrão 0,3), `color`, `pigment` (cores ao longo, 0 na cabeça e 1 na ponta).
+  - **É sólido**: outros atores são empurrados para fora dele, então o jogador precisa contornar a serpente. `solid: false` desliga isso.
+  - **Largura mínima**: abaixo de um pixel de arte (cerca de 0,15 unidade) o corpo some na tela. Use `width` de 0,3 ou mais.
+  - Some com o ator quando ele morre e volta inteiro, esticado atrás dele, quando o ator nasce de novo ou quando um save é carregado (a pose do corpo não vai no save).
 - `findPath(navGridFor(game.collision, raio, altura), de, para)` dá uma rota para o seu próprio cérebro: cantos `[x, z]` sobre o chão, sem cortar quinas.
 - Para escrever o seu, olhe `engine/src/game/brains.ts`. **A memória do cérebro fica em `self.data`** (dados simples), nunca em variáveis de fora: o save e o `hash` dependem disso.
 - **Sorte só com `game.rng()`.**
@@ -297,6 +307,7 @@ O que nasce durante um passo começa a agir no seguinte.
 - **Efeitos** (com `effects` ligado), por `game.effects`:
   - `ignite(x, z, raio)` põe o chão em fogo, que se espalha e deixa marca; `effects.weather.rain` contém o fogo;
   - `freeze(x, z, raio, segundos)` congela o chão;
+  - `mark(x, z, raio, força)` escurece o chão em manchas, como as que os golpes deixam (`força` de 0 a 1, padrão 0,6);
   - `fx.sparks(x, y, z, cor, n, velocidade)` e `fx.ring(x, y, z, cor, r0, r1, vida, n)`, onde a cor é um índice da paleta.
 - **HUD e som:** as `hud.lines` aparecem no canto (placar, objetivo), e `hud.message` dá palavras próprias aos eventos.
 - **Coisas que quebram:** caixas, pilares, paredes.
@@ -413,7 +424,7 @@ Quando o `check` não explicar, rode `shot`/`sheet` e **olhe o PNG**.
 |---|---|
 | `engine/src/game/types.ts` | o contrato inteiro (toda definição, todo campo, comentado) |
 | `engine/src/game/game.ts` | o jogo rodando: entidades, ordem do passo |
-| `engine/src/game/combat.ts`, `brains.ts`, `effects.ts` | combate, cérebros, efeitos |
+| `engine/src/game/combat.ts`, `brains.ts`, `effects.ts`, `tails.ts` | combate, cérebros, efeitos, corpos que se arrastam |
 | `engine/src/game/collision.ts` | o mapa de chão e paredes |
 | `engine/src/game/validate.ts` | o `check`: cada código de problema e sua dica |
 | `engine/src/game/save.ts`, `script.ts` | saves e roteiros |

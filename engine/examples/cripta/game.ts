@@ -224,7 +224,7 @@ export default defineGame<CriptaState>({
       return undefined;
     }
   },
-  sounds: { relic: 'respawn', seal: 'crash', call: 'blip', heal: 'save', won: 'respawn', locked: 'blip' },
+  sounds: { relic: 'pickup', seal: 'charge', call: 'warning', heal: 'confirm', won: 'respawn', locked: 'blip' },
   init(game) {
     const d = dungeonOf(game.world),
       p = plan(d);

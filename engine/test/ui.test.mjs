@@ -65,6 +65,26 @@ test("the fight's events make its sounds", () => {
   );
 });
 
+test("stage 27: every recipe sound is the kit's sound recipe, in distinct takes; an unknown sound is flagged", () => {
+  const SR = loadInk().KIT.procedural.mediaGraph.soundRecipe;
+  for (const name of Object.keys(AUDIO.RECIPES)) {
+    const takes = AUDIO.recipeTakes(SR, name, 48000).map(r => SR.render(r).value);
+    assert.equal(takes.length, AUDIO.TAKES, name);
+    for (const t of takes) {
+      assert.equal(t.sampleRate, 48000);
+      assert.ok(t.samples.length > 48000 * 0.1 && t.samples.length < 48000 * 2, `${name}: ${t.samples.length} samples`);
+      assert.ok(t.samples.some(v => Math.abs(v) > 0.1), `${name}: silent`);
+    }
+    const sums = takes.map(t => t.samples.reduce((s, v) => s + Math.abs(v), 0).toFixed(3));
+    assert.equal(new Set(sums).size, takes.length, `${name}: the takes differ`);
+    // seeded: the same takes every time
+    assert.deepEqual(AUDIO.recipeTakes(SR, name, 48000), AUDIO.recipeTakes(SR, name, 48000));
+  }
+  for (const n of AUDIO.RECIPE_SOUNDS) assert.ok(AUDIO.SOUND_NAMES.includes(n));
+  const V = G.checkDefinition({ ...fight, sounds: { coin: 'pickup', door: 'creak' } });
+  assert.deepEqual(V.filter(p => p.code === 'sound').map(p => p.where), ['sounds.door']);
+});
+
 test('a save puts a fresh game back where it was; the same save and script give the same game', () => {
   const at4 = H.runHeadless(fight, loadInk(), farol, fightScript, 4).game;
   const save = JSON.parse(JSON.stringify(G.saveGame(at4))); // through JSON, as it is kept

@@ -204,7 +204,7 @@ export default defineGame<ArenaState>({
       return undefined;
     }
   },
-  sounds: { wave: 'blip', call: 'blip', won: 'respawn', heal: 'save' },
+  sounds: { wave: 'warning', call: 'warning', won: 'respawn', heal: 'confirm' },
   init(game) {
     game.spawnActor({ actor: 'hero', kind: 'player', at: 'start', brain: 'player', tags: ['player'] });
     return { wave: 0, breath: 1.5, kills: 0, falls: 0, warden: null, won: false, lost: false };

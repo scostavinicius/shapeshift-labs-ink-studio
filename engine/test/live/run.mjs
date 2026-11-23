@@ -193,6 +193,8 @@ async function coreChecks() {
       steps: E.game.steps,
       audio: E.sound.ctx ? E.sound.ctx.state : 'none',
       played: { ...E.sound.played },
+      // stage 27: the takes made from the kit's sound recipes (made one per tick after the first key)
+      takes: Object.fromEntries(Object.entries(E.sound.takes).map(([n, t]) => [n, t.length])),
       messages: document.getElementById('hud-messages').dataset.text
     };
   });
@@ -220,14 +222,14 @@ async function coreChecks() {
     `  HUD          ${hudSamples.length} samples, hearts = health in all: ${hudSamples.map(x => x.shown).join(' ')}  ${hudFollows ? 'ok' : 'FAILED'}`
   );
   console.log(
-    `  sound        context ${left.audio}, played ${JSON.stringify(left.played)}  ${left.audio === 'running' && left.played.swing > 0 ? 'ok' : 'FAILED'}`
+    `  sound        context ${left.audio}, played ${JSON.stringify(left.played)}  ${left.audio === 'running' && left.played.swing > 0 && left.takes.hit > 0 ? 'ok' : 'FAILED'}; kit takes ${JSON.stringify(left.takes)}`
   );
   console.log(
     `  save/reload  left at (${left.pos.map(v => v.toFixed(2))}) hp ${left.hp}${left.down ? ' (down)' : ''}, step ${left.steps}; ` +
       `came back at (${back.pos ? back.pos.map(v => v.toFixed(2)) : '-'}) hp ${back.hp} from the save of step ${back.steps}; ` +
       `HUD shows ${back.shown}; "${(back.welcome || '').split(String.fromCharCode(10)).join(' / ')}"  ${restored ? 'ok' : 'FAILED'}`
   );
-  if (!hudFollows || !restored || left.audio !== 'running') failed = true;
+  if (!hudFollows || !restored || left.audio !== 'running' || !(left.takes.hit > 0)) failed = true;
   await page.screenshot({ path: path.join(OUT, 'farol-fight-hud.png') });
 
   // stage 10: the arena played from start to end in the browser, in real time, by its winning script

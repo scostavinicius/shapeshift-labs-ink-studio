@@ -1,6 +1,8 @@
 // Sound (stage 8): WebAudio, three channels (master, effects, music) each with its own volume, the volumes kept in the
-// browser. No sound files: every sound is made on the spot from oscillators and noise, in the spirit of the pixel art
-// (and so the engine still has nothing to download). The game's events become sounds between steps (game.takeEvents()),
+// browser. No sound files: every sound is made on the spot, in the spirit of the pixel art (and so the engine still has
+// nothing to download). Most come from oscillators and noise here; since stage 27 the toolkit's sound recipes
+// (KIT.procedural.mediaGraph.soundRecipe: seeded one-shots) make 'hit' and the recipe sounds (impact, pickup, jump,
+// charge, confirm, warning), each in a few takes played in turn, so the same blow does not sound the same twice running. The game's events become sounds between steps (game.takeEvents()),
 // never inside one: the sound's own randomness must not touch the game's dice.
 //
 // Browsers only let a page make sound after the player has done something (a key, a click): the context is made then.
@@ -30,8 +32,37 @@ export const DEFAULT_SOUNDS: Record<string, string> = {
   break: 'crash'
 };
 
-/** the sounds the synthesizer knows */
-export const SOUND_NAMES = ['swing', 'hit', 'death', 'respawn', 'blip', 'save', 'crash'] as const;
+/** the sounds made by the toolkit's sound recipes (stage 27): each is the recipe family of the same name */
+export const RECIPE_SOUNDS = ['impact', 'pickup', 'jump', 'charge', 'confirm', 'warning'] as const;
+type RecipeSound = (typeof RECIPE_SOUNDS)[number];
+/** which recipe makes each sound that has one: 'hit' is an impact, a little lower and drier */
+export const RECIPES: Record<string, { family: RecipeSound; seed: number; shape?: Record<string, number> }> = {
+  hit: { family: 'impact', seed: 11, shape: { pitchSemitones: -3, decay: 0.7 } },
+  impact: { family: 'impact', seed: 23 },
+  pickup: { family: 'pickup', seed: 5 },
+  jump: { family: 'jump', seed: 9 },
+  charge: { family: 'charge', seed: 3 },
+  confirm: { family: 'confirm', seed: 2 },
+  warning: { family: 'warning', seed: 4 }
+};
+/** takes of each recipe sound: the recipe itself and bounded variations of it, played in turn */
+export const TAKES = 4;
+
+/**
+ * The recipes of a recipe sound's takes (no audio: what tests check): the sound's own recipe and TAKES - 1 bounded
+ * variations of it (the kit's mutate), all seeded, so they are the same every time; render each with SR.render.
+ */
+export function recipeTakes(SR: RecipeApi, name: string, sampleRate: number): Record<string, unknown>[] {
+  const r = RECIPES[name];
+  if (!r) throw new Error(`no recipe sound "${name}"`);
+  const base: Record<string, unknown> = { format: SR.format, version: 1, family: r.family, seed: r.seed, render: { sampleRate } };
+  if (r.shape) base.shape = r.shape;
+  const variations = SR.mutate(base, { seed: r.seed * 7 + 1, count: TAKES - 1 }).value as Record<string, unknown>[];
+  return [base, ...variations].map(v => ({ ...v, render: { ...(v.render as object), sampleRate } }));
+}
+
+/** the sounds the engine knows */
+export const SOUND_NAMES = ['swing', 'hit', 'death', 'respawn', 'blip', 'save', 'crash', ...RECIPE_SOUNDS] as const;
 export type SoundName = (typeof SOUND_NAMES)[number];
 
 /** Which sounds a batch of events makes, in order (no DOM, no audio: what tests check). */
@@ -68,6 +99,9 @@ export class Sound {
   private nextBeat = 0;
   private beat = 0;
   private off: (() => void)[] = [];
+  /** the rendered takes of each recipe sound (a few ms each, made after the context exists) and which plays next */
+  private takes: Record<string, AudioBuffer[]> = {};
+  private nextTake: Record<string, number> = {};
 
   constructor(private extraSounds: Record<string, string> = {}) {
     this.volumes = readVolumes();
@@ -113,6 +147,7 @@ export class Sound {
       }
       this.noise = n;
       this.apply();
+      this.renderTakes();
     }
     if (this.ctx.state === 'suspended') void this.ctx.resume();
     this.music();
@@ -175,6 +210,60 @@ export class Sound {
     }
   }
 
+  /** The toolkit's sound recipes, or null when the page's kit has none (then 'hit' falls back to the synthesizer). */
+  private recipes(): RecipeApi | null {
+    const K = (window as unknown as { INK?: { KIT?: any } }).INK?.KIT;
+    return K?.procedural?.mediaGraph?.soundRecipe ?? null;
+  }
+
+  /**
+   * Render every take, one per tick (5 to 25 ms each), so no frame is held up for long. A sound played before its
+   * takes are all made plays the ones it has; one with none yet makes its first take on the spot.
+   */
+  private renderTakes(): void {
+    if (!this.recipes()) return;
+    const todo = Object.keys(RECIPES).flatMap(n => Array.from({ length: TAKES }, () => n));
+    const next = () => {
+      const name = todo.shift();
+      if (!name) return;
+      this.addTake(name);
+      setTimeout(next, 0);
+    };
+    setTimeout(next, 0);
+  }
+
+  /** the recipes of a sound's takes: the recipe itself and bounded variations of it (seeded: the same every time) */
+  private plans: Record<string, Record<string, unknown>[] | null> = {};
+
+  /** Make the next take of a recipe sound at the context's own sample rate; false when there is none left (or no kit). */
+  private addTake(name: string): boolean {
+    const SR = this.recipes(),
+      ctx = this.ctx,
+      r = RECIPES[name];
+    if (!SR || !ctx || !r || this.plans[name] === null) return false;
+    const have = (this.takes[name] ||= []);
+    if (have.length >= TAKES) return false;
+    try {
+      const sampleRate = Math.min(96000, Math.max(8000, Math.round(ctx.sampleRate)));
+      const plan = (this.plans[name] ||= recipeTakes(SR, name, sampleRate));
+      const out = SR.render(plan[have.length]).value;
+      const buf = ctx.createBuffer(1, out.samples.length, out.sampleRate);
+      buf.getChannelData(0).set(out.samples);
+      have.push(buf);
+      return true;
+    } catch (err) {
+      console.warn('sound recipe "' + name + '" could not be made; using the synthesizer', err);
+      this.plans[name] = null;
+      return false;
+    }
+  }
+
+  /** the takes of a recipe sound made so far (its first one made now if there is none yet) */
+  private takesOf(name: string): AudioBuffer[] {
+    if (!this.takes[name]?.length) this.addTake(name);
+    return this.takes[name] || [];
+  }
+
   play(name: SoundName, at?: readonly number[]): void {
     this.played[name] = (this.played[name] || 0) + 1;
     const ctx = this.ctx;
@@ -230,6 +319,19 @@ export class Sound {
       s.start(t, Math.random() * 0.5);
       s.stop(t + dur + 0.02);
     };
+    // a recipe sound: its next take (the takes go round in order: the sound's own variety, never the game's dice)
+    const takes = RECIPES[name] ? this.takesOf(name) : null;
+    if (takes && takes.length) {
+      const k = (this.nextTake[name] || 0) % takes.length;
+      this.nextTake[name] = k + 1;
+      const s = ctx.createBufferSource(),
+        g = ctx.createGain();
+      s.buffer = takes[k];
+      g.gain.value = 0.6;
+      s.connect(g).connect(out);
+      s.start(t);
+      return;
+    }
     switch (name) {
       case 'swing':
         hiss(2400, 500, 0.12, 0.35);
@@ -304,4 +406,11 @@ export class Sound {
     if (this.musicTimer !== null) clearInterval(this.musicTimer);
     void this.ctx?.close();
   }
+}
+
+/** what the engine uses of KIT.procedural.mediaGraph.soundRecipe */
+export interface RecipeApi {
+  format: string;
+  render(recipe: unknown): { value: { sampleRate: number; samples: Float32Array } };
+  mutate(recipe: unknown, options: { seed: number; count: number }): { value: unknown[] };
 }

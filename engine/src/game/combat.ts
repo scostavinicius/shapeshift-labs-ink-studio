@@ -115,12 +115,15 @@ export class Combat {
     b.invuln = this.invuln;
     game.emit('hit', { by: a ? a.id : null, target: b.id, damage: dmg, hp: b.hp });
     if (fx && fx.fx) fx.fx.sparks(b.pos[0] - kx * 0.25, b.pos[1] + 0.6, b.pos[2] - kz * 0.25, colour(game, 18), 10, 4, kx, kz);
+    // the blow marks the ground where it landed, a little behind the one thrown back (stage 28)
+    fx?.mark(b.pos[0] - kx * 0.2, b.pos[2] - kz * 0.2, 0.45, 0.55);
     if (b.hp <= 0 && b.deadFor < 0) {
       st.dead = 0;
       st.vx = st.vz = 0;
       b.deadFor = 0;
       game.emit('death', { id: b.id, kind: b.kind, team: b.team, by: a ? a.id : null, at: [b.pos[0], b.pos[1], b.pos[2]] });
       if (fx && fx.fx) fx.fx.ring(b.pos[0], b.pos[1] + 0.1, b.pos[2], colour(game, 17), 0.2, 1.4, 0.45, 24);
+      fx?.mark(b.pos[0], b.pos[2], 0.85, 0.75);
     }
   }
 

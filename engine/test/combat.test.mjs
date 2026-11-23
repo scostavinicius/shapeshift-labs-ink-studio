@@ -237,3 +237,47 @@ test('the ground remembers: a fire scorches the ground splats round it, and the 
   for (let k = 0; k < before.length; k++) if (before[k] !== later[k]) still++;
   assert.ok(still > before.length * 0.8, 'the scorch stays');
 });
+
+test('stage 28: a blow marks the ground where it lands, the same splats every time, and marks: false leaves it bare', () => {
+  const ring = (game, x, z, r) => {
+    const W = game.world,
+      out = [];
+    for (let i = 0; i < W.count; i++) {
+      const o = i * 16;
+      // the ground's splats: still and flat (an actor's own move, and flash when hit)
+      if (Math.hypot(W.data[o] - x, W.data[o + 2] - z) < r && Math.abs(W.data[o + 1]) < 0.06 && !moving.has(i)) out.push(W.data[o + 7]);
+    }
+    return out;
+  };
+  let moving = new Set();
+  const fightAt = marks => {
+    const game = arena({ effects: { fx: 0, debris: 0, eco: false, marks } });
+    game.spawnActor({ actor: 'hero', at: [0, 0, 0], brain: 'player' });
+    const dummy = game.spawnActor({ actor: 'dummy', at: [1, 0, 0], brain: G.dummy });
+    game.run(0.3);
+    // whatever moves between two steps is not ground
+    const W = game.world,
+      was = W.data.slice();
+    game.runSteps(1);
+    moving = new Set();
+    for (let i = 0; i < W.count; i++) if (W.data[i * 16] !== was[i * 16] || W.data[i * 16 + 1] !== was[i * 16 + 1]) moving.add(i);
+    for (const e of game.entities) for (let i = 0; i < W.count; i++) if (Math.hypot(W.data[i * 16] - e.pos[0], W.data[i * 16 + 2] - e.pos[2]) < 0.45 && W.data[i * 16 + 1] > 0.02) moving.add(i);
+    const before = ring(game, 0.9, 0, 1.2),
+      far = ring(game, -6, -6, 0.6);
+    const hp = dummy.hp;
+    swing(game, 0);
+    assert.ok(dummy.hp < hp || dummy.deadFor >= 0, 'the blow landed');
+    const after = ring(game, 0.9, 0, 1.2);
+    let changed = 0;
+    for (let k = 0; k < before.length; k++) if (before[k] !== after[k]) changed++;
+    assert.deepEqual(ring(game, -6, -6, 0.6), far, 'far away nothing changed');
+    return { changed, of: before.length, hash: game.hash() };
+  };
+  const a = fightAt(true),
+    b = fightAt(true),
+    off = fightAt(false);
+  assert.ok(a.changed > 5 && a.changed < a.of, `${a.changed} of ${a.of} ground splats marked: a speckle, not a disc`);
+  assert.equal(a.changed, b.changed);
+  assert.equal(a.hash, b.hash, 'the same blow marks the same splats');
+  assert.equal(off.changed, 0, 'marks: false');
+});

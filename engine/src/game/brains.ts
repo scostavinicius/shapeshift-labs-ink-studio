@@ -100,6 +100,33 @@ export function chaser(o: ChaserOptions = {}): Brain {
   };
 }
 
+export interface SlitherOptions {
+  /** how far either side of its way it swings, in degrees (default 40) */
+  swing?: number;
+  /** swings a second, each way and back (default 0.9) */
+  rate?: number;
+}
+
+/**
+ * A serpent's way of going (stages 29-30): another brain's walking, swung from side to side as it goes, so a trailing
+ * body (actors.<name>.tail) lies in curves behind it. Swinging only bends where it walks; a swing at a foe, a turn to
+ * face one, and standing still are left as they are. Its phase comes from the game's clock and the actor's id: no dice.
+ */
+export function slither(brain: Brain, o: SlitherOptions = {}): Brain {
+  const swing = ((o.swing ?? 40) * Math.PI) / 180,
+    rate = o.rate ?? 0.9;
+  return (self, game, dt) => {
+    const out = brain(self, game, dt);
+    const x = out.move ?? 0,
+      z = out.mz ?? 0;
+    if (out.attack || (x === 0 && z === 0)) return out;
+    const a = swing * Math.sin(2 * Math.PI * rate * game.t + self.id * 1.7),
+      c = Math.cos(a),
+      s = Math.sin(a);
+    return { ...out, move: x * c - z * s, mz: x * s + z * c };
+  };
+}
+
 /** A brain that does nothing: a training dummy. */
 export const dummy: Brain = () => ({});
 

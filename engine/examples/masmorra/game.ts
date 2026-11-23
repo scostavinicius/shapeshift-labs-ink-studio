@@ -104,7 +104,7 @@ export default defineGame<MasmorraState>({
       return undefined;
     }
   },
-  sounds: { won: 'respawn', wake: 'blip' },
+  sounds: { won: 'respawn', wake: 'warning' },
   init(game) {
     const d = dungeonOf(game.world);
     game.spawnActor({ actor: 'hero', kind: 'player', at: [d.start[0], null as unknown as number, d.start[1]], brain: 'player', tags: ['player'] });

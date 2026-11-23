@@ -113,7 +113,8 @@ const freshInk = () => ({ ...require('./scripts/kit-node.cjs').loadKit(), extra:
 
 /** drawing options shared by shot and sheet: --px N (art-pixel size) and --coverage legacy|continuous|soft */
 function drawOpts(o) {
-  const out = {};
+  // curves as the page draws them (its frame's curveMode: 'splats', stage 29): carrier splats, not the finite-curve pass
+  const out = { curveMode: 'splats' };
   if (o.px !== undefined) {
     const px = +o.px;
     if (!Number.isInteger(px) || px < 1) die('--px wants a whole number of screen pixels per art pixel: --px 2');
@@ -320,7 +321,7 @@ async function browserParity(def, file, o, rt) {
       const got = await page.evaluate(spec => window.PARITY.game(spec), { game: name, input: scriptRel, t, looks: ['default'], w: 900, h: 620 });
       const script = JSON.parse(fs.readFileSync(path.join(exDir, scriptRel), 'utf8'));
       const { game } = rt.runHeadless(def, freshInk(), sceneOf(def), script, t, { bones: 'cpu' });
-      const ref = R.render(game.world, { t: game.t, ...game.core.camera.view(), w: 900, h: 620 });
+      const ref = R.render(game.world, { t: game.t, ...game.core.camera.view(), w: 900, h: 620, curveMode: 'splats' });
       const shot = got.shots[0];
       const s = compare(ref, shot.frame.w === ref.w && shot.frame.h === ref.h ? Buffer.from(shot.frame.rgb, 'base64') : null, [ref.rgb[0], ref.rgb[1], ref.rgb[2]]);
       const same = got.hash === game.hash();

@@ -7,6 +7,7 @@ import { CollisionBuilder, makeCollision, splatBox, type BakeStats } from './col
 import type { Box, Collision, GameDef } from './types';
 import { effectOptions, GameEffects, reservePools, type EffectPools } from './effects';
 import { setAssetKit } from './assets';
+import { Tail } from './tails';
 
 /** One character of an actor pool, made at build time. */
 export interface Slot {
@@ -16,6 +17,8 @@ export interface Slot {
   at: number;
   total: number;
   used: boolean;
+  /** the body that trails it (ActorDef.tail), its splats right after the character's */
+  tail?: Tail;
 }
 
 export interface Level {
@@ -46,6 +49,7 @@ export function hideSlot(world: World, s: Slot): void {
     rows = world.anim && world.anim.rows;
   for (let i = s.at; i < s.at + s.total; i++) D[i * 16 + 1] = -99;
   markSlot(rows, s);
+  s.tail?.hide(world);
 }
 
 /** Mark the rows of a character's splats as changed (K.character writes them without saying so). */
@@ -94,7 +98,8 @@ export function buildLevel(def: GameDef<any>, ink: Ink, sceneFn: SceneFn, seed: 
             const ch = K.character(b, spec, 0);
             const total = b.count() - at;
             if (total !== ch.total) throw new Error(`${def.id}: actor ${name} made ${total} splats but says ${ch.total}`);
-            slots.push({ actor: name, ch, at, total, used: false });
+            const tail = a.tail ? new Tail(K, b, a.tail, () => collision!) : undefined;
+            slots.push({ actor: name, ch, at, total, used: false, ...(tail && { tail }) });
           }
         }
         const eo = effectOptions(def.effects);

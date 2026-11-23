@@ -79,7 +79,7 @@ function references(c) {
           t,
           yaw: dy,
           look,
-          img: R.render(world, { t, yaw: world.cam.yaw + dy, w: W, h: H, colored: look === 'colored' })
+          img: R.render(world, { t, yaw: world.cam.yaw + dy, w: W, h: H, colored: look === 'colored', curveMode: 'splats' })
         });
   }
   return out;
@@ -96,7 +96,7 @@ async function gameReference(g) {
   return {
     hash: game.hash(),
     steps: game.steps,
-    imgs: LOOKS.map(look => R.render(game.world, { t: game.t, ...view, w: W, h: H, colored: look === 'colored' }))
+    imgs: LOOKS.map(look => R.render(game.world, { t: game.t, ...view, w: W, h: H, colored: look === 'colored', curveMode: 'splats' }))
   };
 }
 
