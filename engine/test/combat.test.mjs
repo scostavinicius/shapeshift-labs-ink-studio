@@ -10,10 +10,10 @@ import { flatScene, loadInk, loadTs, ROOT, sceneFn } from './load.mjs';
 
 const G = await loadTs('src/game/index.ts');
 const H = await loadTs('src/headless/run.ts');
-const fightMod = await loadTs('examples/farol-fight/game.ts');
+const fightMod = await loadTs('test/fixtures/fight/game.ts');
 const { walker } = await loadTs('examples/farol-walk/game.ts');
 const fight = fightMod.default;
-const fightScript = JSON.parse(fs.readFileSync(path.join(ROOT, 'examples', 'farol-fight', 'fight.json'), 'utf8'));
+const fightScript = JSON.parse(fs.readFileSync(path.join(ROOT, 'test', 'fixtures', 'fight', 'fight.json'), 'utf8'));
 
 /** run a game with a script, step by step, collecting every event with the time it happened */
 function play(def, scene, script, seconds) {

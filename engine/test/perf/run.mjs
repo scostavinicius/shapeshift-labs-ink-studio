@@ -5,7 +5,7 @@
 //   npm run perf                                  every case
 //   npm run perf -- --only dense                  cases whose name contains "dense"
 //   npm run perf -- --seconds 12                  how long to measure each (default 10, starting 6 s in)
-//   npm run perf -- --games arena,yard          which games (default arena,arena-dense; each must play arena/win.json)
+//   npm run perf -- --games arena               which games (default arena; each must play arena/win.json)
 //   npm run perf -- --query '&sort=page'         added to every page address (compare variants: &renderer=old, &sort=page)
 //
 // Two graphics back-ends: the machine's graphics card ("hw"), and SwiftShader ("sw"), Chromium's software renderer on the
@@ -28,7 +28,7 @@ const only = opt('only'),
   seconds = +(opt('seconds') || 10),
   browserName = opt('browser') || 'msedge',
   query = opt('query') || '',
-  games = (opt('games') || 'arena,arena-dense').split(',');
+  games = (opt('games') || 'arena').split(',');
 
 const CASES = [];
 for (const backend of ['hw', 'sw'])

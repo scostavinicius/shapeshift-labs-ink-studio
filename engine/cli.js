@@ -3,7 +3,7 @@
 // with one line of JSON on stdout (what it made, what it found), so whoever runs it can read the result without parsing
 // the rest.
 //
-//   node engine/cli.js new   <name> [--from blank|walk|fight]           a new game in engine/examples/<name>/, ready to run
+//   node engine/cli.js new   <name> [--from blank|walk|fight|serpent]         a new game in engine/examples/<name>/, ready to run
 //   node engine/cli.js check <game> [--seconds 2] [--parity [--input s.json] [--t 3] [--browser chrome]]
 //                                                                        every mistake the validator finds; --parity also
 //                                                                        draws it in a browser and compares with Node
@@ -29,7 +29,7 @@ const R = require(path.join(REPO, 'cli', 'render.js'));
 const PNG = require(path.join(REPO, 'cli', 'png.js'));
 
 const USAGE = `usage: node engine/cli.js <command> <game> [options]
-  new   <name> [--from blank|walk|fight|dungeon]  start a game in engine/examples/<name>/
+  new   <name> [--from blank|walk|fight|serpent]  start a game in engine/examples/<name>/
   check <game> [--seconds 2] [--parity [--input s.json] [--t 3]]
   shot  <game> [--input s.json] [--t 5] [--out f.png] [--state st.json] [--save s.json] [--load s.json] [--trace 0.5] [--colored] [--no-hud]
   sheet <game> [--input s.json] [--times 0,1,2,4] [--cols 4] [--out f.png] [--colored]
@@ -114,7 +114,8 @@ const freshInk = () => ({ ...require('./scripts/kit-node.cjs').loadKit(), extra:
 /** drawing options shared by shot and sheet: --px N (art-pixel size) and --coverage legacy|continuous|soft */
 function drawOpts(o) {
   // curves as the page draws them (its frame's curveMode: 'splats', stage 29): carrier splats, not the finite-curve pass
-  const out = { curveMode: 'splats' };
+  // (with curves in the scene every splat goes through the renderer's fragment count: the colored look needs more than its default)
+  const out = { curveMode: 'splats', fragmentBudget: 2e6 };
   if (o.px !== undefined) {
     const px = +o.px;
     if (!Number.isInteger(px) || px < 1) die('--px wants a whole number of screen pixels per art pixel: --px 2');
@@ -321,7 +322,7 @@ async function browserParity(def, file, o, rt) {
       const got = await page.evaluate(spec => window.PARITY.game(spec), { game: name, input: scriptRel, t, looks: ['default'], w: 900, h: 620 });
       const script = JSON.parse(fs.readFileSync(path.join(exDir, scriptRel), 'utf8'));
       const { game } = rt.runHeadless(def, freshInk(), sceneOf(def), script, t, { bones: 'cpu' });
-      const ref = R.render(game.world, { t: game.t, ...game.core.camera.view(), w: 900, h: 620, curveMode: 'splats' });
+      const ref = R.render(game.world, { t: game.t, ...game.core.camera.view(), w: 900, h: 620, curveMode: 'splats', fragmentBudget: 2e6 });
       const shot = got.shots[0];
       const s = compare(ref, shot.frame.w === ref.w && shot.frame.h === ref.h ? Buffer.from(shot.frame.rgb, 'base64') : null, [ref.rgb[0], ref.rgb[1], ref.rgb[2]]);
       const same = got.hash === game.hash();
@@ -421,7 +422,7 @@ async function record(o) {
 
 // ---------------------------------------------------------------------------------------------------------- new
 
-const TEMPLATES = { blank: 'blank', walk: 'farol-walk', fight: 'farol-fight', dungeon: 'masmorra' };
+const TEMPLATES = { blank: 'blank', walk: 'farol-walk', fight: 'arena', serpent: 'ninho' };
 
 function newGame(o) {
   const name = o._[1];
@@ -438,9 +439,9 @@ function newGame(o) {
     const src = path.join(ENGINE, 'examples', TEMPLATES[from]);
     for (const f of fs.readdirSync(src)) {
       let text = fs.readFileSync(path.join(src, f), 'utf8');
-      // the dungeon names itself in several places (scene, game, saves, the robot's script path)
-      if (from === 'dungeon') text = text.replace(/'masmorra'/g, `'${name}'`).replace(/masmorra\//g, `${name}/`);
-      else if (f === 'game.ts') text = text.replace(/id: '[^']+'/, `id: '${name}'`).replace(/from '\.\.\/farol-walk\/game'/g, "from '../farol-walk/game'");
+      // the game names itself (its id, its scene's id, the robot's script path): each becomes the new name
+      const was = TEMPLATES[from];
+      text = text.split(`id: '${was}'`).join(`id: '${name}'`).split(`examples/${was}/`).join(`examples/${name}/`);
       fs.writeFileSync(path.join(dir, f), text);
     }
   }

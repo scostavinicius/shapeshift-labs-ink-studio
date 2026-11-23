@@ -145,30 +145,31 @@ async function coreChecks() {
   if (!walkOK) failed = true;
   await page.screenshot({ path: path.join(OUT, 'farol-walk.png') });
 
-  // stage 7: the grunts come for a player who stands still, and hit it; J swings back
-  await open('game=farol-fight');
-  for (let k = 0; k < 10; k++) {
+  // stage 7: the serpent comes for a player who stands still, and bites; J swings back
+  await open('game=ninho');
+  for (let k = 0; k < 22; k++) {
     await page.keyboard.press('KeyJ');
     await page.waitForTimeout(400);
   }
   const f = await page.evaluate(() => {
     const E = window.ENGINE,
       g = E.game;
-    return { fps: E.info.fps, frameMs: E.info.frameMs, t: g.t, hp: g.player ? g.player.hp : null, state: g.state, grunts: g.byTag('enemy').map(e => e.hp) };
+    return { fps: E.info.fps, frameMs: E.info.frameMs, t: g.t, hp: g.player ? g.player.hp : null, down: !g.player, state: g.state, foes: g.byTag('enemy').map(e => e.hp) };
   });
-  const fightOK = f.fps >= 55 && (f.hp < 5 || f.state.deaths > 0) && (f.state.kills > 0 || f.grunts.some(h => h < 3));
+  // (the player's own health going down is the HUD check's: it may already have died and stood up again here)
+  const fightOK = f.fps >= 55 && (f.state.won || f.foes.some(h => h < 6));
   console.log(
-    `  farol-fight  4 s standing and swinging: player hp ${f.hp}, grunts' hp ${JSON.stringify(f.grunts)}, ${JSON.stringify(f.state)} · ` +
+    `  ninho        9 s standing and swinging: player hp ${f.hp}, serpent's hp ${JSON.stringify(f.foes)}, ${JSON.stringify(f.state)} · ` +
       `${f.fps} fps, ${f.frameMs} ms a frame  ${fightOK ? 'ok' : 'FAILED'}`
   );
   if (!fightOK) failed = true;
-  await page.screenshot({ path: path.join(OUT, 'farol-fight.png') });
+  await page.screenshot({ path: path.join(OUT, 'ninho.png') });
 
   // stage 8: the HUD follows the health; the page saves itself, and a reload brings the player back where it was
-  await open('game=farol-fight&fresh=1');
+  await open('game=ninho&fresh=1');
   await page.keyboard.press('KeyJ'); // (a key: the browser lets the page make sound from now on)
   const hudSamples = [];
-  for (let k = 0; k < 24; k++) {
+  for (let k = 0; k < 70; k++) {
     await page.waitForTimeout(150);
     hudSamples.push(
       await page.evaluate(() => {
@@ -177,9 +178,9 @@ async function coreChecks() {
         return { hp: g.player.deadFor >= 0 ? 0 : g.player.hp, shown: +h.dataset.hp, down: g.player.deadFor >= 0 };
       })
     );
-    if (hudSamples[hudSamples.length - 1].hp < 5 && k > 4) break;
+    if (hudSamples[hudSamples.length - 1].hp < 6 && k > 4) break;
   }
-  // walk away from the grunts for a moment, then leave the page as it is
+  // walk away from the serpent for a moment, then leave the page as it is
   await page.keyboard.down('KeyW');
   await page.waitForTimeout(500);
   await page.keyboard.up('KeyW');
@@ -199,7 +200,7 @@ async function coreChecks() {
     };
   });
   // open it again (without &fresh=1, which forgets the save): leaving the page saves it
-  await page.goto(server.url + '?game=farol-fight');
+  await page.goto(server.url + '?game=ninho');
   await page.waitForFunction(() => window.ENGINE && window.ENGINE.info.fps > 0, null, { timeout: 60000 });
   const back = await page.evaluate(() => {
     const E = window.ENGINE,
@@ -215,7 +216,7 @@ async function coreChecks() {
       welcome: document.getElementById('hud-messages').dataset.text
     };
   });
-  const hudFollows = hudSamples.every(x => x.hp === x.shown) && hudSamples.some(x => x.hp < 5);
+  const hudFollows = hudSamples.every(x => x.hp === x.shown) && hudSamples.some(x => x.hp < 6);
   const moved = back.pos ? Math.hypot(back.pos[0] - left.pos[0], back.pos[2] - left.pos[2]) : Infinity;
   const restored = back.loaded && back.steps >= left.steps && moved < 0.5 && (left.down || back.hp === left.hp) && back.shown === back.now;
   console.log(
@@ -230,7 +231,7 @@ async function coreChecks() {
       `HUD shows ${back.shown}; "${(back.welcome || '').split(String.fromCharCode(10)).join(' / ')}"  ${restored ? 'ok' : 'FAILED'}`
   );
   if (!hudFollows || !restored || left.audio !== 'running' || !(left.takes.hit > 0)) failed = true;
-  await page.screenshot({ path: path.join(OUT, 'farol-fight-hud.png') });
+  await page.screenshot({ path: path.join(OUT, 'ninho-hud.png') });
 
   // stage 10: the arena played from start to end in the browser, in real time, by its winning script
   await open('game=arena&replay=arena/win.json');

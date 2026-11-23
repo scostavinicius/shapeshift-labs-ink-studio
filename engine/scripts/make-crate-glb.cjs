@@ -1,6 +1,6 @@
 // Writes a small textured GLB, a wooden crate (1 x 1 x 1, a 16 x 16 plank texture embedded as PNG), made from nothing
 // but code: the engine's own sample model for the GLB import (stage 24), free of any licence.
-//   node engine/scripts/make-crate-glb.cjs engine/examples/masmorra/assets/crate.glb
+//   node engine/scripts/make-crate-glb.cjs engine/assets/crate.glb
 const fs = require('node:fs');
 const path = require('node:path');
 const PNG = require(path.join(__dirname, '..', '..', 'cli', 'png.js'));

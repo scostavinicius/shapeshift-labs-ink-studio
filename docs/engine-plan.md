@@ -511,7 +511,7 @@ Em 2026-11-23 entraram mais 473 commits do original (merge `a486e1a0`). A maior 
 | 28 | Marcas de golpe nas superfícies (`surfaceDecals` #480, ou o equivalente que caiba no renderizador dos jogos) | ✅ |
 | 29 | Fios: grama, cabelo, capas (`curveSplats` #451 e seguintes), presos ao corpo ou à física | ✅ (fios grossos; finos descartados) |
 | 30 | Criaturas procedurais: corpo ramificado (`proceduralBody` #428) e pés por `motionMatching` | ✅ (corpo que se arrasta; pés ficam de fora) |
-| 31 | Missões declarativas: o formato de história do kit (`StoryDocument`) com um executor da engine | ⏳ |
+| 31 | Missões declarativas: o formato de história do kit (`StoryDocument`) com um executor da engine | ⏳ (ver o plano abaixo) |
 
 Mesmo critério das etapas 12+: cada coisa é medida no navegador; se custar caro ou não aparecer no renderizador dos jogos, fica registrada como "medida e descartada", com o motivo.
 
@@ -590,6 +590,88 @@ As duas viraram uma coisa só: um corpo de curva grossa preso a uma cadeia físi
 - **Estado de jogo declarativo (`pu24`) e controladores de personagem (`pu88`):** duplicam ou conflitam com `def.step` e `K.character`.
 - **Multidões (`pu36-crowd`):** querem ser donas do movimento, como o `K.character`.
 - **Código do repositório do cobanov:** o ink-studio já cobre aquele pipeline.
+
+## Etapas 31+ — o que ficou de fora, e as missões (plano de 2026-11-23)
+
+### Antes: os exemplos foram reduzidos
+
+Ficaram três jogos em `engine/examples/`: **farol-walk** (andar pela ilha do farol), **arena** (o jogo completo) e **ninho** (a serpente). Os outros saíram:
+- **farol-fight** virou fixture de teste em `engine/test/fixtures/fight/`: os testes de combate, HUD e save ainda jogam essa luta pelo roteiro dela. O teste ao vivo e a paridade passaram a usar o ninho.
+- **masmorra, cripta, yard, beacons e arena-dense** foram removidos, com os testes próprios de masmorra e cripta. O gerador de masmorras, o `hunter`, as coisas que quebram e os modelos GLB continuam na engine, com os testes deles (`dungeon`, `hunter`, `breakables`, `assets`).
+- **`cli new`** tem os modelos `blank`, `walk` (farol-walk), `fight` (arena) e `serpent` (ninho).
+- **`npm run perf`** mede só a arena por padrão. A medição com 300 mil splats (arena-dense) saiu junto.
+- **A paridade do ninho fica em 83%** (os outros jogos, 98% a 99%). A simulação é a mesma (mesmo `hash`) e a serpente bate. A diferença é o quadro inteiro do terminal deslocado cerca de um pixel: com curvas na cena, o render do terminal do kit (`cli/render.js`) troca de caminho de desenho e também precisa de `fragmentBudget` maior no estilo `colored`. Fica como limitação conhecida, dentro do mínimo de 75%.
+
+### O plano
+
+| Etapa | O quê | Estado |
+|---|---|---|
+| 31 | **Missões declarativas**: um executor da engine para o formato de história do kit | ⏳ |
+| 32 | **A pose do corpo no save**: a serpente volta exatamente como estava | ⏳ |
+| 33 | **Corpos com galhos**: mais de uma cadeia por ator (barbatanas, tentáculos, asas) | ⏳ |
+| 34 | **Criaturas com pernas**: pés por `K.gait` com `motionMatching`, pernas desenhadas como curvas | ⏳ |
+| 35 | **Fios finos que apareçam**: grama, cabelo e capas que funcionem na escala de pixel dos jogos | ⏳ (pesquisa) |
+
+A ordem vai do que mais ajuda quem escreve jogos ao que tem mais risco. A 35 começa medindo e pode terminar descartada, como a 28 com as marcas do kit.
+
+### Etapa 31 — Missões declarativas
+
+**Faz sentido?** Sim. Hoje cada missão é código no `def.step` (a cripta tinha relíquias, selo, chefe e saída escritos à mão), e é onde uma IA mais erra. Com a missão em dados:
+- o `check` consegue validá-la antes de rodar;
+- o progresso entra no save e no `hash` sem código do jogo;
+- o mesmo executor serve para todos os jogos.
+
+**O formato:** `ink-studio/story` versão 1 ([docs/story-documents.md](story-documents.md)). Um documento tem histórias; cada história tem `triggers` que a abrem, `stages` com transições (`next`) e `outcomes` que a encerram. Os gatilhos olham eventos (`event.kind` com `where` sobre os dados) e estado (`state` com `when`: `path`, `op`, `value`).
+
+**Por que um executor próprio:** o do kit roda sobre `K.world` (sistemas, contas, lugares), que a engine não usa. A validação do kit não depende disso: `validateStoryDocument` e `preflightStoryDocument` acham referências quebradas, estágios inalcançáveis e laços sem saída sem rodar nada, e a engine pode chamar as duas no `check`.
+
+**O que entra:**
+- `def.story`: o documento (JSON no diretório do jogo, ou objeto no `game.ts`).
+- **Ligação com a engine:** `event.kind` casa com os eventos do jogo (`death`, `hit`, `break`, os de `game.emit`, a entrada num trigger); `state` lê `game.state` e contagens simples (inimigos vivos de uma tag, vida do jogador).
+- **Efeitos ao entrar num estágio ou num desfecho:** mensagem no HUD, som, `game.emit`, nascer atores de um ponto, quebrar uma coisa marcada, vitória e derrota.
+- **HUD:** o estágio atual de cada história aberta vira a linha de objetivo, sem `hud.lines`.
+- **Save e hash:** o progresso (histórias abertas, estágio, contagens) fica no estado do executor, guardado no save.
+- **`check`:** erros da validação do kit, mais nomes de evento, ponto de spawn e ator que o jogo não tem.
+
+**Feito quando:** a arena (ou um jogo novo) ganha uma campanha escrita só em JSON (ondas, chefe, vitória) que o robô vence e que o `check` valida. Um teste quebra o documento e o `check` aponta o campo errado.
+
+**A conferir antes:** quais partes do formato (prazos, papéis, histórias filhas) valem para jogos curtos. O que não servir fica de fora e o `check` avisa se aparecer.
+
+### Etapa 32 — A pose do corpo no save
+
+O save passa a guardar, para cada ator com `tail`, as posições e velocidades das juntas (`solver.motion()` do XPBD), e o load as restaura (`restoreMotion`).
+
+**Feito quando:** salvar no meio de uma curva e carregar dá o mesmo `hash` da partida que não parou (hoje dá outro, porque o corpo volta esticado).
+
+### Etapa 33 — Corpos com galhos
+
+`tail` vira um caso de `body`: várias cadeias por ator, cada uma saindo de uma junta de outra ou de um ponto do próprio ator (girando com o `face` dele). Exemplos: barbatanas ou espinhos ao longo da serpente, um polvo de quatro tentáculos, uma ave com asas.
+- As pontas de galho podem ter um alvo que balança (`drive`), como as barbatanas do exemplo do kit.
+- Cada galho tem largura e cor próprias. A largura mínima de um pixel de arte continua valendo.
+- Galhos podem ser sólidos ou não (`solid`), como o corpo.
+
+**Feito quando:** um exemplo mostra um corpo com pelo menos três galhos se mexendo, com a mesma determinação de hash das etapas 29-30.
+
+### Etapa 34 — Criaturas com pernas
+
+O `K.gait` do kit com `motionMatching` ([docs/motion-matching.md](motion-matching.md)) planeja os passos de 2 a 8 pés: escolhe onde cada pé pousa pela velocidade e pelo rumo pedidos. A engine liga isso a um ator:
+- o ator continua um `K.character` (move, colide, luta), e o `sculpt` dele é o tronco;
+- a cada passo, o gait recebe a posição, o rumo e a velocidade do ator e devolve onde cada pé está;
+- cada perna é uma curva grossa (quadril, joelho por `K.ik2`, pé), desenhada por `curveSplats` como o corpo da serpente;
+- os pés pousam no chão do mapa de colisão.
+
+**Feito quando:** uma aranha ou caranguejo de 6 a 8 pernas anda, vira e luta num exemplo, com os pés presos ao chão enquanto apoiados e o mesmo `hash` em duas partidas.
+
+**A medir:** quanto custa o índice do `motionMatching` por ator e se é determinístico na matemática da engine.
+
+### Etapa 35 — Fios finos que apareçam (pesquisa)
+
+Na etapa 29, folhas e cordas mais finas que um pixel de arte sumiram ou viraram tapete. Antes de construir, medir três saídas:
+1. **Tufos em vez de folhas:** cada tufo de grama é uma curva grossa e curta, que afina e tem cor variada. Pouca quantidade e legível.
+2. **Fios como fitas:** capas e cabelo como poucas fitas largas presas a um osso do personagem e movidas por XPBD (o mesmo driver do corpo).
+3. **Curvas analíticas em poucas quantidades:** o passe de curvas do renderizador desenha fio fino com borda limpa, mas estourou o orçamento por tile com a grama toda. Para algumas dezenas de fios (o cabelo de um personagem) pode caber.
+
+**Feito quando:** pelo menos uma das três aparece bem num jogo, a 60 fps no navegador, ou as três ficam registradas como medidas e descartadas, com o motivo.
 
 ## Resumo de quando usar o Fable
 

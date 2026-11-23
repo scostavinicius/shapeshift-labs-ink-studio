@@ -14,11 +14,11 @@ Todos os comandos abaixo rodam da **raiz do repositório**. Na primeira vez, rod
 escreve → check → shot (ou sheet) → olha o PNG → corrige → repete
 ```
 
-1. **Comece de um modelo:** `node engine/cli.js new meu-jogo` cria `engine/examples/meu-jogo/game.ts` e um roteiro `walk.json`. Há três modelos:
+1. **Comece de um modelo:** `node engine/cli.js new meu-jogo` cria `engine/examples/meu-jogo/game.ts` e um roteiro `walk.json`. Há quatro modelos:
    - `--from blank` (padrão): uma cena própria escrita no arquivo, um herói e um inimigo;
    - `--from walk`: o `farol` com um personagem andando;
-   - `--from fight`: o `farol` com uma luta;
-   - `--from dungeon`: a masmorra completa (fase gerada, tochas, caixas que quebram, inimigos que caçam).
+   - `--from fight`: a arena completa (ondas de inimigos, chefe, cura, robô que vence);
+   - `--from serpent`: o ninho, uma serpente com corpo que se arrasta.
 2. **Confira:** `node engine/cli.js check meu-jogo`. Ele lista **todos** os problemas de uma vez, cada um com o lugar, o que está errado e o que provavelmente se quis (`->`). Só siga em frente com 0 erros.
 3. **Olhe:**
    - `node engine/cli.js shot meu-jogo --input engine/examples/meu-jogo/walk.json --t 3` grava o quadro de 3 s em `engine/out/meu-jogo-3.png`;
@@ -66,18 +66,13 @@ export default defineGame({
 });
 ```
 
-Os três exemplos completos, do menor ao maior:
+Os exemplos, do menor ao maior:
 
 | Exemplo | Mostra |
 |---|---|
 | `engine/examples/farol-walk/` | uma cena pronta, um personagem, colisão (não atravessa o farol nem cai da ilha) |
-| `engine/examples/farol-fight/` | combate, inimigos que perseguem, efeitos (faíscas, pedaços, chão queimado), linhas de HUD |
-| `engine/examples/ninho/` | uma serpente: a cabeça é um ator comum e o corpo é uma cadeia física que se arrasta atrás (`actors.<nome>.tail`), com o cérebro `slither` |
-| `engine/examples/yard/` | **um nível escrito do zero**, um gerador de inimigos durante a partida, um portão que dá a vitória, chão que congela, `def.brains` para o save |
-| `engine/examples/beacons/` | feito por uma IA **sem contexto, lendo só este guia**: acender três faróis com triggers, inimigos que acordam a cada farol aceso, vitória e derrota, e um roteiro (`win.json`) que vence |
 | `engine/examples/arena/` | **o jogo completo de demonstração**: arena circular, três ondas, dois tipos de inimigo, um chefe que chama reforços, cura entre ondas, vitória e derrota, mira assistida, e um **robô** (`bot.ts`) que vence e gravou o `win.json` |
-| `engine/examples/masmorra/` | **tudo o que veio depois**: masmorra gerada pela semente com tochas (`makeDungeonScene`), chuva na primeira sala, caixas de um GLB com textura que quebram (`placeAsset` + `breakables`), ghouls com `hunter()` que patrulham e procuram, um mímico cujo corpo é uma caixa (`placePart`) e um robô que acha a saída. `node engine/cli.js new meu-jogo --from dungeon` começa dela |
-| `engine/examples/cripta/` | **o maior**: objetivos em ordem (3 relíquias, e cada uma acorda inimigos; o selo que se abre com as três; o Guardião, chefe que chama reforços; a saída), poções escondidas dentro de caixas (só se bebe quebrando a caixa), coisas que as regras quebram e um golpe não quebra (`by: ['nobody']`), e onde pôr objetos sem bloquear corredores. O robô (`bot.ts`) faz a campanha toda |
+| `engine/examples/ninho/` | uma serpente: a cabeça é um ator comum e o corpo é uma cadeia física que se arrasta atrás (`actors.<nome>.tail`), com o cérebro `slither` |
 
 **Copie de um deles** em vez de começar de uma folha em branco.
 
@@ -108,7 +103,7 @@ Os três exemplos completos, do menor ao maior:
 
 ## 3. A cena: o nível feito com o kit
 
-Uma cena é `kit => ({ id, name, seed, build(seed) })`, e `build` devolve o mundo pronto. O jeito mais curto é escrevê-la no próprio `game.ts` (é o que o `yard` e o modelo `blank` fazem):
+Uma cena é `kit => ({ id, name, seed, build(seed) })`, e `build` devolve o mundo pronto. O jeito mais curto é escrevê-la no próprio `game.ts` (é o que o modelo `blank` faz):
 
 ```ts
 const PALETTE = [0x0b0d17, 0x1e2230, 0x343a4f, 0x565e78, 0x8790a8, 0x1f3a24, 0x2f5e35, 0x4d8c45, 0x86c05a /* ... */];
@@ -207,7 +202,7 @@ export default defineGame({
   } };
   ```
 
-  - **As cores do `walker` são índices fixos: 13, 14 e 15 no corpo, 16 e 17 na cabeça.** Na sua paleta, esses índices precisam ser as cores que você quer (veja `yard`).
+  - **As cores do `walker` são índices fixos: 13, 14 e 15 no corpo, 16 e 17 na cabeça.** Na sua paleta, esses índices precisam ser as cores que você quer (veja o modelo `blank`).
   - `atk` escolhe o golpe: `'slash'`, `'pound'`, `'thrust'`, `'spin'` ou `'peck'`.
 - **`game.spawnActor({ actor, at, brain, kind?, tags?, team?, face? })`:**
   - `at` é um ponto com nome ou `[x, y, z]`;
@@ -412,7 +407,7 @@ export default function (api: BotApi) {
 | **Ator nascendo durante a partida, sem `brains`** | o save não carrega | `brains: { kind: cérebro }` na definição |
 | **Estado com funções ou objetos do kit** | o save quebra; o `check` acusa | `game.state` só com dados simples; objetos do kit vão em `build()` → `game.built` |
 | **Mais atores que `max`** | erro "max is N, all in use" | aumente `actors.<nome>.max` |
-| **Superfícies finas demais para o pixel de arte** | o jogo pesa numa GPU fraca sem ficar mais bonito | o custo de GPU e da ordenação é por splat. Ponha `S.adaptiveSampling = true` antes do `S.bake()`: faces largas ficam com menos splats e bordas com mais (−41% na arena densa, sem diferença visível). Use `res` de acordo com o `detail` da cena: a arena tem ~2,7 splats por pixel de arte, e a arena densa (16 por pixel) custa 4,5 vezes mais na GPU. O estilo `colored` dobra o custo. Meça com `cd engine && npm run perf` (ver `docs/engine-performance.md`) |
+| **Superfícies finas demais para o pixel de arte** | o jogo pesa numa GPU fraca sem ficar mais bonito | o custo de GPU e da ordenação é por splat. Ponha `S.adaptiveSampling = true` antes do `S.bake()`: faces largas ficam com menos splats e bordas com mais (−41% numa arena com 2,8 vezes mais detalhe, sem diferença visível). Use `res` de acordo com o `detail` da cena: a arena tem ~2,7 splats por pixel de arte, e uma arena com 16 por pixel custa 4,5 vezes mais na GPU. O estilo `colored` dobra o custo. Meça com `cd engine && npm run perf` (ver `docs/engine-performance.md`) |
 
 Quando o `check` não explicar, rode `shot`/`sheet` e **olhe o PNG**.
 

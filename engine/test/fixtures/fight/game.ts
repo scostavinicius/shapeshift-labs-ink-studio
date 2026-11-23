@@ -1,8 +1,9 @@
+// A test fixture, not a game (it was the example farol-fight): the combat, HUD and save tests play it by its script.
 // A fight on the farol's island: the walker against two grunts that chase, swing and back off. A grunt that dies goes to
 // pieces and leaves the ground round it scorched, and the scorch stays. The player has 5 health and stands up again at the
 // start 1.5 s after dying. state: kills, deaths, and whether every grunt is down.
-import { chaser, defineGame } from '../../src/game/index';
-import { walker } from '../farol-walk/game';
+import { chaser, defineGame } from '../../../src/game/index';
+import { walker } from '../../../examples/farol-walk/game';
 
 /** a grunt: the walker's shape, broader, in the farol's purples, with a heavier blow */
 export const grunt = {

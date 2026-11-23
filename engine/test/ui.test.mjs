@@ -12,8 +12,8 @@ const H = await loadTs('src/headless/run.ts');
 const UI = await loadTs('src/ui/hud.ts');
 const FONT = await loadTs('src/ui/font.ts');
 const AUDIO = await loadTs('src/ui/audio.ts');
-const fight = (await loadTs('examples/farol-fight/game.ts')).default;
-const fightScript = JSON.parse(fs.readFileSync(path.join(ROOT, 'examples', 'farol-fight', 'fight.json'), 'utf8'));
+const fight = (await loadTs('test/fixtures/fight/game.ts')).default;
+const fightScript = JSON.parse(fs.readFileSync(path.join(ROOT, 'test', 'fixtures', 'fight', 'fight.json'), 'utf8'));
 const farol = sceneFn('showcase/farol.js');
 
 test('the pixel font writes what it is given and reads back the same', () => {

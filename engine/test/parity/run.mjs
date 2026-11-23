@@ -45,8 +45,8 @@ export const CASES = [
 // picture, the two simulations must agree exactly (the same hash): the same seed and script give the same game
 export const GAMES = [
   { name: 'farol-walk game', game: 'farol-walk', input: 'farol-walk/walk.json', t: 6 },
-  // a moment with a grunt's pieces in the air and the grass on fire: debris and the ground's memory roll Math.random
-  { name: 'farol-fight game', game: 'farol-fight', input: 'farol-fight/fight.json', t: 8.3 },
+  // the serpent at the player, its body curved behind it (curve splats posed from the procedural body, stages 29-30)
+  { name: 'ninho game', game: 'ninho', input: 'ninho/idle.json', t: 6 },
   // the arena in its third wave: the warden, darters, fire on the ground
   { name: 'arena game', game: 'arena', input: 'arena/win.json', t: 40 }
 ];
@@ -79,7 +79,7 @@ function references(c) {
           t,
           yaw: dy,
           look,
-          img: R.render(world, { t, yaw: world.cam.yaw + dy, w: W, h: H, colored: look === 'colored', curveMode: 'splats' })
+          img: R.render(world, { t, yaw: world.cam.yaw + dy, w: W, h: H, colored: look === 'colored', curveMode: 'splats', fragmentBudget: 2e6 })
         });
   }
   return out;
@@ -96,7 +96,7 @@ async function gameReference(g) {
   return {
     hash: game.hash(),
     steps: game.steps,
-    imgs: LOOKS.map(look => R.render(game.world, { t: game.t, ...view, w: W, h: H, colored: look === 'colored', curveMode: 'splats' }))
+    imgs: LOOKS.map(look => R.render(game.world, { t: game.t, ...view, w: W, h: H, colored: look === 'colored', curveMode: 'splats', fragmentBudget: 2e6 }))
   };
 }
 
