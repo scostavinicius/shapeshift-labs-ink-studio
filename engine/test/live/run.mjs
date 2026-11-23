@@ -261,6 +261,34 @@ async function coreChecks() {
   );
   if (!arenaOK) failed = true;
   await page.screenshot({ path: path.join(OUT, 'arena-victory.png') });
+
+  // stage 31: the nest's campaign is data (mission.json): played by its winning script in the page, its stages shown
+  await page.goto(server.url + '?game=ninho&fresh=1&replay=ninho/win.json');
+  await page.waitForFunction(() => window.ENGINE && window.ENGINE.info.fps > 0, null, { timeout: 60000 });
+  const stagesSeen = [];
+  let nestEnd = null;
+  const nestStart = Date.now();
+  while (Date.now() - nestStart < 45000) {
+    await page.waitForTimeout(250);
+    const r = await page.evaluate(() => {
+      const E = window.ENGINE,
+        g = E.game;
+      return { t: g.t, steps: g.steps, fps: E.info.fps, state: g.state, lines: document.getElementById('hud-lines').dataset.text || '' };
+    });
+    const first = r.lines.split(String.fromCharCode(10))[0];
+    if (first && stagesSeen[stagesSeen.length - 1] !== first) stagesSeen.push(first);
+    if (r.state.won || r.state.lost) {
+      nestEnd = r;
+      break;
+    }
+  }
+  const nestOK = !!nestEnd && nestEnd.state.won && ['KILL THE SERPENT', 'KILL THE BROOD', 'STAND IN THE NEST'].every(s => stagesSeen.includes(s));
+  console.log(
+    `  ninho story  replayed win.json live: ${nestEnd ? (nestEnd.state.won ? 'VICTORY' : 'DEFEAT') + ` at ${nestEnd.t.toFixed(1)} s (step ${nestEnd.steps})` : 'no end in 45 s'}; ` +
+      `HUD stages ${stagesSeen.join(' > ')}  ${nestOK ? 'ok' : 'FAILED'}`
+  );
+  if (!nestOK) failed = true;
+  await page.screenshot({ path: path.join(OUT, 'ninho-victory.png') });
 }
 
 let failed = false;

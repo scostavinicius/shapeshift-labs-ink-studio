@@ -10,6 +10,7 @@ import { createGame, type RunningGame } from './game';
 import type { SceneFn } from './level';
 import type { GameDef } from './types';
 import { SOUND_NAMES } from '../ui/audio';
+import { ENGINE_EVENTS, STORY_ACTIONS, STORY_FIELDS, STORY_TYPES, storyRules } from './story';
 
 export interface Problem {
   level: 'error' | 'warning';
@@ -164,6 +165,86 @@ export function checkDefinition(def: GameDef<any>): Problem[] {
   for (const [event, sound] of Object.entries(def.sounds || {}))
     if (!(SOUND_NAMES as readonly string[]).includes(sound))
       out.push(warn('sound', `sounds.${event}`, `no sound "${sound}": the event plays nothing`, `sounds: ${SOUND_NAMES.join(', ')}`));
+  return out;
+}
+
+// ---------------------------------------------------------------------------------------------------------- the story
+
+/** the kit's own checks of a story document (cli/story-document.js), handed in by whoever can load them (Node) */
+export interface StoryTools {
+  validateStoryDocument(doc: unknown): unknown;
+  preflightStoryDocument(doc: unknown): { diagnostics?: { code?: string; path?: string; message?: string; severity?: string }[] };
+}
+
+/**
+ * def.story (stage 31): the document by the kit's own validation and route preview (when `tools` are given), then what
+ * the engine adds: the queries, objective types and actions it knows, the actors, spawn points, brains and sounds the
+ * actions name, and event kinds nothing in the game sends (a kind the game's source emits counts, when it is given).
+ */
+export function checkStory(def: GameDef<any>, tools?: StoryTools, sourceText = ''): Problem[] {
+  const out: Problem[] = [];
+  const st = def.story;
+  if (!st) return out;
+  const doc = st.document;
+  if (!doc || typeof doc !== 'object' || doc.format !== 'ink-studio/story')
+    return [err('story', 'story.document', 'not a story document', "an ink-studio/story version 1 document: { format: 'ink-studio/story', version: 1, id, stories } (see docs/story-documents.md)")];
+  if (tools) {
+    try {
+      tools.validateStoryDocument(doc);
+    } catch (e: any) {
+      const i = e && e.storyIssue;
+      out.push(err('story', i?.path || 'story.document', i?.message || String(e?.message || e), 'see docs/story-documents.md, "Write a definition"'));
+      return out;
+    }
+    for (const d of tools.preflightStoryDocument(doc).diagnostics || [])
+      out.push((d.severity === 'error' ? err : warn)('story-route', d.path || 'story.document', `${d.code}: ${d.message}`, 'see the routes with: node cli/ink-studio.js story preview <file>'));
+  }
+  const { events, states, types } = storyRules(st);
+  for (const [where, rule] of states)
+    if (!STORY_FIELDS[rule.field]) out.push(err('story-field', where + '.field', `no query "${rule.field}" in the engine`, `queries: ${Object.keys(STORY_FIELDS).join(', ')}`));
+  for (const [where, type] of types)
+    if (!STORY_TYPES.includes(type) && !doc.objectiveTypes?.[type])
+      out.push(err('story-type', where, `the engine cannot confirm a "${type}" objective`, `types: ${STORY_TYPES.join(', ')}, or give the objective its own evidence`));
+  // event kinds: the engine's, the ones the game's actions emit, and any its source sends with game.emit
+  const emitted = new Set<string>();
+  for (const rule of Object.values(st.actions || {})) for (const a of rule?.actions || []) if (a.action === 'game/emit' && a.args?.name) emitted.add(String(a.args.name));
+  for (const m of sourceText.matchAll(/emit\(\s*['"]([^'"]+)['"]/g)) emitted.add(m[1]);
+  for (const [where, rule] of events)
+    if (!ENGINE_EVENTS.includes(rule.kind) && !emitted.has(rule.kind))
+      out.push(warn('story-event', where + '.kind', `nothing sends an event "${rule.kind}"`, `the engine's: ${ENGINE_EVENTS.join(', ')}; or game.emit('${rule.kind}') in a rule`));
+  const stories = doc.stories || {};
+  for (const [s, story] of Object.entries<any>(stories)) {
+    if (!story.lifecycle?.progression)
+      out.push(warn('story-progression', `story.stories.${s}.lifecycle`, 'no lifecycle.progression: the kit runs no stages without it', 'add "lifecycle": { "progression": true } (the engine runs the stages either way)'));
+    for (const [sid, stage] of Object.entries<any>(story.stages || {}))
+      if (stage.decision && stage.decision.mode !== 'autonomous')
+        out.push(warn('story-decision', `story.stories.${s}.stages.${sid}.decision`, `mode "${stage.decision.mode}": the engine has no player choices`, 'the engine takes the first open branch by ID: use { "mode": "autonomous" } and "auto": true on the branches'));
+    if (story.lifecycle?.activation === 'manual' || story.lifecycle?.deadlines?.offer)
+      out.push(warn('story-offer', `story.stories.${s}.lifecycle`, 'an offer waits for a command the engine does not give', "start it from an action instead: { action: 'game/story-start', args: { story } }"));
+  }
+  for (const [id, rule] of Object.entries(st.actions || {})) {
+    const w = `story.actions.${id}`;
+    if (!rule || !rule.on || typeof rule.on.kind !== 'string') out.push(err('story-action', w + '.on', 'no on: { kind }', "on: { kind: 'story-stage-entered', where: { path: '/stage', value: 'boss' } }"));
+    (rule?.actions || []).forEach((a, k) => {
+      const aw = `${w}.actions[${k}]`,
+        args: any = a.args || {};
+      if (!STORY_ACTIONS[a.action]) {
+        out.push(err('story-action', aw + '.action', `no action "${a.action}"`, `actions: ${Object.keys(STORY_ACTIONS).join(', ')}`));
+        return;
+      }
+      if (a.action === 'game/spawn') {
+        if (!def.actors?.[args.actor]) out.push(err('story-action', aw + '.args.actor', `no actor "${args.actor}"`, `actors: ${Object.keys(def.actors || {}).join(', ') || 'none'}`));
+        if (typeof args.at === 'string' && !def.spawns?.[args.at] && !a.bindings?.['/at'])
+          out.push(err('story-action', aw + '.args.at', `no spawn point "${args.at}"`, `spawns: ${Object.keys(def.spawns || {}).join(', ') || 'none'}`));
+        const brain = args.brain || args.kind || args.actor;
+        if (!def.brains?.[brain]) out.push(err('story-action', aw + '.args.brain', `no brain "${brain}" in def.brains`, `brains: { ${brain}: chaser() } (a spawned actor needs one, and so does the save)`));
+      }
+      if (a.action === 'game/sound' && !(SOUND_NAMES as readonly string[]).includes(args.name))
+        out.push(warn('sound', aw + '.args.name', `no sound "${args.name}"`, `sounds: ${SOUND_NAMES.join(', ')}`));
+      if (a.action === 'game/story-start' && !stories[args.story])
+        out.push(err('story-action', aw + '.args.story', `no story "${args.story}"`, `stories: ${Object.keys(stories).join(', ')}`));
+    });
+  }
   return out;
 }
 
@@ -332,11 +413,11 @@ export function validateGame(
   def: GameDef<any>,
   ink: Ink,
   scene: SceneFn,
-  o: { sources?: { file: string; text: string }[]; seconds?: number } = {}
+  o: { sources?: { file: string; text: string }[]; seconds?: number; storyTools?: StoryTools } = {}
 ): { problems: Problem[]; stats: RunStats | null } {
-  const problems = [...checkDefinition(def)];
+  const problems = [...checkDefinition(def), ...checkStory(def, o.storyTools, (o.sources || []).map(x => x.text).join('\n'))];
   for (const s of o.sources || []) problems.push(...lintSource(s.text, s.file));
-  if (problems.some(p => p.level === 'error' && ['no-definition', 'init', 'scene', 'actor-spec', 'actor-pts', 'actor-sculpt', 'spawn-shape'].includes(p.code)))
+  if (problems.some(p => p.level === 'error' && ['no-definition', 'init', 'scene', 'actor-spec', 'actor-pts', 'actor-sculpt', 'spawn-shape', 'story', 'story-action'].includes(p.code)))
     return { problems, stats: null };
   const run = checkRun(def, ink, scene, o.seconds ?? 2);
   return { problems: [...problems, ...run.problems], stats: run.stats };

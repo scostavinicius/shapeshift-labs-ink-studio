@@ -511,7 +511,7 @@ Em 2026-11-23 entraram mais 473 commits do original (merge `a486e1a0`). A maior 
 | 28 | Marcas de golpe nas superfícies (`surfaceDecals` #480, ou o equivalente que caiba no renderizador dos jogos) | ✅ |
 | 29 | Fios: grama, cabelo, capas (`curveSplats` #451 e seguintes), presos ao corpo ou à física | ✅ (fios grossos; finos descartados) |
 | 30 | Criaturas procedurais: corpo ramificado (`proceduralBody` #428) e pés por `motionMatching` | ✅ (corpo que se arrasta; pés ficam de fora) |
-| 31 | Missões declarativas: o formato de história do kit (`StoryDocument`) com um executor da engine | ⏳ (ver o plano abaixo) |
+| 31 | Missões declarativas: o formato de história do kit (`StoryDocument`) com um executor da engine | ✅ (ver abaixo) |
 
 Mesmo critério das etapas 12+: cada coisa é medida no navegador; se custar caro ou não aparecer no renderizador dos jogos, fica registrada como "medida e descartada", com o motivo.
 
@@ -606,7 +606,7 @@ Ficaram três jogos em `engine/examples/`: **farol-walk** (andar pela ilha do fa
 
 | Etapa | O quê | Estado |
 |---|---|---|
-| 31 | **Missões declarativas**: um executor da engine para o formato de história do kit | ⏳ |
+| 31 | **Missões declarativas**: um executor da engine para o formato de história do kit | ✅ |
 | 32 | **A pose do corpo no save**: a serpente volta exatamente como estava | ⏳ |
 | 33 | **Corpos com galhos**: mais de uma cadeia por ator (barbatanas, tentáculos, asas) | ⏳ |
 | 34 | **Criaturas com pernas**: pés por `K.gait` com `motionMatching`, pernas desenhadas como curvas | ⏳ |
@@ -614,7 +614,7 @@ Ficaram três jogos em `engine/examples/`: **farol-walk** (andar pela ilha do fa
 
 A ordem vai do que mais ajuda quem escreve jogos ao que tem mais risco. A 35 começa medindo e pode terminar descartada, como a 28 com as marcas do kit.
 
-### Etapa 31 — Missões declarativas
+### Etapa 31 — Missões declarativas · ✅
 
 **Faz sentido?** Sim. Hoje cada missão é código no `def.step` (a cripta tinha relíquias, selo, chefe e saída escritos à mão), e é onde uma IA mais erra. Com a missão em dados:
 - o `check` consegue validá-la antes de rodar;
@@ -636,6 +636,39 @@ A ordem vai do que mais ajuda quem escreve jogos ao que tem mais risco. A 35 com
 **Feito quando:** a arena (ou um jogo novo) ganha uma campanha escrita só em JSON (ondas, chefe, vitória) que o robô vence e que o `check` valida. Um teste quebra o documento e o `check` aponta o campo errado.
 
 **A conferir antes:** quais partes do formato (prazos, papéis, histórias filhas) valem para jogos curtos. O que não servir fica de fora e o `check` avisa se aparecer.
+
+**Feito (2026-11-23):**
+- **O executor** ([`story.ts`](../engine/src/game/story.ts)) roda a cada passo, depois do `def.step`, sobre os eventos do passo e algumas consultas (`game/state`, `game/enemies`, `game/actors`, `game/player`, `game/time`, `game/story`):
+  - **gatilhos:** evento, contagem dentro de uma janela, cruzamento de estado e estado sustentado;
+  - **objetivos:** evidência de evento ou de estado, e os tipos `reach`, `observe`, `maintain`, `survive` e `protect` (os dois últimos podem falhar e abrir um ramo com `requiresFailed`), mais os tipos próprios do documento (`objectiveTypes`);
+  - **ramos:** o primeiro aberto por ID, para outro estágio ou para um desfecho;
+  - **prazos:** `world` e `work`.
+  - Ele publica os eventos de história do kit (`story-started`, `story-stage-entered`, `story-objective-resolved`, `story-branch-chosen`, `story-transition`).
+  - Como no kit, a evidência de um estágio conta a partir do passo seguinte ao que ele começou.
+- **Ações** no formato `eventActions` do kit (`on`, `limit`, `delay`, `bindings`): `game/spawn`, `game/say`, `game/sound`, `game/emit`, `game/set`, `game/add`, `game/heal`, `game/win`, `game/lose`, `game/break`, `game/remove`, `game/story-start`.
+- **HUD:** sem `hud.lines`, mostra o estágio de cada história ativa. `game/say` aparece como mensagem e `game/sound` toca o som pedido.
+- **Save, snapshot e hash** levam o progresso, que é dado simples.
+- **`check`:** chama o validador e a prévia de rotas do próprio kit (`cli/story-document.js`, que só o Node carrega) e acrescenta o que é da engine: consulta, tipo de objetivo, ação, ator, ponto de spawn, cérebro e som que não existem, e eventos que nada no jogo emite.
+- **O ninho virou uma campanha em dados** ([`mission.json`](../engine/examples/ninho/mission.json)), sem `step()`:
+  - matar a serpente;
+  - a ninhada nasce onde ela caiu (`bindings` copiam o lugar da morte);
+  - matar a ninhada;
+  - ficar no ninho para vencer;
+  - cair três vezes perde (gatilho com `count`).
+- **Robô:** [`bot.ts`](../engine/examples/ninho/bot.ts) lê a campanha (`game.story.of('hunt')`) e vence em 20 s. O roteiro gravado (`win.json`) reproduz a mesma partida.
+
+**Testes** ([`story.test.mjs`](../engine/test/story.test.mjs)). Todo documento de teste passa antes pelo validador do kit.
+- Gatilhos: contagem na janela, cruzamento e estado sustentado.
+- Objetivos: evidência só a partir do passo seguinte, `maintain`, `survive` falhando para `requiresFailed`, e prazo de trabalho.
+- Ações: `bindings`, `delay`, `limit` e uma regra respondendo à outra.
+- O ninho vencido pelo roteiro na ordem certa e com o mesmo hash, e um save no meio da ninhada que volta no mesmo ponto da campanha.
+- O `check` apontando cada tipo de erro.
+- No teste ao vivo, o `win.json` do ninho roda na página, e o HUD passa pelos três estágios até a vitória.
+
+**Fora do recorte**, e o `check` avisa quando aparecem:
+- escolhas do jogador (`decision` `player` e `intervene`, objetivo `choose`) e ofertas manuais;
+- papéis e elenco;
+- as contas e sistemas do mundo do kit (`acquire`, `deliver`, `build`, `negotiate`).
 
 ### Etapa 32 — A pose do corpo no save
 

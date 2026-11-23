@@ -3,7 +3,7 @@
 // picture for reading says it in words.)
 import type { RunningGame } from '../game/game';
 import { GLYPH_H, rasterize } from '../ui/font';
-import { hudColours } from '../ui/hud';
+import { gameLines, hudColours } from '../ui/hud';
 
 /** what the HUD says, as lines of text */
 export function hudLines(game: RunningGame<any>): string[] {
@@ -14,7 +14,7 @@ export function hudLines(game: RunningGame<any>): string[] {
     const max = (def && def.hp) || (p.ch.spec && (p.ch.spec.hp as number)) || 3;
     out.push(p.deadFor >= 0 ? `HP 0/${max} DOWN` : `HP ${Math.max(0, p.hp)}/${max}`);
   }
-  if (game.def.hud?.lines) out.push(...game.def.hud.lines(game));
+  out.push(...gameLines(game));
   return out;
 }
 

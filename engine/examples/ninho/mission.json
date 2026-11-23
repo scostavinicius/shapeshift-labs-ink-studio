@@ -1,0 +1,58 @@
+{
+  "format": "ink-studio/story",
+  "version": 1,
+  "id": "ninho",
+  "title": "The Nest",
+  "stories": {
+    "hunt": {
+      "kind": "questlet",
+      "title": "Clear the nest",
+      "lifecycle": { "progression": true },
+      "entry": "serpent",
+      "stages": {
+        "serpent": {
+          "title": "Kill the serpent",
+          "decision": { "mode": "autonomous" },
+          "objectives": {
+            "kill": { "title": "The serpent", "evidence": { "event": { "kind": "death", "where": { "path": "/kind", "value": "serpent" } } } }
+          },
+          "next": { "brood": { "stage": "brood", "auto": true } }
+        },
+        "brood": {
+          "title": "Kill the brood",
+          "decision": { "mode": "autonomous" },
+          "objectives": {
+            "clear": { "title": "No hatchling left", "evidence": { "state": { "field": "game/enemies", "when": { "op": "eq", "value": 0 } } } }
+          },
+          "next": { "nest": { "stage": "nest", "auto": true } }
+        },
+        "nest": {
+          "title": "Stand in the nest",
+          "decision": { "mode": "autonomous" },
+          "objectives": {
+            "stand": {
+              "title": "The middle of the nest",
+              "type": "reach",
+              "params": { "system": "game", "agent": "player", "min": [-7, -1, -1], "max": [-5, 2, 1] }
+            }
+          },
+          "next": { "done": { "outcome": "cleared", "auto": true } }
+        }
+      },
+      "outcomes": { "cleared": { "title": "The nest is yours" } }
+    },
+    "falls": {
+      "kind": "incident",
+      "title": "Three falls",
+      "lifecycle": { "progression": true },
+      "triggers": {
+        "third": { "event": { "kind": "death", "where": { "path": "/team", "value": "player" } }, "count": 3, "within": 3600 }
+      },
+      "entry": "fallen",
+      "stages": {
+        "fallen": { "title": "Fallen", "decision": { "mode": "autonomous" }, "next": { "lost": { "outcome": "lost", "auto": true } } }
+      },
+      "outcomes": { "lost": { "title": "The nest wins", "status": "failed" } }
+    }
+  }
+}

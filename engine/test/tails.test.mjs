@@ -102,6 +102,7 @@ test('stage 29-30: a trailing body goes with its actor and comes back, fresh, wi
 
 test('the nest: the serpent chases with its body behind it, and dies to the player\'s blows', () => {
   const game = G.createGame(nest, loadInk(), { scene: nest.scene, bones: 'cpu' });
+  game.runSteps(1); // (its campaign wakes it on the first step: examples/ninho/mission.json)
   const serpent = game.entities.find(e => e.kind === 'serpent'),
     tail = tailOf(game, serpent),
     start = serpent.pos.slice();
@@ -109,14 +110,14 @@ test('the nest: the serpent chases with its body behind it, and dies to the play
   assert.ok(Math.hypot(serpent.pos[0] - start[0], serpent.pos[2] - start[2]) > 2, 'it came on');
   assert.ok(tail.live && tail.total > 50);
   // the player stands and swings (the swing turns to it: combat.assist)
-  let won = false;
-  for (let n = 0; n < 60 * 50 && !won; n++) {
+  let fell = false;
+  for (let n = 0; n < 60 * 50 && !fell; n++) {
     game.runSteps(1, k => {
       if (k % 20 === 0) game.core.input.press('attack');
       if (k % 20 === 2) game.core.input.release('attack');
     });
-    won = game.state.won;
+    fell = game.events.some(e => e.name === 'death' && e.data.kind === 'serpent');
   }
-  assert.ok(won, 'the serpent fell');
+  assert.ok(fell, 'the serpent fell');
   assert.equal(tail.live, false, 'its body went with it');
 });

@@ -274,7 +274,9 @@ async function check(o) {
     die(String(e));
   }
   const t0 = Date.now();
-  const { problems, stats } = rt.validateGame(def, freshInk(), scene, { sources, seconds: +(o.seconds || 2) });
+  // the kit's own checks of a story document (stage 31): validation and route preview
+  const storyTools = require(path.join(REPO, 'cli', 'story-document.js'));
+  const { problems, stats } = rt.validateGame(def, freshInk(), scene, { sources, seconds: +(o.seconds || 2), storyTools });
   let parity = null;
   if (o.parity && !problems.some(p => p.level === 'error')) parity = await browserParity(def, file, o, rt);
   if (parity && parity.problem) problems.push(parity.problem);

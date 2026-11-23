@@ -11,6 +11,7 @@ import type { CameraOptions } from '../core/camera';
 import type { Core } from '../core/core';
 import type { Action, StepInput } from '../core/input';
 import type { BreakableDef, Breakables } from './breakables';
+import type { StoryDef, StoryProgress, StoryRunner } from './story';
 
 // ---------------------------------------------------------------------------------------------------------- the level
 
@@ -307,6 +308,12 @@ export interface GameDef<State = unknown> {
   sounds?: Record<string, string>;
   /** brains by kind, for actors a save has that init did not make (spawned during play) */
   brains?: Record<string, Brain>;
+  /**
+   * the campaign as data (stage 31): a document of the kit's story format (stories, stages, objectives, outcomes) and
+   * the event actions that make its events do things (spawn, say, win ...). Run every step after def.step. With no
+   * hud.lines, the HUD shows each active story's stage.
+   */
+  story?: StoryDef;
   /** fighting between actors (default on; false for a game with none) */
   combat?: CombatOptions | false;
   /** the kit's effects, made for the game (default none) */
@@ -338,6 +345,8 @@ export interface Game<State = unknown> {
   readonly effects: Effects | null;
   /** breakable things (def.breakables): intact(tag), boxOf(tag), breakIt(game, tag, dir) for a rule that smashes one */
   readonly breakables: Breakables | null;
+  /** the campaign (def.story): of(story) says where a story is; progress is its plain data */
+  readonly story: StoryRunner | null;
   /** simulation time in seconds, and steps run */
   readonly t: number;
   readonly steps: number;
@@ -400,6 +409,8 @@ export interface Snapshot<State = unknown> {
   }[];
   /** what was emitted during the last step */
   events: { name: string; data?: unknown }[];
+  /** the campaign's progress (def.story) */
+  story?: StoryProgress;
   hash: string;
 }
 

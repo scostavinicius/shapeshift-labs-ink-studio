@@ -41,6 +41,8 @@ export function defaultMessage(e: GameEvent, game: RunningGame<any>): string | n
     return null;
   }
   if (e.name === 'respawn' && player && d.id === player.id) return 'BACK ON YOUR FEET';
+  // a story's words (def.story's game/say)
+  if (e.name === 'say') return String(d.text ?? '');
   return null;
 }
 
@@ -70,6 +72,12 @@ export class HudFeed {
   }
 }
 
+/** The game's lines: its own (def.hud.lines), or else the campaign's stages (def.story). */
+export function gameLines(game: RunningGame<any>): string[] {
+  if (game.def.hud?.lines) return game.def.hud.lines(game);
+  return game.story ? game.story.lines() : [];
+}
+
 /** The HUD for the game as it is now. */
 export function hudModel(game: RunningGame<any>, feed: HudFeed, now: number): HudModel {
   const p = game.player as Actor | null;
@@ -86,7 +94,7 @@ export function hudModel(game: RunningGame<any>, feed: HudFeed, now: number): Hu
     maxHp: (def && def.hp) || (p && p.ch.spec && (p.ch.spec.hp as number)) || 3,
     down: !!p && p.deadFor >= 0,
     abilities,
-    lines: game.def.hud?.lines ? game.def.hud.lines(game) : [],
+    lines: gameLines(game),
     messages: feed.messages(now)
   };
 }

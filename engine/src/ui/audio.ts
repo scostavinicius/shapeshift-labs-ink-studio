@@ -70,7 +70,8 @@ export function soundsFor(events: GameEvent[], extra: Record<string, string> = {
   const map = { ...DEFAULT_SOUNDS, ...extra };
   const out: { sound: string; event: GameEvent }[] = [];
   for (const e of events) {
-    const s = map[e.name];
+    // a story's game/sound: the sound it names
+    const s = e.name === 'sound' ? ((e.data as { name?: string }) || {}).name : map[e.name];
     if (s && (SOUND_NAMES as readonly string[]).includes(s)) out.push({ sound: s, event: e });
   }
   return out;

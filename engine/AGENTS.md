@@ -72,7 +72,7 @@ Os exemplos, do menor ao maior:
 |---|---|
 | `engine/examples/farol-walk/` | uma cena pronta, um personagem, colisão (não atravessa o farol nem cai da ilha) |
 | `engine/examples/arena/` | **o jogo completo de demonstração**: arena circular, três ondas, dois tipos de inimigo, um chefe que chama reforços, cura entre ondas, vitória e derrota, mira assistida, e um **robô** (`bot.ts`) que vence e gravou o `win.json` |
-| `engine/examples/ninho/` | uma serpente: a cabeça é um ator comum e o corpo é uma cadeia física que se arrasta atrás (`actors.<nome>.tail`), com o cérebro `slither` |
+| `engine/examples/ninho/` | uma serpente: a cabeça é um ator comum e o corpo é uma cadeia física que se arrasta atrás (`actors.<nome>.tail`), com o cérebro `slither`. **A campanha é toda em dados** (`mission.json` e `story.actions`, sem `step()`), e um robô (`bot.ts`) a vence |
 
 **Copie de um deles** em vez de começar de uma folha em branco.
 
@@ -97,6 +97,7 @@ Os exemplos, do menor ao maior:
 | `breakables` | `[{ tag, hits: 1, mode: 'debris' \| 'rubble', pieces: 0.3, push: 3, by: [times] }]`: coisas que um golpe quebra (seção 5) |
 | `coverage` | `'continuous'` (padrão), `'legacy'` ou `'soft'`: como os splats cobrem o pixel de arte |
 | `weather` | `{ kind: 'rain' \| 'snow' \| 'leaf', box: [x0, x1, z0, z1] \| rad, n: 400, cols: [índices], top, wind: [vx, vz] }` (ou uma lista): chuva, neve ou folhas caindo. Quem move é a placa de vídeo, então não custa CPU e não entra no jogo |
+| `story` | `{ document, actions }`: a campanha em dados, no formato de história do kit (seção 5, "Missões em dados") |
 | `build(ctx)` | reserva mais splats antes do `B.finish` (`ctx.reserve(() => K.play.fx(ctx.B, 200))`); o que devolve vira `game.built` |
 
 ---
@@ -316,6 +317,79 @@ O que nasce durante um passo começa a agir no seguinte.
 
 ---
 
+### Missões em dados (`story`)
+
+A campanha de um jogo pode ser **dados em vez de código**: um documento no formato de história do kit (`ink-studio/story` versão 1, ver [docs/story-documents.md](../docs/story-documents.md)) diz o que há para fazer, e as **ações** dizem o que os eventos dele fazem. O `ninho` não tem `step()`: toda a regra dele está em `mission.json` e nas ações.
+
+```ts
+import mission from './mission.json';
+// ...
+story: {
+  document: mission,
+  actions: {
+    acorda: { on: { kind: 'story-stage-entered', where: { path: '/stage', value: 'serpent' } },
+              actions: [{ action: 'game/spawn', args: { actor: 'serpent', at: 'nest' } }, { action: 'game/say', args: { text: 'THE SERPENT WAKES' } }] },
+    venceu: { on: { kind: 'story-transition', where: { all: [{ path: '/story', value: 'hunt' }, { path: '/to', value: 'completed' }] } },
+              actions: [{ action: 'game/win' }] }
+  }
+}
+```
+
+**O documento:** `{ format, version: 1, id, stories }`. Cada história tem:
+- `entry` (o primeiro estágio), `stages`, `outcomes` e, se quiser, `triggers`;
+- `lifecycle: { progression: true }`, e em cada estágio `decision: { mode: 'autonomous' }` com `"auto": true` nos ramos. A engine anda sozinha de qualquer jeito, mas o `check` avisa sem isso, porque o kit não rodaria;
+- **um estágio** tem `title`, `objectives` (todos os obrigatórios ao mesmo tempo, em qualquer ordem) e `next` (os ramos). Um ramo vai para outro `stage` ou para um `outcome`, e abre quando os objetivos obrigatórios estão feitos (mais os de `requires`). Com vários abertos, vale o primeiro por ordem de ID;
+- **um desfecho** encerra a história como `completed`, ou `failed` com `"status": "failed"`.
+
+**Gatilhos** (`triggers`, uma história sem nenhum começa no primeiro passo):
+- `{ event: { kind, where }, count?, within? }`: um evento do jogo; com `count`, tantos dentro de `within` segundos;
+- `{ state: { field, args?, when } }`: quando a consulta passa de falsa a verdadeira;
+- `{ state: ..., hold: s }`: verdadeira por `s` segundos seguidos.
+
+**Objetivos:**
+- `evidence: { event: {...} }` ou `evidence: { state: { field, select?, when } }`;
+- `type: 'reach'` com `params: { system: 'game', agent: 'player' (ou um kind ou tag), min: [x,y,z], max: [x,y,z] }`;
+- `type: 'maintain'` (uma condição por `for` segundos), `'survive'` e `'protect'` (idem, mas falham se a condição quebrar: um ramo com `requiresFailed: ['id']` pega essa falha), `'observe'`;
+- `optional: true` não segura o estágio.
+- A evidência conta **a partir do passo seguinte** à entrada no estágio: o evento que fechou o estágio anterior não fecha o novo.
+
+**Consultas** (`field` de uma regra `state`):
+
+| `field` | O que dá |
+|---|---|
+| `game/state` | o `game.state` (use `when.path`, ou `select`, para um campo) |
+| `game/enemies` | quantos atores de pé de uma tag (`args: { tag }`), ou de qualquer time que não o do jogador |
+| `game/actors` | quantos atores de pé, por `args: { kind, tag, team }` |
+| `game/player` | `{ hp, pos, down }` do jogador |
+| `game/time` | segundos de jogo |
+| `game/story` | `{ [história]: { state, stage, outcome } }` |
+
+**Condições** (`where`, `when`): `{ path: '/campo', op, value }` com `op` `eq` (padrão), `ne`, `lt`, `lte`, `gt`, `gte`, `in` ou `exists`, e `{ all: [...] }`, `{ any: [...] }`, `{ not: ... }`. `path` é um JSON Pointer nos dados do evento ou no valor da consulta.
+
+**Eventos da história** (para ações e para outras histórias): `story-started`, `story-stage-entered` (`{ story, stage, visit }`), `story-objective-resolved`, `story-branch-chosen` e `story-transition` (`{ story, from, to, outcome }`, com `to` `completed`, `failed` ou `expired`).
+
+**Ações** (`on`: `{ kind, where }`; `limit`: quantas vezes no jogo; `delay`: segundos depois; `bindings`: `{ '/args/destino': '/dado/do/evento' }` copia valores do evento):
+
+| Ação | `args` |
+|---|---|
+| `game/spawn` | `{ actor, at, brain?, kind?, tags? (padrão ['enemy']), team?, face?, count? }`. O cérebro vem de `def.brains` pelo nome (`brain`, ou o `kind`, ou o ator) |
+| `game/say` | `{ text }`: mensagem no HUD |
+| `game/sound` | `{ name }`: um som da engine |
+| `game/emit` | `{ name, data? }` |
+| `game/set`, `game/add` | `{ path, value }` no `game.state` |
+| `game/heal` | `{ amount }` ao jogador |
+| `game/win`, `game/lose` | `game.state.won` / `lost` = true, e o evento `won` / `lost` |
+| `game/break` | `{ tag }`: quebra uma coisa de `breakables` |
+| `game/remove` | `{ tag }`: tira de cena os atores da tag |
+| `game/story-start` | `{ story }`: começa uma história que esperava o gatilho |
+
+- **O HUD:** sem `hud.lines`, ele mostra o estágio de cada história ativa (e os objetivos abertos, quando há mais de um).
+- **Save e hash:** o progresso de cada história é dado simples, vai no save e no `hash`. `game.story.of('hunt')` diz onde uma história está, para um robô ou uma regra.
+- **O `check`** valida o documento pelo próprio kit (campos, referências, estágios inalcançáveis) e aponta o que a engine não tem: consulta, tipo de objetivo, ação, ator, ponto de spawn, cérebro, ou um evento que nada no jogo emite.
+- **Fora do recorte:** escolhas do jogador (`decision` `player` e `intervene`, `choose`), ofertas manuais, papéis, contas e o resto do mundo do kit (`acquire`, `deliver`, `build`, `negotiate`).
+
+---
+
 ## 6. Determinismo: as regras que não se quebram
 
 A mesma semente e o mesmo roteiro dão **o mesmo jogo, em qualquer navegador e no Node**. Para isso:
@@ -420,6 +494,7 @@ Quando o `check` não explicar, rode `shot`/`sheet` e **olhe o PNG**.
 | `engine/src/game/types.ts` | o contrato inteiro (toda definição, todo campo, comentado) |
 | `engine/src/game/game.ts` | o jogo rodando: entidades, ordem do passo |
 | `engine/src/game/combat.ts`, `brains.ts`, `effects.ts`, `tails.ts` | combate, cérebros, efeitos, corpos que se arrastam |
+| `engine/src/game/story.ts` | o executor das missões em dados: consultas, tipos de objetivo e ações que a engine conhece |
 | `engine/src/game/collision.ts` | o mapa de chão e paredes |
 | `engine/src/game/validate.ts` | o `check`: cada código de problema e sua dica |
 | `engine/src/game/save.ts`, `script.ts` | saves e roteiros |

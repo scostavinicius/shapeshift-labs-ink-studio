@@ -38,6 +38,8 @@ export interface SaveData {
   steps: number;
   state: unknown;
   entities: SavedEntity[];
+  /** the campaign's progress (def.story, stage 31) */
+  story?: unknown;
 }
 
 const clone = <T>(v: T): T => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
@@ -52,6 +54,7 @@ export function saveGame(game: RunningGame<any>): SaveData {
     t: game.t,
     steps: game.steps,
     state: clone(game.state ?? null),
+    ...(game.story && { story: clone(game.story.progress) }),
     entities: game.entities
       .filter(e => e.alive)
       .map(e => {
@@ -105,6 +108,7 @@ export function loadSave(game: RunningGame<any>, s: SaveData): void {
       else e.pos = [saved.pos[0], saved.pos[1], saved.pos[2]];
     }
     game.state = clone(s.state);
+    if (game.story && s.story) game.story.progress = clone(s.story) as typeof game.story.progress;
     // what the save says was smashed is smashed again, the same way (stage 19)
     game.breakables?.sync(game);
     const p = game.player;

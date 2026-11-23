@@ -9,6 +9,7 @@ import { Dice } from './rng';
 import { Combat } from './combat';
 import { Breakables } from './breakables';
 import { effectOptions, GameEffects } from './effects';
+import { StoryRunner } from './story';
 import type { Actor, Brain, Collision, Entity, Game, GameDef, GameEvent, Prop, Snapshot, Trigger } from './types';
 
 /** A game definition, typed. (Nothing more: it is there so an editor knows what goes where.) */
@@ -108,6 +109,7 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
     built: level.built,
     effects,
     breakables,
+    story: null as StoryRunner | null,
     get entities() {
       return entities;
     },
@@ -247,11 +249,12 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
           return out;
         }),
         events: events.map(v => ({ ...v })),
+        ...(game.story && { story: JSON.parse(JSON.stringify(game.story.progress)) }),
         hash: game.hash()
       };
     },
     hash() {
-      return hashGame(world, entities, state, dice.state());
+      return hashGame(world, entities, state, dice.state(), game.story ? game.story.progress : null);
     },
     advance(real, beforeStep) {
       return dice.during(K, () => core.advance(real, beforeStep));
@@ -374,6 +377,8 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
       for (const p of now) if (p.type === 'prop' && p.alive) p.update?.(p, game, dt);
       // 6. the rules
       def.step?.(game, dt);
+      // 6a. the campaign (stage 31): triggers, objectives, branches, and what its events do
+      game.story?.step(dt);
       // 6b. the effects move on
       effects?.step(dt);
       // 7. what the characters wrote this step goes to the graphics card
@@ -389,6 +394,7 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
     }
   }
 
+  (game as { story: StoryRunner | null }).story = def.story ? new StoryRunner(def.story, game) : null;
   // the world is ready: put the cast on stage
   dice.during(K, () => {
     breakables?.spawn(game);
@@ -425,7 +431,7 @@ class Fnv {
   }
 }
 
-function hashGame(world: World, entities: readonly Entity[], state: unknown, dice: number[]): string {
+function hashGame(world: World, entities: readonly Entity[], state: unknown, dice: number[], story: unknown): string {
   const h = new Fnv();
   const data = ((world as { rest?: Float32Array }).rest || world.data) as Float32Array;
   h.bytes(new Uint8Array(data.buffer, data.byteOffset, world.count * 16 * 4));
@@ -433,6 +439,7 @@ function hashGame(world: World, entities: readonly Entity[], state: unknown, dic
     JSON.stringify({
       state: state ?? null,
       dice,
+      story,
       e: entities.map(e => [e.id, e.type, e.kind, e.alive, e.pos, e.data, e.type === 'actor' ? [e.ch.st.hp, e.ch.st.face, e.ch.st.vx, e.ch.st.vy, e.ch.st.vz, e.invuln, e.deadFor, e.team] : 0])
     })
   );
