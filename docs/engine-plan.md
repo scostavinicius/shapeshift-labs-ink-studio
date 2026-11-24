@@ -607,7 +607,7 @@ Ficaram três jogos em `engine/examples/`: **farol-walk** (andar pela ilha do fa
 | Etapa | O quê | Estado |
 |---|---|---|
 | 31 | **Missões declarativas**: um executor da engine para o formato de história do kit | ✅ |
-| 32 | **A pose do corpo no save**: a serpente volta exatamente como estava | ⏳ |
+| 32 | **A pose do corpo no save**: a serpente volta exatamente como estava | ✅ |
 | 33 | **Corpos com galhos**: mais de uma cadeia por ator (barbatanas, tentáculos, asas) | ⏳ |
 | 34 | **Criaturas com pernas**: pés por `K.gait` com `motionMatching`, pernas desenhadas como curvas | ⏳ |
 | 35 | **Fios finos que apareçam**: grama, cabelo e capas que funcionem na escala de pixel dos jogos | ⏳ (pesquisa) |
@@ -675,6 +675,15 @@ A ordem vai do que mais ajuda quem escreve jogos ao que tem mais risco. A 35 com
 O save passa a guardar, para cada ator com `tail`, as posições e velocidades das juntas (`solver.motion()` do XPBD), e o load as restaura (`restoreMotion`).
 
 **Feito quando:** salvar no meio de uma curva e carregar dá o mesmo `hash` da partida que não parou (hoje dá outro, porque o corpo volta esticado).
+
+**Feito (2026-11-24):**
+- **O critério mudou.** O mesmo `hash` da partida que não parou não depende só do corpo. O save, de propósito desde a etapa 8, não guarda o momento do mundo: o relógio (`t` e `steps` voltam a 0), a animação e a velocidade de cada personagem, as partículas. Medido no ninho, uma carga difere em milhares de splats fora dos corpos. Igualar tudo isso seria outra etapa (um "save exato"), e não é o que esta pedia. O critério cumprido: **o corpo volta exatamente como estava**, cada junta na mesma posição e com a mesma velocidade, e os splats dele idênticos aos da partida que não parou. Duas cargas do mesmo save dão o mesmo `hash`, passo a passo.
+- **O corpo saiu do `K.proceduralBody`.** Ele guarda o solver para si: não há como ler nem repor o `motion()`. A cadeia agora é montada direto no `K.xpbd.sim`, com os mesmos pontos, ligações, contato com o chão e relógio de 120 Hz que o `K.proceduralBody` usa. O `hash` das partidas não mudou nem um bit (o `win.json` do ninho dá o mesmo).
+- **O save leva, por ator com `tail`**, `{ positions, velocities, ticks, seconds }`, e o load repõe com `restoreMotion` e posa a curva. Um ator caído não leva (volta em casa, inteiro).
+- **Achado no caminho: um ator nascido durante a partida voltava do save com outro `id`.** Isso muda o balanço do `slither` (que usa o `id`) e o número de tudo o que nasce depois. Agora ele volta com o `id` salvo, e o save guarda o próximo `id` (`next`).
+- `game.tailOf(ator)` dá o corpo de um ator, e `game.nextId()` o próximo `id`.
+
+**Teste** ([`tails.test.mjs`](../engine/test/tails.test.mjs)): o ninho salvo no meio da ninhada (as duas serpentes pequenas curvadas atrás do jogador). Cada corpo volta com o mesmo `id`, a mesma posição e a mesma velocidade em cada junta e os mesmos splats, e o próximo `id` é o mesmo. Duas cargas rodam 120 passos com o mesmo `hash` a cada passo.
 
 ### Etapa 33 — Corpos com galhos
 

@@ -1,7 +1,9 @@
 // A body that follows (stages 29 and 30): a serpent's length, a worm's segments, a tail. The actor itself stays an
 // ordinary K.character (it walks, fights, has health; its sculpt is the head), and behind it trails a chain of joints
-// of the kit's procedural body (K.proceduralBody: Ink's XPBD solver, the joints lying on the level's ground), drawn as
-// one thick curve of the kit's curve splats (K.curveSplats.bind), posed from the joints every step.
+// on Ink's XPBD solver (K.xpbd.sim, set up exactly as K.proceduralBody sets it up, the joints lying on the level's
+// ground), drawn as one thick curve of the kit's curve splats (K.curveSplats.bind), posed from the joints every step.
+// The chain is held here rather than through K.proceduralBody so that a save can read its motion and put it back
+// (stage 32): K.proceduralBody keeps its solver to itself.
 //
 // Thin strands (grass, hair, a rope) were measured first and dropped: at a game's art-pixel size (about 0.15 units) a
 // blade is under a pixel wide, so a field of them turns to a flat carpet and a rope vanishes. A thick body is what reads.
@@ -41,6 +43,17 @@ export function tailOptions(o: TailOptions): Tail0 {
 
 const ids = (n: number) => Array.from({ length: n }, (_, i) => 'j' + i);
 
+/** the chain's clock, as K.proceduralBody's default */
+const HZ = 120;
+
+/** A body's motion in a save (stage 32): every joint's place and velocity, and where the chain's clock is. */
+export interface TailMotion {
+  positions: number[];
+  velocities: number[];
+  ticks: number;
+  seconds: number;
+}
+
 /** One actor's body: its splats set aside at build time, its chain made each time the actor is spawned. */
 export class Tail {
   readonly o: Tail0;
@@ -48,7 +61,11 @@ export class Tail {
   at = 0;
   total = 0;
   private binding: any;
+  /** the chain: the kit's XPBD solver, set up as K.proceduralBody sets it up, but held here so a save can read its motion */
   private body: any = null;
+  /** the chain's own clock (K.proceduralBody's): whole 1/HZ ticks run so far, and the seconds given to it */
+  private ticks = 0;
+  private seconds = 0;
   /** where the head joint is pulled to: the actor, a little above its feet */
   private anchor: Vec3 = [0, 0, 0];
   private names: string[];
@@ -98,32 +115,31 @@ export class Tail {
       bz = -Math.sin(face),
       col = this.collision();
     this.anchor = [p[0], p[1] + this.o.lift, p[2]];
-    const joints: Record<string, unknown> = {};
-    for (let i = 0; i < n; i++) {
-      const x = p[0] + bx * gap * i,
-        z = p[2] + bz * gap * i,
-        g = col.height(x, z, p[1] + 0.5),
-        y = (g > -1e8 && g < 1e8 ? g : p[1]) + this.radius(i);
-      joints[this.names[i]] = { at: i ? [x, y, z] : this.anchor.slice(), radius: this.radius(i), mass: i ? 0.8 : 1.5 };
-    }
-    (joints[this.names[0]] as any).drive = () => this.anchor;
-    (joints[this.names[0]] as any).compliance = 0.00002;
-    const path = this.names;
-    this.body = K.proceduralBody.create({
-      joints,
-      links: path.slice(1).map((to, i) => ({ from: path[i], to })),
-      // keep it a body, not a rope: each joint holds its two neighbours a little apart
-      bends: path.slice(2).map((_, i) => ({ through: path.slice(i, i + 3), compliance: 0.004 })),
-      sdf: (x: number, y: number, z: number) => {
+    // the ground as a signed distance: what the joints lie on
+    const field = K.xpbd.contactField(
+      (x: number, y: number, z: number) => {
         const g = col.height(x, z, y + 0.4);
         if (g > 1e8) return -0.2;
         if (g < -1e8) return 1;
         return y - g;
       },
-      gravity: [0, -6, 0],
-      damping: 4,
-      friction: 0.9
-    });
+      { friction: 0.9, tolerance: 0.02, fallback: [0, 1, 0] }
+    );
+    const sim = K.xpbd.sim({ gravity: [0, -6, 0], damp: 4, substeps: 6, project: field.project, fixedStep: true, substepPins: true });
+    for (let i = 0; i < n; i++) {
+      const x = p[0] + bx * gap * i,
+        z = p[2] + bz * gap * i,
+        g = col.height(x, z, p[1] + 0.5),
+        y = (g > -1e8 && g < 1e8 ? g : p[1]) + this.radius(i);
+      sim.point(i ? [x, y, z] : this.anchor.slice(), 1 / (i ? 0.8 : 1.5), this.radius(i));
+    }
+    // the head is pulled to the actor
+    sim.tie(0, () => this.anchor, 0.00002);
+    for (let i = 1; i < n; i++) sim.link(i - 1, i, 0);
+    // keep it a body, not a rope: each joint holds its two neighbours a little apart
+    for (let i = 2; i < n; i++) sim.link(i - 2, i, 0.004);
+    this.body = sim;
+    this.ticks = this.seconds = 0;
     this.read();
   }
 
@@ -131,7 +147,32 @@ export class Tail {
   step(dt: number, p: Vec3, world: World): void {
     if (!this.body) return;
     this.anchor = [p[0], p[1] + this.o.lift, p[2]];
-    this.body.step(dt);
+    // whole ticks of the chain's own clock (as K.proceduralBody steps it)
+    const elapsed = this.seconds + dt,
+      next = Math.floor(elapsed * HZ + 1e-8);
+    for (let tick = this.ticks + 1; tick <= next; tick++) this.body.step(1 / HZ, tick / HZ);
+    this.ticks = next;
+    this.seconds = elapsed;
+    this.read();
+    this.pose(world);
+  }
+
+  /** where the chain is and how it moves (for a save, stage 32), or null when it is not on stage */
+  motion(): TailMotion | null {
+    if (!this.body) return null;
+    const m = this.body.motion();
+    return { positions: m.positions, velocities: m.velocities, ticks: this.ticks, seconds: this.seconds };
+  }
+
+  /** put the chain back as a save had it, and pose the curve there (the actor must have been spawned already) */
+  restore(m: TailMotion, world: World): void {
+    if (!this.body) return;
+    const n = this.o.joints * 3;
+    if (!(m && Array.isArray(m.positions) && m.positions.length === n && Array.isArray(m.velocities) && m.velocities.length === n))
+      throw new Error(`a saved body of ${m?.positions?.length / 3} joints, not ${this.o.joints}`);
+    this.body.restoreMotion({ positions: m.positions, velocities: m.velocities, broken: this.body.motion().broken });
+    this.ticks = m.ticks;
+    this.seconds = m.seconds;
     this.read();
     this.pose(world);
   }
@@ -144,7 +185,8 @@ export class Tail {
   }
 
   private read() {
-    this.points = this.names.map(id => this.body.point(id) as Vec3);
+    const X = this.body.X as Float64Array;
+    this.points = this.names.map((_, i) => [X[i * 3], X[i * 3 + 1], X[i * 3 + 2]] as Vec3);
   }
 
   /** gone with its actor: the splats go to y = -99, as a hidden character's do */

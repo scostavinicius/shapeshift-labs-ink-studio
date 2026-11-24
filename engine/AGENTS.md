@@ -246,14 +246,15 @@ type Brain = (self: Actor, game: Game, dt: number) => Partial<StepInput>;
   - **sem alvo**, patrulha `patrol`: uma lista de pontos `[x, z]`, ou `'spots'` para os pontos livres da masmorra.
   - A rota e a memória ficam em `self.data.brain`, então o save e o `hash` as guardam.
 - `slither(cérebro, { swing: 40, rate: 0.9 })` embrulha outro cérebro e faz o ator andar balançando de um lado para o outro (`swing` em graus, `rate` balanços por segundo). Golpes e paradas ficam como estão. Serve para serpentes com `tail`.
-- **Corpo que se arrasta (`actors.<nome>.tail`)**: o ator continua um `K.character` comum (anda, luta, tem vida; o `sculpt` dele é a cabeça). Atrás dele vem uma cadeia de juntas do corpo procedural do kit, deitada no chão do nível e desenhada como uma curva grossa:
+- **Corpo que se arrasta (`actors.<nome>.tail`)**: o ator continua um `K.character` comum (anda, luta, tem vida; o `sculpt` dele é a cabeça). Atrás dele vem uma cadeia de juntas no solver XPBD do kit (montada como o `K.proceduralBody` a monta), deitada no chão do nível e desenhada como uma curva grossa:
   ```ts
   serpent: { spec: cabeca, hp: 6, tail: { joints: 12, length: 4.2, width: 0.62, color: '#2f7a5a', pigment: [[0, '#2f7a5a'], [1, '#5fc08a']] } }
   ```
   - `joints` (3 a 24, padrão 9), `length` (padrão 2,4), `width` (um número afina até um quinto na ponta; uma lista dá a largura de cada junta), `lift` (altura de onde a cabeça puxa, padrão 0,3), `color`, `pigment` (cores ao longo, 0 na cabeça e 1 na ponta).
   - **É sólido**: outros atores são empurrados para fora dele, então o jogador precisa contornar a serpente. `solid: false` desliga isso.
   - **Largura mínima**: abaixo de um pixel de arte (cerca de 0,15 unidade) o corpo some na tela. Use `width` de 0,3 ou mais.
-  - Some com o ator quando ele morre e volta inteiro, esticado atrás dele, quando o ator nasce de novo ou quando um save é carregado (a pose do corpo não vai no save).
+  - Some com o ator quando ele morre e volta inteiro, esticado atrás dele, quando o ator nasce de novo.
+  - **Vai no save:** a posição e a velocidade de cada junta. Ao carregar, o corpo volta curvado como estava, splat por splat. `game.tailOf(ator)` dá o corpo (`motion()`, `points`).
 - `findPath(navGridFor(game.collision, raio, altura), de, para)` dá uma rota para o seu próprio cérebro: cantos `[x, z]` sobre o chão, sem cortar quinas.
 - Para escrever o seu, olhe `engine/src/game/brains.ts`. **A memória do cérebro fica em `self.data`** (dados simples), nunca em variáveis de fora: o save e o `hash` dependem disso.
 - **Sorte só com `game.rng()`.**
@@ -460,7 +461,7 @@ export default function (api: BotApi) {
 
 **Saves:**
 - `shot --save s.json` grava um save e `--load s.json` começa dele. A página salva sozinha (a cada 2 s, ao sair, e com P) e volta de onde parou; `&fresh=1` começa do zero.
-- Um save guarda o estado do jogo e o de cada entidade. **Não guarda o momento do mundo:** partículas, fogo e a animação da cena recomeçam.
+- Um save guarda o estado do jogo e o de cada entidade (com o mesmo `id`, mesmo a que nasceu durante a partida, e a pose do corpo de quem tem `tail`). **Não guarda o momento do mundo:** partículas, fogo e a animação da cena recomeçam, e o relógio do jogo volta a 0. Por isso uma partida carregada não dá o mesmo `hash` da que não parou; duas cargas do mesmo save dão o mesmo `hash`, passo a passo.
 
 ---
 

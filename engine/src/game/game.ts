@@ -10,6 +10,7 @@ import { Combat } from './combat';
 import { Breakables } from './breakables';
 import { effectOptions, GameEffects } from './effects';
 import { StoryRunner } from './story';
+import type { Tail } from './tails';
 import type { Actor, Brain, Collision, Entity, Game, GameDef, GameEvent, Prop, Snapshot, Trigger } from './types';
 
 /** A game definition, typed. (Nothing more: it is there so an editor knows what goes where.) */
@@ -41,6 +42,10 @@ export interface RunningGame<State = unknown> extends Game<State> {
   diceState(): [number, number, number];
   /** run fn as the game's own code runs: with its dice and the deterministic Math (loading a save, a rule from outside) */
   withDice<T>(fn: () => T): T;
+  /** the body trailing an actor (ActorDef.tail), if it has one */
+  tailOf(e: Entity): Tail | undefined;
+  /** the id the next entity gets; given a number, the next one gets that (loading a save: an entity keeps its id) */
+  nextId(set?: number): number;
 }
 
 const NO_INPUT: StepInput = { move: 0, mz: 0, run: false, jump: false, jumpHeld: false, dash: false, attack: false, cast: false, crouch: false };
@@ -271,7 +276,9 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
       });
     },
     diceState: () => dice.state(),
-    withDice: fn => dice.during(K, fn)
+    withDice: fn => dice.during(K, fn),
+    tailOf: e => slotOf.get(e.id)?.tail,
+    nextId: set => (set === undefined ? nextId : (nextId = set))
   };
 
   /** take removed entities off the list, and put removed actors back in their pool */

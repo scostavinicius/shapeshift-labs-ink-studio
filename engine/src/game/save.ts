@@ -8,6 +8,7 @@
 import type { Vec3 } from '../../types/ink-studio';
 import type { RunningGame } from './game';
 import type { Actor, Brain, Entity } from './types';
+import type { TailMotion } from './tails';
 
 export const SAVE_FORMAT = 'ink-engine-save';
 export const SAVE_VERSION = 1;
@@ -26,6 +27,8 @@ export interface SavedEntity {
   face?: number;
   hp?: number;
   dead?: boolean;
+  /** the trailing body's joints, as they were (stage 32) */
+  tail?: TailMotion;
 }
 
 export interface SaveData {
@@ -40,6 +43,8 @@ export interface SaveData {
   entities: SavedEntity[];
   /** the campaign's progress (def.story, stage 31) */
   story?: unknown;
+  /** the id the next entity would have had (stage 32): what is spawned after a load is numbered as it would have been */
+  next?: number;
 }
 
 const clone = <T>(v: T): T => (v === undefined ? v : JSON.parse(JSON.stringify(v)));
@@ -55,6 +60,7 @@ export function saveGame(game: RunningGame<any>): SaveData {
     steps: game.steps,
     state: clone(game.state ?? null),
     ...(game.story && { story: clone(game.story.progress) }),
+    next: game.nextId(),
     entities: game.entities
       .filter(e => e.alive)
       .map(e => {
@@ -65,6 +71,8 @@ export function saveGame(game: RunningGame<any>): SaveData {
           out.face = e.ch.st.face;
           out.hp = e.ch.st.hp;
           out.dead = e.deadFor >= 0;
+          const m = game.tailOf(e)?.motion();
+          if (m) out.tail = m;
         }
         return out;
       })
@@ -100,13 +108,22 @@ export function loadSave(game: RunningGame<any>, s: SaveData): void {
         if (saved.type !== 'actor') continue; // a trigger or prop made later: the game's own rules make it again
         const brain: Actor['brain'] | undefined = saved.team === 'player' ? 'player' : brains[saved.kind];
         if (!brain) throw new Error(`${game.def.id}: the save has a ${saved.kind} made after the start; give def.brains.${saved.kind} to load it`);
+        // it keeps its id (brains like slither read it)
+        const next = game.nextId();
+        game.nextId(saved.id);
         e = game.spawnActor({ actor: saved.actor!, kind: saved.kind, at: saved.pos, brain, tags: saved.tags, team: saved.team });
+        game.nextId(Math.max(next, saved.id + 1));
       }
       e.tags = [...saved.tags];
       e.data = clone(saved.data);
-      if (e.type === 'actor') placeActor(e, saved);
+      if (e.type === 'actor') {
+        placeActor(e, saved);
+        // its body lies as it lay, not stretched out behind it (stage 32)
+        if (saved.tail && !saved.dead) game.tailOf(e)?.restore(saved.tail, game.world);
+      }
       else e.pos = [saved.pos[0], saved.pos[1], saved.pos[2]];
     }
+    if (typeof s.next === 'number') game.nextId(Math.max(game.nextId(), s.next));
     game.state = clone(s.state);
     if (game.story && s.story) game.story.progress = clone(s.story) as typeof game.story.progress;
     // what the save says was smashed is smashed again, the same way (stage 19)

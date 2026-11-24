@@ -121,3 +121,38 @@ test('the nest: the serpent chases with its body behind it, and dies to the play
   assert.ok(fell, 'the serpent fell');
   assert.equal(tail.live, false, 'its body went with it');
 });
+
+test('stage 32: a save keeps the body as it lay: every joint, how it moved, its splats, and its actor\'s id', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const { ROOT } = await import('./load.mjs');
+  const H = await loadTs('src/headless/run.ts');
+  const script = JSON.parse(fs.readFileSync(path.join(ROOT, 'examples', 'ninho', 'win.json'), 'utf8'));
+  // in the middle of the brood: two hatchlings spawned during play, curling after the player
+  const a = H.runHeadless(nest, loadInk(), nest.scene, script, 9).game;
+  const save = JSON.parse(JSON.stringify(G.saveGame(a)));
+  const bodies = a.entities.filter(e => a.tailOf(e));
+  assert.ok(bodies.length >= 2, 'bodies on stage');
+  for (const s of save.entities.filter(e => bodies.some(b => b.id === e.id))) assert.ok(s.tail, `${s.kind} ${s.id} has its body in the save`);
+  const load = () => H.runHeadless(nest, loadInk(), nest.scene, { events: [] }, 0, { load: save }).game;
+  const b = load();
+  for (const e of bodies) {
+    const f = b.entities.find(x => x.id === e.id);
+    assert.ok(f, `${e.kind} ${e.id} came back with its id`);
+    const ta = a.tailOf(e),
+      tb = b.tailOf(f);
+    assert.deepEqual(tb.motion(), ta.motion(), 'every joint where it was, moving as it moved');
+    assert.ok(Math.abs(ta.points.at(-1)[0] - ta.points[0][0]) + Math.abs(ta.points.at(-1)[2] - ta.points[0][2]) > 0.5, 'not a heap');
+    const A = a.world.data.subarray(ta.at * 16, (ta.at + ta.total) * 16),
+      B = b.world.data.subarray(tb.at * 16, (tb.at + tb.total) * 16);
+    assert.deepEqual(Array.from(B), Array.from(A), 'its splats too: not stretched out behind it');
+  }
+  assert.equal(b.nextId(), a.nextId(), 'what spawns next is numbered as it would have been');
+  // and a save is a save: two loads of it run the same, step by step
+  const c = load(),
+    hb = [],
+    hc = [];
+  b.runSteps(120, () => hb.push(b.hash()));
+  c.runSteps(120, () => hc.push(c.hash()));
+  assert.deepEqual(hc, hb);
+});
