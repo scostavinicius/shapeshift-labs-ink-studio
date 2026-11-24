@@ -11,7 +11,7 @@ const SplatProvenance = (() => {
     ['opticalSplats', 12, Float32Array], ['curveClips', 12, Float32Array], ['curveMaterials', 4, Float32Array],
     ['curveLighting', 7, Float32Array], ['curveTiming', 8, Float64Array], ['curvePattern', 16, Float64Array], ['curveShadows', 1, Uint8Array],
     ['curveStations', 7, Float64Array], ['curveRest',16,Float32Array], ['curveShadowOptics', 1, Float32Array], ['materialPixelStyles', 4, Float32Array],
-    ['shadowLod', 6, Float32Array]];
+    ['shadowLod', 6, Float32Array], ['splatLodProtected', 1, Uint8Array]];
   function targetKey(target) {
     const labels = [target.entity, target.surface, target.prefabs, target.tags, target.medium, target.mediumKind];
     if (target.mark !== undefined || target.markLayer !== undefined || target.part !== undefined) labels.push(target.mark, target.markLayer);
@@ -229,6 +229,11 @@ const SplatProvenance = (() => {
     }
     const remap = new Map(indices.map((source, i) => [source, i]));
     if (world.curveLod) result.curveLod = curveLod(world.curveLod, i => remap.get(i));
+    if (world.splatBakedEmission) {
+      result.splatBakedEmission = new Map();
+      for (const [source, linear] of world.splatBakedEmission)
+        if (remap.has(source)) result.splatBakedEmission.set(remap.get(source), linear);
+    }
     function take(source, stride, Type) {
       const out = new Type(indices.length * stride);
       for (let i = 0; i < indices.length; i++) out.set(source.subarray(indices[i] * stride, (indices[i] + 1) * stride), i * stride);

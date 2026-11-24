@@ -1035,7 +1035,7 @@ function renderFrame(world, o, preparedPalettes) {
   const spritePlan = spriteLOD && spriteLOD.resolve(world, {
     eye, back:[V[2],V[6],V[10]], ortho, focal:focal/(o.artGridScale||1),
     setback:depthOffset, time:t, mode:o.spriteReconstruction, impostorBlend:o.impostorBlend,
-    atlasTime:shutterRows?.atlasTime
+    atlasTime:shutterRows?.atlasTime, retainGeometry:SplatFit.editedSubjects(world,fitted)
   });
   const spriteAtlases = AtlasSprites.placements(world.spriteAtlases, o.spriteAtlases);
   const reconstructed = spritePlan?.rows.length ? new Map(spritePlan.rows.map(row => [row.placement,row])) : null;
@@ -2083,8 +2083,9 @@ function renderFrame(world, o, preparedPalettes) {
     const value=fitted.pigment[row];
     return value ? RenderStages.unpack(value-1) : undefined;
   });
-  const splatEmission = fitted?.emission && new Map();
-  for (const [i,linear] of fitted?.emission ?? []) {
+  const emissionEdits = fitted?.emission ?? world.splatBakedEmission;
+  const splatEmission = emissionEdits && new Map();
+  for (const [i,linear] of emissionEdits ?? []) {
     const display=texelEmissionDisplay(linear.map(n=>Math.min(1,n)));
     const tint=emissionCurve ? LightingChannels.emission(emissionCurve,display) : display;
     if (!world.renderMetadata?.muteEmission?.[i] && tint.some(Boolean))
