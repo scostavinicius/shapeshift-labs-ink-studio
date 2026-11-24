@@ -33,7 +33,7 @@ function meshWriter(doc, mesh, rig, kit, options) {
       throw new Error('Expected normals for every face corner');
     const m = mesh.faceMaterials?.[f] ?? 0;
     if (!Number.isInteger(m) || m < 0 || m >= materials.length) throw new Error('Invalid face material on ' + name);
-    const mainDiagonal = face.length===4 && (source?.state.splits[f] ??
+    const mainDiagonal = face.length===4 && ((source?.lockSplits ? source.state.splits[f] : undefined) ??
       (V.dist(points[face[0]],points[face[2]]) <= V.dist(points[face[1]],points[face[3]])));
     splits.push(mainDiagonal);
     let split = [[0, 1, 2]];
@@ -75,11 +75,11 @@ function meshWriter(doc, mesh, rig, kit, options) {
   const textureSize = options.textureSize === 0 ? 0 : mesh.textureSize ?? options.textureSize ?? source?.row.width ?? 1024;
   if (![0, 256, 512, 1024, 2048, 4096].includes(textureSize)) throw new Error('Invalid texture size on ' + name);
   const generated = !mesh.uvs;
-  const atlas = source ? {
+  const atlas = source && !source.revised ? {
     uvs:source.state.uvs,padding:source.row.padding,charts:source.state.chartCount,utilization:source.state.utilization
   } : generated ? unwrap(points, faces, faceNormals, {
     size: textureSize || 1024, margin: uvMargin, groups: mesh.chartGroups ? sourceFaces.map(i => mesh.chartGroups[i]) : undefined
-  }) : { uvs: corners, padding: Math.max(2, Math.ceil(textureSize * uvMargin / 2)) };
+  }) : { uvs: corners, padding: source?.row.padding ?? Math.max(2, Math.ceil(textureSize * uvMargin / 2)) };
   const uvs = registered ? atlas.uvs.map(face=>face.map(uv=>uv.map(Math.fround))) : atlas.uvs;
   if (uvs.some(uv => Math.abs(area2(...uv)) < 1e-15)) throw new Error('Degenerate UV mapping on ' + name);
   if (registered && (!textureSize || materials.some(m=>m.alphaMode && m.alphaMode!=='OPAQUE' || (m.opacity??1)!==1 && !mesh.paintedOpacity)))
@@ -129,7 +129,7 @@ function meshWriter(doc, mesh, rig, kit, options) {
       sampleSurface: sample && ((p, n, f) => sample.call(mesh,p,n,sourceFaces[f]))
     };
     const {chartBake,projection} = registered?.plan(registeredIndex,{
-      mesh:{...bakeMesh,faces:mesh.faces},faces,uvs,normals,faceNormals,atlas,splits,size:textureSize,source
+      mesh:{...bakeMesh,faces:mesh.faces},faces,uvs,normals,faceNormals,atlas,splits,sourceFaces,size:textureSize,source
     },kit) ?? {};
     const baked = bake(bakeMesh,faces,uvs,normals,textureSize,atlas.padding,{V},{registered:Boolean(registered),projection,chartBake});
     const {textures,strength,coverage}=baked;
