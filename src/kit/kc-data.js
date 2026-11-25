@@ -106,8 +106,11 @@
   // ---------------- what may be written ----------------
   const COMMON = {
     id: 'str',
+    label: 'str',
     surfaceId: 'str',
     surfaceState: 1,
+    sdfPaint: 1,
+    sdfProtection: 1,
     prefabs: 'list',
     tags: 'list',
     mat: 'mat',
@@ -172,6 +175,7 @@
   modifierKinds.warp.may = { ...modifierKinds.warp.may, taper: 'vec2' };
   modifierKinds.join = { need: { how: 'join', shape: 'solid' }, may: DIO.kinds.join.may };
   modifierKinds.mask = { need: { mode: ['keep', 'cut'], shape: 'solid' } };
+  modifierKinds['grid-brush'] = { need: { mode: ['add', 'cut', 'carve', 'through-cut', 'raise', 'fill', 'smooth', 'grab', 'flatten', 'scrape', 'crease', 'pinch'], brush: 1 } };
   const builtKinds = ['pillar', 'arch', 'stairs', 'fence', 'pipe'];
   const activeModifiers = solid => (solid.modifiers ?? []).filter(modifier => modifier.enabled !== false);
 
@@ -223,6 +227,13 @@
     style: 'style',
     palette: 'list',
     assetPacks: 'list',
+    assetParts: 'obj',
+    topologyMeshes: 'obj',
+    constructionPlane: 'obj',
+    tilesets: 'obj',
+    tilesetSources: 'obj',
+    tilesetDefaults: 'obj',
+    hybridOwnership: 'obj',
     environmentPreset: 'obj',
     roles: 'obj',
     camera: 'obj',
@@ -234,6 +245,7 @@
     groups: 'obj',
     parts: 'obj',
     solids: 'list',
+    surfaceDecals: 1,
     brushRegion: 1,
     breakables: 1,
     motion: 'list',
@@ -257,6 +269,56 @@
       throw new RangeError('A transform needs finite XYZ vectors and uniform scale from 0.02 to 20');
     return { translation, rotation, scale, pivot };
   }
+  function solidSpace(s, frame) {
+    const transform = solidTransform(s.transform);
+    if (!transform) return null;
+    const { translation, rotation, scale, pivot = s.at ?? [0, 0, 0] } = transform;
+    const { V,M } = K, basis = M.tr(frame(...rotation).flat()), inverseBasis = M.tr(basis);
+    const direction = vector => M.app(basis,vector), inverseDirection = vector => M.app(inverseBasis,vector);
+    const translatedPivot = V.add(pivot,translation);
+    return { scale,direction,inverseDirection,
+      point:vector=>V.mad(translatedPivot,direction(V.sub(vector,pivot)),scale),
+      inverse:vector=>V.mad(pivot,inverseDirection(V.sub(vector,translatedPivot)),1/scale) };
+  }
+  function surfaceBakeSources(solids, frame, margin) {
+    const { V } = K, sources = [];
+    function visit(solid, key, spatial) {
+      const space = spatial && solidSpace(solid, frame);
+      const modifiers = activeModifiers(solid);
+      for (const [order, [id, chart]] of Object.entries(solid.surfaceState?.charts ?? {}).entries()) {
+        const { origin, u, v, depth = .035 } = chart;
+        let bounds;
+        if (spatial && !modifiers.length) {
+          const normal = V.norm(V.cross(u, v));
+          const corners = [-1e-6, 1 + 1e-6].flatMap(a => [-1e-6, 1 + 1e-6].flatMap(b =>
+            [-depth, depth].map(d => {
+              const point = V.mad(V.mad(V.mad(origin, u, a), v, b), normal, d);
+              return space ? space.point(point) : point;
+            })));
+          const axes = [0, 1, 2].map(axis => corners.map(point => point[axis]));
+          bounds = { min: axes.map(values => Math.min(...values) - margin),
+            max: axes.map(values => Math.max(...values) + margin) };
+        }
+        sources.push({ key: JSON.stringify([...key, id]), bounds,
+          definition: [order, chart, solid.surfaceState.masks, solid.transform] });
+      }
+      // Nested operands can be sampled through a nonlinear inverse. Their
+      // authored projection box is only valid before the parent operation.
+      const operands = [['a', solid.a], ['b', solid.b], ['of', solid.of],
+        ...modifiers.map((modifier, index) => ['modifier-' + index, modifier.shape])];
+      for (const [name, value] of operands) if (value && typeof value === 'object' && !Array.isArray(value))
+        visit(value, [...key, name], false);
+    }
+    for (const [index, solid] of solids.entries()) visit(solid, [solid.id ?? index], true);
+    return sources;
+  }
+  DIO.surfaceChart = (solid,frame) => {
+    const project = K.procedural.surfaceState.projection(solid.surfaceState,{coordinatesOnly:true}), space = solidSpace(solid,frame);
+    if (!space) return project;
+    const locate = (point,normal)=>project(space.inverse(point),space.inverseDirection(normal));
+    locate.inspect = (chart,point,normal)=>project.inspect(chart,space.inverse(point),space.inverseDirection(normal));
+    return locate;
+  };
   DIO.solidTransform = solidTransform;
   const lev = (a, b) => {
     const d = [];
@@ -376,6 +438,56 @@
         }
     };
     keys(spec, '', TOP);
+    if (spec.assetParts !== undefined) {
+      try {
+        K.authoring.assetRevisions.checkScene(spec, env?.assetPartImports);
+      } catch (error) {
+        bad('assetParts', error.message);
+      }
+    }
+    if (spec.hybridOwnership !== undefined) {
+      try {
+        presentation.hybridOwnership = K.authoring.hybridOwnership.prepare(spec.hybridOwnership);
+      } catch (error) {
+        bad('hybridOwnership', error.message);
+      }
+    }
+    if (spec.constructionPlane !== undefined) {
+      try {
+        K.authoring.constructionPlane.resolve(spec.constructionPlane);
+      } catch (error) {
+        bad('constructionPlane',error.message);
+      }
+    }
+    const hasTilesets = spec.tilesets !== undefined || spec.tilesetDefaults !== undefined;
+    let tilesets;
+    if (hasTilesets) {
+      try {
+        tilesets = K.authoring.tilesets.prepare(spec.tilesets,spec.tilesetDefaults);
+      } catch (error) {
+        bad(spec.tilesets === undefined ? 'tilesetDefaults' : 'tilesets', error.message);
+      }
+    }
+    if (spec.tilesetSources !== undefined) {
+      try {
+        K.authoring.tilesetSources.prepare(spec);
+      } catch (error) {
+        bad('tilesetSources',error.message);
+      }
+    }
+    if (spec.topologyMeshes !== undefined && (!hasTilesets || tilesets)) {
+      try {
+        presentation.topologyMeshes = K.authoring.meshTopologyScene.prepare(spec.topologyMeshes, tilesets);
+        const names = new Set([...DIO.solids(spec).map(solid => solid?.id), ...Object.keys(spec.assetParts ?? {})]);
+        for (const [object] of presentation.topologyMeshes) {
+          if (names.has(object)) throw new RangeError('Editable mesh conflicts with scene object ' + object);
+        }
+        const imports = Object.keys(spec.assetParts ?? {}).flatMap(id => env?.assetPartImports?.[id]?.meshes ?? []);
+        K.sceneMeshes.list({ meshes: [...imports, ...presentation.topologyMeshes.map(([, row]) => row.mesh)] }, true);
+      } catch (error) {
+        bad('topologyMeshes', error.message);
+      }
+    }
     if (typeof spec.id !== 'string' || !/^[a-z0-9-]+$/.test(spec.id))
       bad('id', 'a diorama needs an id of small letters, digits and dashes', 'for example "old-shrine"');
     const st = styleOf(spec);
@@ -528,6 +640,14 @@
         bad('finish.surfaceEffects', error.message);
       }
     }
+    if (st.finish.materialResponse !== undefined) {
+      try {
+        const { recipe, contacts, particleImpacts } = st.finish.materialResponse;
+        K.materialResponse.create(recipe, { contacts, particleImpacts }).bind({ look: st.finish.look });
+      } catch (error) {
+        bad('finish.materialResponse', error.message);
+      }
+    }
     try {
       bakedShadowMarch(st.finish.shadowMarch);
     } catch (error) {
@@ -588,6 +708,11 @@
       PassQuality.prepare(look?.passQuality);
     } catch (error) {
       bad('finish.look.passQuality', error.message);
+    }
+    try {
+      JointPriority.prepare(look?.jointPriority);
+    } catch (error) {
+      bad('finish.look.jointPriority',error.message);
     }
     try {
       SdfAssist.prepare(look?.sdfAssist);
@@ -711,6 +836,11 @@
       bad('finish.look.boundaryCels', error.message);
     }
     try {
+      LivePixelBoundaries.prepare(look?.livePixelBoundaries);
+    } catch (error) {
+      bad('finish.look.livePixelBoundaries', error.message);
+    }
+    try {
       SplatOrder.transparency(look?.stableTransparency);
     } catch (error) {
       bad('finish.look.stableTransparency', error.message);
@@ -719,6 +849,13 @@
       PixelLook.toneSettings(look?.tone);
     } catch (error) {
       bad('finish.look.tone', error.message);
+    }
+    try {
+      PbrMaterials.prepare(look?.pbrMaterials, undefined, {
+        palette:st.palette, paletteRoles:st.roles, surfaceLightRamps:look?.surfaceLightRamps
+      });
+    } catch (error) {
+      bad('finish.look.pbrMaterials', error.message);
     }
     try {
       ColorCurves.prepare(look?.colorCurves);
@@ -973,8 +1110,15 @@
           continue;
         }
         const def = modifierKinds[kind];
-        fields(modifier, at, def, { id: 'str', enabled: 'bool' });
+        fields(modifier, at, def, { id: 'str', label: 'str', enabled: 'bool' });
         if (Object.hasOwn(modifier, 'do')) bad(at + '.do', 'a sculpt modifier uses kind');
+        if (kind === 'grid-brush') {
+          try {
+            K.procedural.gridSculptBrush.check(modifier.brush,modifier.mode);
+            K.procedural.sdfBrushSurfaces.check(modifier.brush.settings?.surface,st.roles);
+          }
+          catch (error) { bad(at + '.brush',error.message); }
+        }
         if (kind === 'fold') {
           if ([modifier.polar, modifier.mirror, modifier.repeat].filter(value => value !== undefined).length !== 1)
             bad(at, 'a fold needs exactly one of polar, mirror or repeat');
@@ -1011,6 +1155,20 @@
       if (s.surfaceState !== undefined) {
         try { K.procedural.surfaceState.projection(s.surfaceState); }
         catch (error) { bad(path + '.surfaceState', error.message); }
+      }
+      if (s.sdfPaint !== undefined) {
+        try {
+          if (!s.id || inner || s.kind==='ground' || s.ghost || s.carve || s.hold)
+            throw new TypeError('SDF paint needs a named, finite exterior solid');
+          K.procedural.sdfMaterialPaint.prepare(s.sdfPaint,st.roles);
+        } catch (error) { bad(path + '.sdfPaint',error.message); }
+      }
+      if (s.sdfProtection !== undefined) {
+        try {
+          if (!s.id || inner || s.kind==='ground' || s.ghost || s.carve || s.hold)
+            throw new TypeError('SDF protection needs a named, finite exterior solid');
+          K.procedural.sdfProtection.check(s.sdfProtection);
+        } catch (error) { bad(path + '.sdfProtection',error.message); }
       }
       checkModifiers(s.modifiers, path + '.modifiers');
       let scale = 1;
@@ -1084,7 +1242,26 @@
         'a diorama needs a list of solids',
         'for example [{ "kind": "ground", "mat": "earth" }, { "kind": "ball", "at": [0, 1, 0], "r": 1, "mat": "stone" }]'
       );
-    else spec.solids.forEach((s, i) => solidOk(s, 'solids[' + i + ']'));
+    else {
+      spec.solids.forEach((s, i) => solidOk(s, 'solids[' + i + ']'));
+      if (spec.surfaceDecals !== undefined) {
+        try {
+          const document = K.surfaceDecals.create(spec.surfaceDecals);
+          const solids = new Map(spec.solids.filter(solid => solid?.id && !solid.carve && !solid.hold)
+            .map(solid => [solid.id, solid]));
+          for (const {id, anchor} of document.decals) {
+            const solid = solids.get(anchor.object);
+            if (!solid || anchor.part !== undefined && solid.part !== anchor.part)
+              throw new Error('Decal ' + id + ' needs a matching visible solid ID and part');
+            if (anchor.uv || anchor.node !== undefined)
+              throw new Error('Decal ' + id + ' needs a diorama rest projector. UV and node anchors use native receiver bindings.');
+          }
+          presentation.decals = {document, solids};
+        } catch (error) {
+          bad('surfaceDecals',error.message);
+        }
+      }
+    }
     for (const [g, v] of Object.entries(groups))
       if (!v || !isNum(v.blend))
         bad('groups.' + g, 'a group says how far its members melt into each other', '{ "blend": 0.2 }');
@@ -1104,7 +1281,8 @@
       if (v.parent !== undefined && !parts.has(v.parent))
         bad('parts.' + p + '.parent', 'no part called "' + v.parent + '"');
       if (v.parent === p) bad('parts.' + p + '.parent', 'a part cannot hang from itself');
-      keys(v, 'parts.' + p, { joint: 1, parent: 1 });
+      if (v.label !== undefined) typeOk(v.label, 'str', 'parts.' + p + '.label');
+      keys(v, 'parts.' + p, { joint: 1, parent: 1, label: 1 });
     }
     const checkedParts = new Set();
     for (const part of Object.keys(partDefinitions)) {
@@ -1392,13 +1570,21 @@
       e.problems = problems;
       throw e;
     }
-    const { spec, dataInputs } = resolved, { timeline, cameraRig, dataMarks } = presentation, dynamics = boundRuntime(source, env, resolved);
+    const { spec, dataInputs } = resolved, { timeline, cameraRig, dataMarks, decals } = presentation, dynamics = boundRuntime(source, env, resolved);
     const st0 = styleOf(spec), catalog = lookCatalog(spec),
       seed = spec.seed === undefined ? 1 : spec.seed,
       effects = spec.effects || [],
       motion = spec.motion || [],
       lamps = effects.filter(e => e.do === 'lamp'),
       loose = effects.some(e => ['dust', 'embers', 'smoke', 'sparks', 'rain'].includes(e.do)) || !!spec.tap;
+    function bindSceneMeshes(world) {
+      if (spec.assetParts !== undefined) {
+        const imported = Object.fromEntries(Object.keys(spec.assetParts).map(id => [id, env.assetPartImports[id]]));
+        K.authoring.assetRevisions.install(world, imported);
+      }
+      K.authoring.meshTopologyScene.mount(world, presentation.topologyMeshes);
+      if (presentation.hybridOwnership) world.hybridOwnership = presentation.hybridOwnership;
+    }
     function bindBreakables(world) {
       try {
         return K.authoring.breakables.bind(world, spec, presentation.breakables);
@@ -1406,6 +1592,32 @@
         error.problems = [{ level: 'error', path: 'breakables', problem: error.message, hint: '' }];
         throw error;
       }
+    }
+    function bindDecals(world, rig) {
+      if (!decals?.document.decals.length) return;
+      const receivers = new Map(), nodes = {}, parts = new Map();
+      for (const {anchor:{object,part}} of decals.document.decals) {
+        const rigPart = decals.solids.get(object).part;
+        let node;
+        if (rig?.has(rigPart)) {
+          if (!parts.has(rigPart)) {
+            const name = 'decal-part-' + parts.size;
+            parts.set(rigPart, name);
+            nodes[name] = {};
+          }
+          node = parts.get(rigPart);
+        }
+        receivers.set(JSON.stringify([object,part]), {object, ...(part!==undefined&&{part}),
+          representation:'splats', ...(node&&{node})});
+      }
+      const graph = parts.size ? K.sceneGraph.create({nodes}) : undefined;
+      K.surfaceDecals.bind(world, decals.document, {receivers:[...receivers.values()],graph});
+      if (graph) return () => {
+        for (const [part, node] of parts) {
+          const at = rig.names.indexOf(part) * 12;
+          graph.setLocal(node,{matrix:rig.M.subarray(at,at+9),position:rig.M.subarray(at+9,at+12)});
+        }
+      };
     }
     function marksQuery() {
       const query = resolved.inputs?.query ?? env.parameterInputs?.query;
@@ -1415,7 +1627,10 @@
     if (spec.brushRegion != null) {
       if (modelOptions) throw new TypeError('Brush regions are baked as splat geometry');
       const { palette, roles, sun } = st0;
-      const { timeline: authoredTimeline, cameraRig: authoredCameraRig, dataInputs: authoredData, dataMarks: authoredMarks, breakables: authoredBreakables, ...geometry } = spec;
+      const { timeline: authoredTimeline, cameraRig: authoredCameraRig, dataInputs: authoredData, dataMarks: authoredMarks,
+        breakables: authoredBreakables, surfaceDecals: authoredDecals, topologyMeshes: authoredTopology,
+        constructionPlane: authoredConstructionPlane,
+        tilesets: authoredTilesets, tilesetSources: authoredTileSources, tilesetDefaults: authoredTileDefaults, ...geometry } = spec;
       let world = (env.brushSession ?? K.authoring.brushRegions.create()).build(geometry, env, { palette, roles, sun });
       let marksSystem;
       if (marks) {
@@ -1426,7 +1641,9 @@
         marksSystem = K.dataMarks.bind(world, marks, dataMarks, { first, query: marksQuery });
       }
       world.spec = source;
+      bindSceneMeshes(world);
       bindBreakables(world);
+      bindDecals(world);
       if (dataInputs) world.dataInputs = dataInputs;
       if (cameraRig) K.cameraRig.bind(world, cameraRig);
       if (dynamics) world.parameters = dynamics.api;
@@ -1457,6 +1674,17 @@
         const mesh = K.mesh.fit(env.assets[s.asset], { size: s.size || 4, at: s.at, turn: s.spin, up: s.up });
         meshLooks.set(s, { mesh, look: K.mesh.look(mesh, { hues: s.hues || 5, pal }) });
       }
+    const brushed = spec.solids.filter(s=>s.id && activeModifiers(s).some(modifier=>modifier.kind==='grid-brush'));
+    const brushedParts = new Set(brushed.filter(s=>s.part).map(s=>s.id));
+    const painted = spec.solids.filter(s=>s.sdfPaint);
+    const retainedParts = new Set([...brushedParts,...painted.filter(s=>s.part).map(s=>s.id)]);
+    const authoredAssist = st0.finish.look?.sdfAssist;
+    if (brushed.length && authoredAssist===undefined) {
+      const rules = brushed.map(s=>({ select:{entity:s.id} }));
+      st0.finish.look = { ...st0.finish.look,sdfAssist:{ ...(rules.length<=64 && {rules}),...(brushedParts.size>0 && {posed:true}) } };
+    } else if (brushedParts.size && (authoredAssist===true || authoredAssist && authoredAssist.posed===undefined)) {
+      st0.finish.look = { ...st0.finish.look,sdfAssist:{ ...authoredAssist,posed:true } };
+    }
     const { detailBudgets, shadowArt } = st0.finish.look ?? {};
     const B = (env.makeBuilder || makeBuilder)(seed, pal, detailBudgets === undefined && shadowArt === undefined ?
       undefined : { detailBudgets, shadowArt });
@@ -1470,7 +1698,9 @@
       S = K.sculpt((env.makeSculpt || makeSculpt)(B));
       S.sun = B.norm(st0.sun);
       if (st0.finish.look?.pixel) S.pixel = true;
-      S.keepRenderSdf = keepLightCasters || Boolean(st0.finish.look?.sdfAssist);
+      S.keepPartRenderSdf = env.retainPartRenderSdf === true || retainedParts;
+      S.keepRenderSdf = env.retainRenderSdf === true || env.retainPartRenderSdf === true || keepLightCasters || painted.length>0 || Boolean(st0.finish.look?.sdfAssist ||
+        st0.finish.bounceProbes?.geometry?.sdfs?.length && (!st0.finish.bounceProbes.format || st0.finish.bounceProbes.dynamic));
       S.captureAlbedo = Boolean(st0.finish.liveSun) ||
         Array.isArray(st0.finish.look?.renderStages) && st0.finish.look.renderStages.some(rule => rule.stage === 'material');
       if (st0.amb !== undefined) S.amb = st0.amb;
@@ -1478,6 +1708,7 @@
       if (shadowMarch) {
         S.shSteps = shadowMarch.steps;
         S.shLen = shadowMarch.distance;
+        S.shEmptySpace = shadowMarch.emptySpace;
       }
       if (st0.finish.res) S.res = st0.finish.res;
       if(st0.finish.stipple!==undefined)S.stipple=st0.finish.stipple;
@@ -1549,26 +1780,18 @@
     }
     const made = {},
       make = (s, held) => {
-        const transform = solidTransform(s.transform);
-        const recipe = () => makeSolid(s, held);
-        let p;
-        if (transform) {
-          const { translation, rotation, scale, pivot = s.at ?? [0, 0, 0] } = transform;
-          const basis = M.tr(B.frame(...rotation).flat()), inverseBasis = M.tr(basis);
-          const direction = vector => M.app(basis, vector);
-          const translatedPivot = V.add(pivot, translation);
-          const point = vector => V.mad(translatedPivot, direction(V.sub(vector, pivot)), scale);
-          const inverse = vector => V.mad(pivot, M.app(inverseBasis, V.sub(vector, translatedPivot)), 1 / scale);
-          p = S.transformSolids({ point, inverse, direction, scale }, recipe);
-        } else p = recipe();
+        const space = solidSpace(s,B.frame), recipe = () => makeSolid(s,held);
+        const trackModifierSpace = Boolean(s.id && (env.retainRenderSdf || env.retainPartRenderSdf));
+        const p = space ? S.transformSolids(space,recipe,trackModifierSpace) : recipe();
         if (s.id) made[s.id] = p;
         return p;
       },
       makeSolid = (s, held) => {
         const modifiers = activeModifiers(s);
         const o = { res: s.res, objectId: s.part ?? s.id };
-        if (s.id || s.surfaceId || s.tags?.length || s.prefabs?.length) o.target = {
-          ...(s.id && { entity: s.id }), ...(s.surfaceId && { surface: s.surfaceId }), ...(s.tags?.length && { tags: s.tags }),
+        if (s.id || s.part || s.surfaceId || s.tags?.length || s.prefabs?.length) o.target = {
+          ...(s.id && { entity: s.id }), ...(s.part && { part:s.part }),
+          ...(s.surfaceId && { surface: s.surfaceId }), ...(s.tags?.length && { tags: s.tags }),
           ...(s.prefabs?.length && { prefabs: s.prefabs })
         };
         if (s.res === undefined) delete o.res;
@@ -1585,6 +1808,7 @@
         if (s.turn) o.ax = B.frame(s.turn[0], s.turn[1], s.turn[2]);
         const charts = K.procedural.surfaceState;
         const locate = s.surfaceState && charts.projection(s.surfaceState);
+        const paint = s.sdfPaint && K.procedural.sdfMaterialPaint.prepare(s.sdfPaint,st0.roles,B.P);
         const m = locate ? charts.bind(matOf(s.mat), locate, B.P) : matOf(s.mat);
         const sub = q => make(q, true), k = s.kind;
         const baseOptions = modifiers.length ? { ...o, hold: true } : o;
@@ -1627,7 +1851,8 @@
         } else if (k === 'join') p = S.join(s.how, sub(s.a), sub(s.b), Object.assign({ r: s.size, n: s.steps }, baseOptions));
         else if (unaryKinds.includes(k)) p = deform(sub(s.of), s, baseOptions);
         else if (builtKinds.includes(k)) {
-          const mats = { stone: m, post: m, rail: m, metal: m },
+          const surface = paint && !modifiers.length ? {...m,sdfPaint:paint} : m;
+          const mats = { stone:surface,post:surface,rail:surface,metal:surface },
             oo = Object.assign({}, s, { mats, tag: s.part, res: s.res, objectId: baseOptions.objectId, target: baseOptions.target });
           const buildRecipe = () =>
             k === 'pillar'
@@ -1650,7 +1875,22 @@
           for (const modifier of modifiers) {
             const options = { hold: true };
             let reach = p.reach;
-            if (modifier.kind === 'join' || modifier.kind === 'mask') {
+            if (modifier.kind === 'grid-brush' && modifier.brush.version===3) {
+              const api=K.procedural.freeformSculpt, {mode,brush:{stamps,settings}}=modifier;
+              p=api.solid(S,p,api.prepare({mode,stamps,strength:settings.strength,depth:settings.depth}),options);
+              reach=0;
+            } else if (modifier.kind === 'grid-brush') {
+              const { brush,mode } = modifier, api = K.procedural.gridSculptBrush;
+              const changes = brush.version===1 ? [mode] : ['cut','add'].filter(change=>brush.columns.some(row=>row.change===change));
+              for (const change of changes) {
+                const before=p, psd=S.psd, field=api.prepare(brush,mode,change);
+                const cut=change==='cut', operand=field.solid(S,before.mat);
+                const surface=K.procedural.sdfBrushSurfaces.attach(brush.settings?.surface,modifier.id,change,brush.grid,
+                  field,(x,y,z)=>psd(before,x,y,z),before.mat.sdfNewSurface,st0.roles,B.P);
+                p = S.join(cut ? 'cut' : 'union',before,operand,{ ...options,r:0,mat:before.mat,mask:cut });
+                if (surface) p.mat={ ...p.mat,sdfNewSurface:surface };
+              }
+            } else if (modifier.kind === 'join' || modifier.kind === 'mask') {
               const operand = sub(modifier.shape);
               reach = Math.max(reach, operand.reach);
               if (modifier.kind === 'join') {
@@ -1667,6 +1907,7 @@
           }
           p = S.add(p, p.mat, { ...o, res, bump: undefined, reach: p.reach });
         }
+        if (paint && p?.mat) p.mat = { ...p.mat,sdfPaint:paint };
         return p;
       };
     if (modelOptions?.[brushField]) {
@@ -1715,13 +1956,16 @@
         const mesh = K.model.fromSculpt(S, {
           name: name ?? spec.id, palette: pal, resolution: detail, method, bounds: restBounds, targetTriangles
         });
-        if (name === null) meshes.push(...K.model.mapModelMeshes(mesh, part => ({ ...part, static: true })));
+        const surfaceSources = surfaceBakeSources(groups.get(name), B.frame, detail);
+        if (name === null) meshes.push(...K.model.mapModelMeshes(mesh, part => ({ ...part, surfaceSources, static: true })));
         else {
           const index = joints.length, box = previewRig.box(name);
           joint[name] = parts[name]?.joint || (box ? [(box.lo[0] + box.hi[0]) * 0.5, box.lo[1], (box.lo[2] + box.hi[2]) * 0.5] : mesh.points[0]);
           joints.push({ name, parent: parts[name]?.parent ? names.indexOf(parts[name].parent) : null,
             head: joint[name], tail: V.mad(joint[name], [0, 1, 0], box ? Math.max(0.05, box.hi[1] - box.lo[1]) : 0.1) });
-          meshes.push(...K.model.mapModelMeshes(mesh, part => ({ ...part, weights: part.points.map(() => [[index, 1]]) })));
+          meshes.push(...K.model.mapModelMeshes(mesh, part => ({
+            ...part, surfaceSources, weights: part.points.map(() => [[index, 1]])
+          })));
         }
       }
       const pose = names.length && (motion.length || timeline?.targets.some(path => path[0] === 'poses')) &&
@@ -1828,6 +2072,7 @@
       W.spriteAtlases = W.spriteAtlases.map(placement => typeof placement?.atlas === 'string' ?
         K.sprite.placeAtlas({ ...placement, atlas: env.resolveSpriteAtlas(placement.atlas) }) : placement);
     if (staticBake && !baked) cache.write('splats', bakeKey, cacheAPI.pack(W));
+    bindSceneMeshes(W);
     if (pool) W.qualityParticleRanges = [{ first: pool.first, count: pool.n }];
     bindBreakables(W);
     const marksSystem = marks && K.dataMarks.bind(W, marks, dataMarks, { first: firstMark, query: marksQuery });
@@ -1844,11 +2089,15 @@
       root === 'effects' && effects[index].do === 'lamp');
     if (timelineActive) applyCamera(timelineFrame(timeline, 0, effects));
     const authoredStage = moving.length || effects.length || spec.tap || timelineActive;
-    if (!authoredStage && !marksSystem) return W;
+    if (!authoredStage && !marksSystem) {
+      bindDecals(W);
+      return W;
+    }
     const st = K.stage(W);
     if (!authoredStage) st.stateful = false;
     if (marksSystem) st.add(marksSystem);
     rig.bind(st);
+    const poseDecals = bindDecals(W, rig);
     let tracks = motion, activeEffects = effects, poses;
     if (dynamics?.active || timelineActive) st.add({ update(dt, t, stage) {
       const at = t + stage.t0;
@@ -1887,6 +2136,7 @@
         update(dt, t) {
           poseParts(t, tracks, poses);
           rig.apply();
+          poseDecals?.();
         }
       });
     let lit = null;

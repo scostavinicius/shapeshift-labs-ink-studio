@@ -1148,6 +1148,8 @@ band boundaries and maps their positions, normals, UVs and material groups.
 Affine mirrored contours retain outward winding. The chart can carry any
 swept detail whose bounds fit the region and the safe inset.
 
+### Route station remapping
+
 `P.routeStations.remap(before, after, edits)` returns a function mapping an old
 normalized route station to a new one. Supply ordered `{key,length}` sections
 and optional `{from,to,fromRange,toRange}` interval mappings. Ranges default to
@@ -1156,6 +1158,10 @@ Dividing one old range among new sections models a split, and
 dividing one new section among old spans models a join. Sections whose keys
 persist keep their local fraction. An empty or removed section with no
 target yields `null`, so an attachment host can choose its geometric fallback.
+Use `map.address(key, t)` when a source address is already known. The result
+is a target `{key,t}` or `null`, and keeps distinct source addresses that
+happen to share a normalized route station. [Retained splines](curve-families.md#edit-retained-splines)
+use it to transfer cubic parameters before recomputing arc-length stations.
 
 `P.routes.spline(route, {radius, spacing, clearance, minClearance})`
 rounds corners using quadratic splines, shrinking the trim when needed.
@@ -1179,6 +1185,99 @@ that prefers firmer ground, using the same pinned trailheads.
 node cli/ink-studio.js render examples/route-fields.js --seed 0 --ortho --colored
 node cli/ink-studio.js render examples/route-fields.js --seed 1 --ortho --colored
 ```
+
+### Socket cable routes
+
+`P.cableRoutes.plan(document, { graph })` routes a retained cable between
+named scene sockets. Pass a live [scene hierarchy](live-scene-hierarchy.md)
+or its JSON definition. The result includes the revised world-space
+route and a diagnostic report. Socket positions and exit directions
+are resolved each time the cable is planned.
+
+```js
+const cable = {
+  format: 'ink-studio/socket-cable', version: 1, id: 'signal',
+  from: { node: 'feed', socket: 'out', axis: [1,0,0], lead: .25 },
+  to: { node: 'drain', socket: 'in', axis: [-1,0,0], lead: .25 },
+  radius: .06, clearance: .08, bendRadius: .22, slack: .04,
+  waypoints: [{ id: 'service-loop', point: [0,2.2,.65] }],
+  obstacles: [{ id: 'relay', min: [-.6,.3,.1], max: [.6,1.6,.9] }]
+};
+const { route, report } = P.cableRoutes.plan(cable, { graph });
+if (route) K.curveSplats.draw(builder, route.points, {
+  object: 'signal', radius: cable.radius, edge: 'hard'
+});
+```
+
+Socket `axis` and `offset` are local to the resolved socket. Axis
+defaults to local +Z and points away from both sockets. A positive
+`lead` reserves a straight world-space exit. Ordered `waypoints` are
+hard pins. Set a pin's optional `direction` in world space, along the
+route from source to destination, to control its tangent.
+
+`obstacles` are world-space box proxies with stable IDs. A contact
+waypoint replaces its `point` with
+`contact: { obstacle, face: 'y+', uv: [.5,.5], reach: .8 }`.
+Choose one of `x-`, `x+`, `y-`, `y+`, `z-`, or `z+`. Its UV
+coordinates use the two remaining world axes in XYZ order, measured
+from the minimum bounds. The centerline rests one radius away from the
+face and follows a tangent in the face plane. Extra clearance from
+that named surface tapers within `reach` of the contact along the route.
+The cable keeps its full physical radius there.
+
+The search reuses 3D prism visibility between pins. It fits a smooth
+centerline and samples the bend radius before accepting the route. The
+final sampled chords are checked against the original boxes for
+penetration. Contact clearance and bend radius are checked at bounded
+sample densities. Change `spacing` for finer inspection and use named
+guide pins to control routes through tight spaces. The solver reports
+`blocked`, `budget`, or `unresolved` when it cannot certify a candidate.
+
+`slack` adds world-space length to the fitted zero-sag centerline.
+Use `length` for a fixed installed length. The solver adds sag along
+`gravity` while respecting endpoint tangents and keeping the declared
+pins in place. The receipt includes measured length, the tightest bend,
+nearby obstacle gaps, resolved pins, and named contacts.
+
+A curve-splat scene can use a strand source of
+`{ kind: 'socket-cable', document: cable, graph }`. It can also use
+that source as a strand-bundle guide. For a bundle, account for its
+outer width when setting the cable radius.
+
+#### Approved native-grid cable gaps
+
+`cable-route review` renders the supplied approvals at one art pixel
+per output pixel. Each check names two rendered objects, a minimum
+gap, and optionally a rectangle `[x,y,width,height]` and a coverage
+threshold. The gap is the nearest visible pixel-center distance minus
+one pixel, clamped to zero. The report names the two closest pixels
+and flags a tight gap or a missing visible footprint.
+
+```json
+{
+  "format": "ink-studio/cable-gap-views",
+  "version": 1,
+  "views": [{
+    "id": "front",
+    "w": 240,
+    "h": 146,
+    "camera": { "yaw": 0, "pitch": 0.04, "dist": 7.5, "ortho": true },
+    "checks": [
+      { "id": "relay-air", "between": ["signal", "relay"], "minPixels": 2 }
+    ]
+  }]
+}
+```
+
+```sh
+node cli/ink-studio.js cable-route plan cable.json --graph graph.json --out route.json
+node cli/ink-studio.js cable-route review scene.js views.json --out cable-review --strict on
+node examples/socket-cables.cjs relay-bypass-demo
+```
+
+The demo compares an automatic bypass with an overhead route pinned
+in three places. The return braid touches a named saddle. The two
+approved views capture the relay gap for both routes.
 
 ### Triangulation and branching networks
 
@@ -1686,6 +1785,11 @@ brick data and remain readable.
   for a vertical span bake. A new water scene can then publish the result to
   gameplay and WebGL together.
 - `changesFrom(previous)` returns bounds with the interpolation halo.
+  `sampleChangesFrom(previous, {channels: ['offset', 'material']})` compares
+  snapshots of the same field. It returns exact sample counts and inclusive
+  lattice and world bounds per changed brick and channel. Each row's
+  `touches({min, max})` checks actual changed samples in inclusive integer
+  lattice bounds, including when the row contains disjoint edits.
   `stats` counts retained, uniform, dense and sculpted bricks.
 - For a biome world edit, create the brush snapshot with an unedited frame's
   `distance` as its base, then call `prepare(view, {bricks, water})`. The
@@ -1870,6 +1974,58 @@ Bridson patch at the same exclusion distance.
 node cli/ink-studio.js render examples/poisson-patches.js --seed 0 --ortho --colored
 node cli/ink-studio.js render examples/poisson-patches.js --seed 1 --ortho --colored
 ```
+
+### Stable identities for generated parts
+
+Use `proc.scatter` with `options.grid` or call
+`P.sampling.grid({bounds, id, origin, step, radius, jitter, seed, accept})`
+to distribute replaceable fasteners, strands, or other repeated members on a
+fixed 2D or 3D lattice. Each sample reports its signed integer `cell` and
+an ID such as `fastener.-1.0.0`. The position is based on the origin and
+step in the model's coordinate space. Seeded jitter is evaluated per cell.
+Changing the clipping bounds or mask leaves the positions and IDs of the
+remaining cells intact. Keep the layout ID with its authored role and use
+a new layout ID if changing the lattice assigns those roles differently.
+The smallest step multiplied by `1 - jitter` must cover the requested
+minimum radius. Ordinary Poisson scatter still returns run-local indices.
+
+Pass sample records, or authored records such as `{id: "door-panel", ...}`,
+into `array.mapById` with a reusable group. The group can build a solid,
+part, or world entity with any parameters it needs. The array operation
+returns the group's result as `value` beside the original ID. Reordering or
+filtering records preserves the seed of each surviving item. Keep
+index-driven styling in groups where order is intentional.
+
+Collect the rows using `model.prefab` or
+`P.model.prefab({model, revision, sections, base, kind})`. Each section can
+take a row array or a record of named row arrays. A visual prefab accepts
+`solids`, `parts`, `groups`, `motion`, and `effects`. With
+`kind: "world"`, supply `entities` and `systems`. Use `base` for ordinary
+prefab settings and authored records. Local member IDs must be unique within
+each section, including the base records. The returned prefab carries a
+versioned generation record and uses its member IDs in ordinary scene
+override paths. Use a stable model ID and advance the revision when publishing
+an edited definition.
+
+When a role splits, give every successor a fresh ID and set its
+`splitFrom` to the retired local ID. Use `model.compare` or
+`P.model.compare(before, after, {kind})` to inspect retained, added,
+removed, and split roles and their successor IDs. Reusing the old role
+alongside a split, declaring a single split descendant, or claiming an
+existing generated ID for a different model produces a conflict when
+comparing those revisions.
+
+The [Mothlight Relay demo](../examples/procedural-part-identity/demo.cjs)
+builds three revisions, previews their scene-local overrides, and renders
+the compatible rebuild and a reviewed split.
+
+```sh
+node examples/procedural-part-identity/demo.cjs relay-review
+node cli/ink-studio.js graph run relay-review/relay.graph.json \
+  --inputs relay-review/r2.inputs.json --out relay-graph
+```
+
+The graph exports the prefab definition to `relay-graph/artifacts/prefab.json`.
 
 ### Progressive samples and surface detail
 
@@ -2354,6 +2510,86 @@ rendering resolution.
 `examples/sculptural-fields.js` combines an open pottery loft, a
 gyroid inside a rounded carrier, and a mirrored medial ornament.
 
+### Editable meshes from sweeps, lofts, and revolves
+
+`KIT.sweep.mesh(path, profile, options)`, `P.forms.loft.mesh(sections, options)`,
+and `S.revolve.mesh(outline, origin, options)` return `{ source, mesh, report }`.
+Use `P.sectionMeshes.revolve` when a sculpt instance is unnecessary. The
+mesh is ordinary retained topology, ready for component editing, UV
+inspection, scene rendering, and GLB export.
+
+```js
+const model = K.sweep.mesh(
+  [[-2,0,0], [-1,0,0], [0,.45,0], [1,.6,0], [2,.6,0]],
+  { shape: 'rect', w: t => .18 + .15*t, h: .12, round: .3 },
+  {
+    id: 'flow-duct', sides: 16, capMaterial: 'trim',
+    sections: [
+      { id: 'inlet', material: 'trim' },
+      { id: 'approach', material: 'enamel' },
+      { id: 'bend', material: 'enamel', crease: .5 },
+      { id: 'exit', material: 'trim' },
+      { id: 'outlet', material: 'trim' }
+    ],
+    attachments: [{ id: 'gauge', section: 'inlet', u: .25 }]
+  }
+);
+const changed = P.sectionMeshes.plan(model.source, {
+  revision: model.report.revision,
+  meshRevision: model.report.meshRevision,
+  sections: [{ id: 'bend', w: .46, roll: .2, material: 'ceramic' }]
+});
+```
+
+Save the version 1 `ink-studio/section-mesh` source for later section
+edits. Supply IDs at creation to keep meaningful names. Sweep options
+accept one section record per path ring. Loft sections can carry an ID
+alongside their `y`, `profile`, `center`, `scale`, and `roll`. Revolve
+options accept one list of section records per closed meridian. Meridians
+use radius and height and may include holes or poles on the axis. The
+loft mesh connects corresponding profiles with ruled bands. Sections
+with different profile point counts share columns that retain each
+authored corner. Editable meshes allow up to 256 sections and 128
+perimeter columns.
+
+A section's `material` labels its outgoing band. `crease` sets the ring
+edge weight from 0 to 1. Use `profileCreases` to designate hard perimeter
+columns, and `capMaterial` for the caps of an open sweep or loft. Side
+faces keep their UVs when a ring moves. Generated positions are rounded
+to nine decimal places before mesh revisions are computed. The perimeter wraps at a UV
+seam, with separate charts for caps and distinct revolve meridians.
+Sweep frames and sampled width or height functions are retained as
+section data. A local position or roll edit affects the selected ring.
+
+Store an attachment as `{ id, section, u }` with a perimeter fraction
+from 0 to 1. The report lists world positions and backing mesh vertices.
+`P.sectionMeshes.anchor(source, { section, u }, { mesh })` samples the
+same address on an optionally edited mesh. A section edit rebuilds the
+selected rings and updates their incident bands. The receipt lists the
+affected faces, changed creases, and attachment displacement. The
+original profile correspondence is preserved during local edits.
+Loft profiles keep their point counts and winding, and revolved
+meridians keep their poles and nesting.
+
+Supply the current editable mesh with `plan(source, request, { mesh })`
+to retain manual corner UVs and apply the section movement over any
+vertex offsets. The affected generated faces need their original
+connectivity. Apply the returned `patch` through ordinary mesh topology
+editing or `sceneEditor.editMeshTopology(object, patch)` for scene undo
+and binding updates.
+
+```sh
+node cli/ink-studio.js mesh-topology sections inspect source.json
+node cli/ink-studio.js mesh-topology sections compile source.json --out original-mesh.json
+node cli/ink-studio.js mesh-topology sections edit source.json edit.json --mesh original-mesh.json \
+  --out revised-source.json --out-mesh revised-mesh.json --out-patch patch.json
+node examples/section-meshes.cjs flow-bench-demo
+```
+
+The Flow bench demo revises one ring on each of three parts while keeping
+their gauge mounts in place. Its output includes meshes, GLBs, and edit
+receipts for the matched captures.
+
 ### Implicit fracture and crack paths
 
 `fracture.power({host, seeds, stretch, rotation, gap, cell, bond})`
@@ -2629,7 +2865,12 @@ count and may contain valid merges. An `ok` result can include unverified
 rows when the verified merges were enough to reach the target.
 
 To protect a screen-space result, pass `guard(splats)`. It receives the
-candidate records and returns a boolean. A failed guard returns status
+frozen candidate records and returns a boolean. `P.data.isImmutable()`
+recognizes the result, its `work` object, and its `splats` array, including
+the array provided to the guard. Use `Object.isFrozen()` to inspect individual
+rows and their numeric arrays. The merger freezes these directly so retained
+cascades need fewer entries in the shared immutability registry.
+A failed guard returns status
 `coverage` and retains the input. For example, render the original and
 candidate using `studio.render(world, { captureCoverage: true, ...camera })`
 and pass their coverage arrays to
@@ -2885,6 +3126,7 @@ For authored correspondences, use `correspondence: 'geometry'` with
 keeps the same live splat IDs through the morph, with intermediate keys
 for positions and feature rotations.
 
+
 ## Optional retained authoring
 
 `KIT.authoring.document(snapshot?, options?)` stores JSON intent. Transactions
@@ -3090,6 +3332,34 @@ For WebGL, call `renderer.renderStream(stream, cameraWorld, { place, portals, se
 `stream.snapshot()` exposes available entries and planned and drawable splat reservations per frame. A chunk shared by two views uses one byte reservation and counts toward the splat budget in both passes. `load(descriptor, { signal })` can complete asynchronously. Use `sizeOf` and `splatsOf` to measure custom payloads, and `release` to free resources on eviction. The scheduler holds cancelled jobs' reservations until they settle. A resident coarse level can stay visible while a more detailed version loads if both fit. `stream.ready()` waits for planned levels as frames continue to grant load starts. Inspect scheduler memory through `stats()` and call `dispose()` when done.
 
 The byte budget covers resident payloads and in-flight reservations. The frame budgets bound submitted packed splats and load starts, with two starts per frame by default. Assembled world copies, GPU textures, and renderer passes have their own costs. Use a worker-backed loader when individual builds need to run outside the rendering thread.
+
+#### Projected-error LOD and layer limits
+
+Pass `projectedError: { targetPx: 2, hysteresis: .2 }` and add `error` to
+each level of a chunk to choose by its projected error. Errors are in scene
+units and decrease from coarse to fine. A headless camera supplies
+`pixelHeight`. The browser supplies the frame height automatically.
+The planner estimates pixels per scene unit conservatively over the chunk
+bounds and uses the largest estimate across views. It picks the coarsest
+tier that meets the pixel target when the budgets allow, then requires error above the upper threshold to
+refine or below the lower threshold to coarsen. Chunks with `maxDistance`
+levels can be mixed with projected-error chunks.
+
+Give a chunk a `layer` ID and configure
+`layers: { foliage: { maxSplats: 12000, splatsPerPixel: .6 } }`.
+`maxSplats` caps planned and drawable splats in that layer across all views.
+`splatsPerPixel` caps a chunk's density against its projected bounding
+rectangle clipped to each view. That cap can reject the smallest tier if
+the screen footprint is too small. Selection can prefer extra detail
+within these budgets.
+
+Set `guardPixels` to keep existing or pending chunks just outside a view
+when memory permits. Guarded chunks count toward the byte budget and use
+no draws. Outside the guard their interest is released. Required views
+and visible fallback tiers have priority over guard retention.
+Frame receipts expose guarded bytes, planned and drawn splats by layer,
+and failed requests. The [WebGPU Gaussian stream](webgpu-graphs.md#stream-gaussian-chunks)
+uses the same planner with per-chunk GPU buffers.
 
 Contact curves follow the input mesh resolution. `contacts.index` can restrict
 the index to named surface groups and exposes bounds queries and segment
@@ -3819,6 +4089,10 @@ bake's lamps for the live sun calculation. Baked lamp ramps are already
 represented in the baked colour. Dynamic lamps with their own ramp can change
 the output ramp. The CPU stage painter still composes with other painters in
 stage order. The host is responsible for composing its own render passes.
+
+For shadows between moving rig parts, see
+[authored proxy shadows](live-sun.md#authored-proxy-shadows-for-moving-rigs).
+The same `sun.shadows` options work with the stage painter and host pack.
 
 Set `INK_TEST_CHROME` to the Chrome executable and run
 `node --test tests/captured-light.test.js` to verify the GLSL against the CPU

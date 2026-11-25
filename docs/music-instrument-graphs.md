@@ -4,6 +4,8 @@ A production patch with `type: "graph"` runs its own signal graph for each
 performed note. Oscillator phase, delay memory and filter and resonator state
 belong to that note. Use the same patch in a score slot, an alternate take or
 a live edit session. The patch uses the production's WAV asset table.
+Set `sampleTail: true` to keep the voice active through the end of its
+sample nodes, including samples that play longer when pitched down.
 
 This graph lets pressure add level and breath open a low-pass filter. The
 envelope is a regular node whose output modulates the gain.

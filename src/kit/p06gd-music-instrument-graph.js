@@ -119,10 +119,11 @@
   }
 
   function model(raw,assets) {
-    check(fields(raw,['type','nodes','output','tail','controls']) && raw.type==='graph' && record(raw.nodes) &&
+    check(fields(raw,['type','nodes','output','tail','sampleTail','controls']) && raw.type==='graph' && record(raw.nodes) &&
       integer(Object.keys(raw.nodes).length,1,32) && Object.keys(raw.nodes).every(id),'A graph patch needs 1–32 named nodes');
-    const {tail=.35,controls={},output}=raw;
-    check(finite(tail,0,6) && fields(controls,E.names) && Object.values(controls).every(value=>finite(value,0,1)),
+    const {tail=.35,sampleTail=false,controls={},output}=raw;
+    check(finite(tail,0,6) && typeof sampleTail==='boolean' &&
+      fields(controls,E.names) && Object.values(controls).every(value=>finite(value,0,1)),
       'Invalid graph tail or expression defaults');
     const outputs=typeof output==='string' ? [output] : fields(output,['left','right']) ? [output.left,output.right] : [];
     check(outputs.length && outputs.every(name=>id(name) && own(raw.nodes,name)),'Choose graph output nodes');
@@ -149,7 +150,7 @@
     const active=ordered.filter(row=>used.has(row.name)), delays=active.filter(row=>row.type==='delay');
     const seconds=delays.reduce((sum,row)=>sum+(row.seconds ?? row.samples/8000),0);
     check(seconds<=.5,'Instrument graph delays exceed half a second per voice at 8 kHz');
-    return {active,outputs,tail,controls:{...E.controls,...controls}};
+    return {active,outputs,tail,sampleTail,controls:{...E.controls,...controls}};
   }
 
   function bind(params,state) {
@@ -232,7 +233,7 @@
   function operator(row,state,note,rate,gate) {
     const params=bind(row.params,state), refs=row.inputs.map(name=>state.indices.get(name));
     const values=state.values, index=state.indices.get(row.name), read=()=>values[refs[0]];
-    let process,write;
+    let process,write,sampleEnd=0;
     switch (row.type) {
       case 'oscillator': process=oscillator(row,read,params,state,rate);break;
       case 'noise': {
@@ -242,6 +243,7 @@
       case 'sample': {
         const source=row.offsetSeconds ? {...note,play:{...note.play,offset:(note.play.offset ?? 0)+row.offsetSeconds}} : note;
         const sound=row.player.prepare(source,rate,Math.max(0,gate-row.startSeconds));
+        sampleEnd=row.startSeconds+sound.duration;
         const first=Math.ceil(row.startSeconds*rate-1e-7);
         process=()=>{
           const t=state.t-row.startSeconds, frame=state.frame-first;
@@ -298,11 +300,11 @@
         break;
       }
     }
-    return {tick:()=>{values[index]=process();},write};
+    return {tick:()=>{values[index]=process();},write,sampleEnd};
   }
 
   function compile(raw,assets) {
-    const {active,outputs,tail,controls}=model(raw,assets);
+    const {active,outputs,tail,sampleTail,controls}=model(raw,assets);
     const indices=new Map(active.map(({name},index)=>[name,index]));
     const channels=outputs.map(name=>indices.get(name));
     return {prepare(note,rate,gate) {
@@ -318,7 +320,8 @@
       const motion=E.names.map(name=>[name,note.expression?.controls?.[name],note.play[name] ?? controls[name]]);
       const graph=active.map(row=>operator(row,state,note,rate,gate));
       const writes=graph.flatMap(row=>row.write ? [row.write] : []);
-      const duration=gate+tail, gain=note.velocity**.7;
+      const duration=sampleTail ? Math.max(gate+tail,...graph.map(row=>row.sampleEnd)) : gate+tail;
+      const gain=note.velocity**.7;
       let amp=0;
       return {duration,stereo:channels.length===2,signal(t,frame,channel=0) {
         if (frame!==state.frame) {
@@ -352,9 +355,9 @@
     const {articulations,gestures,echo,performance,...base}=raw;
     const bank=Object.fromEntries(Object.entries(assets).map(([name,pcm])=>[name,P.mediaGraph.audio(pcm)]));
     P.musicGestures.patch(raw,bank);
-    const {active,outputs,tail,controls}=model(base,bank);
+    const {active,outputs,tail,sampleTail,controls}=model(base,bank);
     const order=active.map(({name})=>name);
-    return {output:outputs,tail,controls,assets:[...new Set(I.assetNames(raw))],
+    return {output:outputs,tail,...(sampleTail && {sampleTail}),controls,assets:[...new Set(I.assetNames(raw))],
       inactive:Object.keys(base.nodes).filter(name=>!order.includes(name)),order,nodes:active.map(({name,type,inputs,params,...spec})=>({name,type,inputs,
         ...(type==='delay' && {writesAfterFrame:true}),
         ...(type==='curve' && {clock:spec.clock,points:spec.points}),

@@ -87,7 +87,11 @@
       const meters=section.meters+(totals?.[tail]??0), delay=section.seconds+(totals?.[tail+1]??0);
       const loss=section.loss.map((value,k)=>value+(totals?.[tail+2+k]??0));
       const apparentSource=tail<0?origin:nodes[totals[tail+5]].point;
-      let path;
+      let opening, path;
+      if(!details&&a!==b){
+        for(let link=first;link;link=link.index<0?null:links[link.index])
+          opening=link.section.opening?.id??opening;
+      }
       if(details){
         let room=a, position=origin;
         const rooms=[cells[a].name], segments=[], openings=[];
@@ -105,6 +109,7 @@
           room=nextRoom;
           position=at;
         }
+        opening=openings.at(-1)?.id;
         path={rooms,openings,segments};
       }
       const distanceLossDb=20*Math.log10(Math.max(1,meters/referenceDistance));
@@ -118,7 +123,7 @@
         ...selected,distanceMeters:meters,distanceLossDb,delaySeconds:delay,muffleDb:loss[2]-loss[0],
         direction:V.len(incoming)>1e-9?V.norm(incoming):empty,apparentSource,
         bands:Object.fromEntries(bands.map((name,k)=>[name,estimates[k]])),
-        ...(path&&{path})});
+        ...(opening!==undefined&&{opening}),...(path&&{path})});
     }
     return {initial:()=>null,
       checkFields(query){

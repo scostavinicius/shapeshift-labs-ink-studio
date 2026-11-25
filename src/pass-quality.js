@@ -47,6 +47,15 @@ const PassQuality = (() => {
       particleSelectors, protectedTargets, captures }) : null;
   }
 
+  function prioritize(settings,rule){
+    if(!rule)return settings;
+    const particleRate=Math.min(settings?.particleRate??1,rule.particleRetain);
+    const rows=Boolean(settings?.rows||particleRate<1);
+    if(!rows&&!settings?.captures)return null;
+    return {backgroundRate:1,backgroundSelectors:empty,particleSelectors:empty,...settings,rows,particleRate,
+      protectedTargets:[...(settings?.protectedTargets??empty),...rule.subjects]};
+  }
+
   function reflectionPlan(settings, ids) {
     const config = settings?.captures;
     if (!config) return null;
@@ -110,6 +119,6 @@ const PassQuality = (() => {
     return backgroundSkipped || particlesSkipped ? { keep, backgroundSkipped, particlesSkipped,
       submitted: count - backgroundSkipped - particlesSkipped } : null;
   }
-  return Object.freeze({ prepare, planRows, reflectionPlan });
+  return Object.freeze({ prepare, prioritize, planRows, reflectionPlan });
 })();
 if (typeof module !== 'undefined') module.exports = PassQuality;

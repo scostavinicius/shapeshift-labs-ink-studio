@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Night Ferry · Ink Studio</title>
+<style>
+  :root{color-scheme:dark;--base:#111925;--panel:#1b2636;--line:#3b4b62;--text:#f1f3f9;--muted:#bfcadc;--gold:#ffd38e}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--base);color:var(--text);font:16px/1.52 system-ui,sans-serif}
+  main{max-width:1050px;margin:auto;padding:clamp(22px,4.8vw,55px) clamp(16px,5vw,56px)}
+  .brand,.readout,.axis{font:600 .76rem/1.5 ui-monospace,monospace;letter-spacing:.06em}
+  .brand{color:var(--gold);text-transform:uppercase}
+  h1{font:normal clamp(4rem,8vw,7rem)/.92 Georgia,serif;letter-spacing:-.062em;margin:.12em 0 .15em}
+  h2{font-size:1rem;margin:0;font-weight:650}
+  header p{margin:0 0 24px;max-width:66ch;color:var(--muted)}
+  .desk{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .panel{min-width:0;background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:16px}
+  .head,.examples,.actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+  .head{justify-content:space-between}
+  .actions{margin-top:13px}
+  button{font:600 .85rem system-ui,sans-serif;color:var(--text);cursor:pointer;background:#243248;border:1px solid #465770;border-radius:7px;padding:8px 9px}
+  button:hover:not(:disabled){background:#364965}
+  button:disabled{opacity:.48;cursor:default}
+  button[aria-pressed=true],#start{background:var(--gold);border-color:var(--gold);color:#24202a}
+  #start:hover:not(:disabled),button[aria-pressed=true]:hover{background:#ffe4b5}
+  :focus-visible{outline:2px solid var(--gold);outline-offset:3px}
+  #transport{margin:13px 0 0;color:var(--muted);min-height:1.5em;font-size:.85rem}
+  progress{display:block;width:100%;height:8px;margin:9px 0 3px;accent-color:var(--gold)}
+  .readout{color:var(--muted);margin:3px 0 0}
+  #chosen{font:normal clamp(1.5rem,3.3vw,2.45rem)/1.15 Georgia,serif;margin:.33em 0 .35em}
+  #decision{color:var(--muted);font-size:.85rem;margin:0 0 13px}
+  .track{position:relative;height:14px;background:#293952;border-radius:3px;border:1px solid #526380;overflow:hidden}
+  #cadence-window{position:absolute;inset:0 0 0 100%;background:var(--gold)}
+  .axis{display:flex;justify-content:space-between;color:var(--muted);margin-top:5px}
+  .records{margin-top:13px}
+  .examples{margin:10px 0}
+  audio{width:100%;height:38px}
+  @media(max-width:700px){.desk{grid-template-columns:1fr}}
+</style>
+<main>
+  <header>
+    <div class="brand">Ink Studio / Branch-aware cadences</div>
+    <h1>Night Ferry</h1>
+    <p>Send the ferry to either landing. An early departure gets a pickup. Stay aboard for a full pass and hear how the next phrase can earn a longer ending.</p>
+  </header>
+  <div class="desk">
+    <section class="panel" aria-label="Live score controls">
+      <div class="head">
+        <h2>Live score</h2>
+        <div><button id="start" type="button">Start ferry</button> <button id="stop" type="button" disabled>Stop</button></div>
+      </div>
+      <p id="transport">Start the score to choose a branch.</p>
+      <progress id="position" aria-label="Current phrase beat" max="4" value="0"></progress>
+      <p class="readout" id="beat">Beat 0.00 / 4</p>
+      <div class="actions" aria-label="Choose a branch">
+        <button type="button" data-section="harbor" disabled>Lantern harbor</button>
+        <button type="button" data-section="cliff" disabled>Cliff light</button>
+        <button type="button" data-section="ferry" disabled>Back to ferry</button>
+      </div>
+    </section>
+    <section class="panel" aria-label="Cadence decision">
+      <h2 id="decision-mode">Cadence decision</h2>
+      <p id="chosen" aria-live="polite">Pickup</p>
+      <p id="decision"></p>
+      <div class="track" role="img" id="timing" aria-label="Time from request to landing with cadence interval highlighted">
+        <span id="cadence-window"></span>
+      </div>
+      <div class="axis"><span>Request</span><span>Landing</span></div>
+    </section>
+  </div>
+  <section class="panel records" aria-label="Recorded examples">
+    <h2>Recorded examples</h2>
+    <div class="examples" role="group" aria-label="Select a recording">
+      <button type="button" data-take="pickup" aria-pressed="true">Early departure</button>
+      <button type="button" data-take="full" aria-pressed="false">Long dwell</button>
+      <button type="button" data-take="turn" aria-pressed="false">Mid-phrase</button>
+      <button type="button" data-take="late" aria-pressed="false">Late notice</button>
+    </div>
+    <audio controls preload="metadata" aria-label="Selected cadence example"></audio>
+  </section>
+</main>
+<script>
+const config=/*INK_CADENCE_DATA*/;
+const compressed=/*INK_CADENCE_ENGINE*/;
+/*INK_CADENCE_SCRIPT*/
+</script>
+</html>

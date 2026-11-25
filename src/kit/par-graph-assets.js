@@ -237,10 +237,39 @@
   P.graph.operations = Object.freeze({
     ...P.conversions.operations,
     ...P.graph.arrays.operations,
+    'model.prefab': {
+      description: 'Collect keyed group outputs into a revisioned visual or world prefab with stable member IDs.',
+      inputs: { model: 'string', revision: 'number', sections: 'record',
+        base: {type: 'record', default: {}}, kind: {type: 'string', default: 'visual'} },
+      outputs: { value: 'record' },
+      run(spec) { return {value: P.model.prefab(spec)}; }
+    },
+    'model.compare': {
+      description: 'Compare procedural prefab identities and report retained, added, removed, split and conflicting members.',
+      inputs: { before: 'record', after: 'record', kind: {type: 'string', default: 'visual'} },
+      outputs: { value: 'record' },
+      run({before, after, kind}) { return {value: P.model.compare(before, after, {kind})}; }
+    },
+    'model.modifiers': {
+      description: 'Evaluate a retained mesh modifier stack with its stable source lineage and stage report.',
+      inputs: {source:'record',modifiers:'array<record>',targets:{type:'record',default:{}}},
+      outputs: {value:'record',report:'record',lineage:'record'},
+      run({source,modifiers,targets},context) {
+        const plan=K.meshTopology.evaluateModifiers(source,modifiers,{diagnostics:context.modeling,
+          target:id=>Object.hasOwn(targets,id)?targets[id]:undefined});
+        const {stages}=plan.report;
+        if (context.modeling) context.recordModeling({stages,lineage:plan.diagnosticLineage});
+        const report=context.modeling ? {...plan.report,stages:stages.map(({diagnostics,elapsedMs,...stage})=>stage)} : plan.report;
+        return {value:plan.document,report,lineage:plan.lineage};
+      }
+    },
     ...P.raster.operations,
     ...P.drawing2d.operations,
     ...P.motionDeformation.operations,
     ...P.rasterColor.operations,
+    ...P.materialChannels.operations,
+    ...P.materialBase.operations,
+    ...P.graphImages.operations,
     ...P.pixelEffects.operations,
     ...P.signalRecovery.operations,
     ...P.rasterWarp.operations,
@@ -259,6 +288,47 @@
       run({ mesh, sources, targets, options }) {
         const value = P.geometry.meshPaths(mesh, { ...options, sources });
         return { value, curves: value.curves(targets), distance: point => value.distanceAt(point) };
+      }
+    },
+    attributeElements: {
+      inputs: { geometry: 'any', domain: 'string' },
+      outputs: { value: 'points' },
+      run({ geometry, domain }) { return {value:P.attributes.entities(domain,geometry)}; }
+    },
+    attributeTable: {
+      inputs: { domain: 'string', entities: 'points', channels: {type:'any',default:{}} },
+      outputs: { value: 'any', field: 'field' },
+      run({domain,entities,channels}) {
+        const value=P.attributes.asset(domain,entities,channels);
+        return {value,field:P.attributes.nearest(P.attributes.open(value))};
+      }
+    },
+    attributeMesh: {
+      inputs: { mesh:'any', options:{type:'any',default:{}}, vertex:{type:'any',default:null},
+        face:{type:'any',default:null}, edge:{type:'any',default:null}, corner:{type:'any',default:null} },
+      outputs: { value: 'field' },
+      run({mesh,options,...domains}) {
+        const columns=Object.fromEntries(Object.entries(domains).filter(([,value])=>value!==null));
+        return {value:P.attributes.mesh(mesh,{...options,...columns})};
+      }
+    },
+    attributeLineage: {
+      inputs: { domain:'string', evidence:'any', before:{type:'any',default:null}, after:{type:'any',default:null},
+        options:{type:'any',default:{}} },
+      outputs: { value:'any' },
+      run({domain,evidence,before,after,options}) {
+        const A=P.attributes;
+        const value=domain==='curve-control' ? A.curveLineage(evidence) : domain==='splat' ? A.splatLineage(evidence) :
+          A.meshLineage(domain,before,after,evidence,options);
+        return {value};
+      }
+    },
+    attributeRemap: {
+      inputs: { source:'any',domain:'string',entities:'points',lineage:'any',options:{type:'any',default:{}} },
+      outputs: { value:'any', report:'any', field:'field' },
+      run({source,domain,entities,lineage,options}) {
+        const {asset,report}=P.attributes.remap(source,domain,entities,lineage,options);
+        return {value:asset,report,field:P.attributes.nearest(P.attributes.open(asset))};
       }
     },
     attributeTransfer: {

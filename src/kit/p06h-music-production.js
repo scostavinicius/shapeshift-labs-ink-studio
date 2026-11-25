@@ -220,13 +220,15 @@
         const beat=round(row.beat), beatStyle=row.played ? {delay:0,accent:1} : grooveAt(track.groove,row.beat);
         const style=G.perform(row.played ? [] : track.gestures,row.beat,row.play,track.color), play=style.play;
         const phrase=F.at(track.phrases,beat), authoredNote=phrase?.overrides.get(F.noteKey(row));
+        const fitted=authoredNote?.fit;
         if (authoredNote?.articulation!==undefined) style.play={...play,articulation:authoredNote.articulation};
         const inherited=row.played ? null : performance?.style(name,style.play.articulation,beat,clock);
         const phrasing=row.played ? null : ensemble?.style(name,beat,row.midi,clock);
         const authored=row.time+beatStyle.delay+(play.delay ?? 0)+(inherited?.delay ?? 0)+(phrasing?.delay ?? 0)+
-          (authoredNote?.delay ?? 0);
+          (fitted ? 0 : authoredNote?.delay ?? 0);
         const proposed=performance?.anchor(row.beat) ? row.time : Math.max(0,authored);
-        const velocity=clamp(row.velocity*beatStyle.accent*style.accent*(inherited?.accent ?? 1)*(phrasing?.accent ?? 1)*(authoredNote?.accent ?? 1));
+        const velocity=clamp(row.velocity*beatStyle.accent*style.accent*(inherited?.accent ?? 1)*(phrasing?.accent ?? 1)*
+          (fitted ? 1 : authoredNote?.accent ?? 1));
         const audible=proposed<end && !silent(round(proposed)) && velocity>0;
         drafts.push({row,style,inherited,phrasing,authored,proposed,audible,velocity,authoredNote,adjustment:0});
       }
@@ -247,7 +249,7 @@
         const anchored=performance?.anchor(row.beat);
         // Played clips skip automatic groove, but explicit take edits still apply.
         const performed=anchored ? row.time : row.played ?
-          Math.max(row.clipLaunch ?? 0,row.time+(authoredNote?.delay ?? 0)) :
+          Math.max(row.clipLaunch ?? 0,row.time+(authoredNote?.fit ? 0 : authoredNote?.delay ?? 0)) :
           follow ? follow(proposed,row.beat) : proposed;
         const delay=anchored || !track.timingEdits.size ? 0 : track.timingEdits.get(P.musicTimingEdits.key(row))?.delay ?? 0;
         const time=delay ? Math.max(row.clipLaunch ?? 0,performed+delay) : Math.max(0,performed);
@@ -303,6 +305,9 @@
     applyChokes(tracks,events);
     for (const name of names) {
       const track=tracks[name];
+      if (track.phrases.some(phrase=>phrase.fit))
+        P.musicPhraseContour.apply(track.phrases,events[name],source.tracks[name].clips,clock,
+          cue?.perTrack[name],performance?.anchor);
       if (track.performance) P.musicPhrasing.releases(events[name]);
       if (track.timingEdits.size) for (const note of events[name]) {
         const offset=track.timingEdits.get(P.musicTimingEdits.key(note))?.offset;
@@ -412,13 +417,26 @@
     const nativeGate=note.start===undefined ? Math.min(note.gate,gateEnd-note.time) : gate;
     const cropped=note.performance?.release && gateEnd<note.time+note.gate-1e-8;
     const sound=track.play.prepare(cropped ? {...note,suppressRelease:true} : note,sampleRate,nativeGate);
-    const naturalEnd=Math.min(note.choke ?? Infinity,start+sound.duration);
     const {attackFade=0,releaseLimit=Infinity}=note.play ?? {};
-    const limitedEnd=Math.min(naturalEnd,start+nativeGate+releaseLimit);
-    const shortened=tails?.length ? Q.tailLimit(tails,note.time+note.gate,limitedEnd) : null;
-    const endTime=shortened?.stop ?? limitedEnd;
-    const releaseFade=limitedEnd<naturalEnd && endTime===limitedEnd ? Math.min(.02,Math.max(.004,releaseLimit*.5)) : 0;
-    const last=Math.ceil(endTime*sampleRate);
+    let shortened,endTime,last,releaseFade;
+    function bounds(duration,noteGate,notatedEnd) {
+      const naturalEnd=Math.min(note.choke ?? Infinity,start+duration);
+      const limitedEnd=Math.min(naturalEnd,start+noteGate+releaseLimit);
+      shortened=tails?.length ? Q.tailLimit(tails,notatedEnd,limitedEnd) : null;
+      endTime=shortened?.stop ?? limitedEnd;
+      releaseFade=limitedEnd<naturalEnd && endTime===limitedEnd ? Math.min(.02,Math.max(.004,releaseLimit*.5)) : 0;
+      last=Math.ceil(endTime*sampleRate);
+    }
+    bounds(sound.duration,nativeGate,note.time+note.gate);
+    function extend(until) {
+      const end=until/sampleRate;
+      if (end>Math.min(note.choke ?? Infinity,note.clipEnd ?? Infinity)) return null;
+      const nextGate=end-(note.start===undefined ? note.time : start);
+      const duration=sound.extendGate(nextGate);
+      if (duration===null) return null;
+      bounds(duration,nextGate,end);
+      return last;
+    }
     const placementGain=note.renderGain ?? 1, entryFade=note.renderFade;
     function read(at,out) {
       if (at<first || at>=last) {
@@ -438,7 +456,8 @@
       out[0]=sound.signal(t,frame,0)*fade*placement*fadeIn*fadeOut;
       out[1]=sound.stereo ? sound.signal(t,frame,1)*fade*placement*fadeIn*fadeOut : out[0];
     }
-    return {first,last,asset:sound.asset,read,write(data,from,to) {
+    return {first,last,asset:sound.asset,read,
+      ...(sound.extendGate && !note.performance?.release && !tails?.length && {extend}),write(data,from,to) {
       const out=[0,0];
       for (let at=first;at<Math.min(last,to);at++) {
         read(at,out);

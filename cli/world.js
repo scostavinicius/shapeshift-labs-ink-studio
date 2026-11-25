@@ -9,6 +9,7 @@ const StoryWatch = require('./story-watch.js');
 const StoryExplanation = require('./story-explanation.js');
 const StoryForkCompare = require('./story-fork-compare.js');
 const StorySeedMatrix = require('./story-seed-matrix.js');
+const StagingSearch = require('./staging-search.js');
 const SimulationFixture = require('./simulation-fixture.js');
 
 const read = file => JSON.parse(fs.readFileSync(path.resolve(file),'utf8'));
@@ -933,6 +934,21 @@ module.exports = function createCLI({kit,build,pose,dataScene,opt,renderOptions,
           engine:fromRecording?recordingRun(input):runtime(input),recordedEnd:input.log?.end.tick,
           workerPool,destination:opt.out,sources
         });
+        process.stdout.write(JSON.stringify(report,null,opt.json?0:2)+'\n');
+        return;
+      }
+      case 'search-staging': {
+        ensure(typeof file==='string'&&typeof other==='string'&&!extra.length&&typeof opt.out==='string'&&opt.out.trim()&&
+          Object.keys(opt).every(key=>['out','workers','seed','dt','asset-pack','json'].includes(key)),StagingSearch.usage);
+        const sources = new Set([file,other]);
+        const input = load(file,{dependency:source=>sources.add(source)});
+        sourceWorld(input);
+        const engine = input.log
+          ? R.replay(input.log,{workerPool}).fork()
+          : runtime(input);
+        const plan = StagingSearch.prepare(W,read(other),engine);
+        const result = StagingSearch.search(W,plan,engine,{workerPool});
+        const report = StagingSearch.publish(result,opt.out,output=>checkReportPath(sources,output,'staging search inputs'));
         process.stdout.write(JSON.stringify(report,null,opt.json?0:2)+'\n');
         return;
       }

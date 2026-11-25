@@ -3,26 +3,72 @@
   const A=P.mediaGraph,S=P.mediaGraphSupport,I=P.musicInstruments;
   const {check,fields,record,id,integer,finite}=I, {clock,proposals,energy,bounded,round,median}=S.instrumentSessionAnalysis;
   const format='ink-studio/session-instrument', noteRange=(lo,hi)=>[round(lo,6),round(hi,6)];
+  const positions=names=>names.map((name,i)=>({name,position:i/(names.length-1)}));
+
+  function recordedPerspectives(cell,id,selected,marks,model,names,keep) {
+    const {rate,slice,mics}=model,nodes={},samples={},ranges=selected.map(row=>{
+      const take=marks.get(row.id);
+      return {id:take.id,from:Math.max(take.fromSample,take.onsetSample-Math.round(rate*.006)),to:take.toSample};
+    });
+    const stereo=names.some(name=>mics[name].pcm.channels===2);
+    const channels=stereo ? ['left','right'] : ['mix'],outputs={};
+    for (const [i,name] of names.entries()) {
+      const mic='mic-'+(i+1);
+      samples[name]=ranges.map(({from,to},j)=>keep(id+'-'+mic+'-'+(j+1),slice(name,from,to)));
+      const zone={samples:samples[name],root:cell.key};
+      const isMono=mics[name].pcm.channels===1;
+      if (isMono) nodes[mic]={type:'sample',zones:[zone]};
+      for (const channel of channels) {
+        const input=isMono ? mic : mic+'-'+channel;
+        if (!isMono) nodes[input]={type:'sample',channel,zones:[zone]};
+        const output=mic+'-blend-'+channel;
+        if (i) nodes[output]={type:'blend',inputs:[outputs[channel],input],
+          window:[(i-1)/(names.length-1),i/(names.length-1)],position:{base:0,by:{room:1}}};
+        outputs[channel]=i ? output : input;
+      }
+    }
+    const tail=Math.max(...ranges.map(({from,to})=>(to-from)/rate));
+    return {instrument:{type:'graph',nodes,output:stereo ? outputs : outputs.mix,tail,sampleTail:true},
+      samples,ranges,method:'multimic-recording'};
+  }
 
   function build(session,assets,options={}) {
-    check(fields(options,['perspective','body','fit','fill','alternates']) &&
+    check(fields(options,['perspective','perspectives','alignment','body','fit','fill','alternates']) &&
       ['hybrid','recorded'].includes(options.body ?? 'hybrid') &&
       ['auto','modal','spectral'].includes(options.fit ?? 'auto') &&
       ['nearest','none'].includes(options.fill ?? 'nearest') && integer(options.alternates ?? 3,1,3),
     'Choose a body, fitting method, alternate count, and missing-cell policy');
-    const {body='hybrid',fit='auto',fill='nearest',alternates=3}=options;
-    const analysis=proposals(session,assets), resolved=analysis.value, model=clock(resolved,assets);
+    const {perspectives,body=perspectives ? 'recorded' : 'hybrid',fit='auto',fill='nearest',alternates=3}=options;
+    check(perspectives===undefined ? options.alignment===undefined :
+      Array.isArray(perspectives) && integer(perspectives.length,2,8) &&
+      Array.from(perspectives).every(name=>id(name) && record(session?.perspectives) &&
+        Object.hasOwn(session.perspectives,name)) && new Set(perspectives).size===perspectives.length &&
+      options.perspective===undefined && body==='recorded' && options.fit===undefined,
+    'Choose distinct ordered perspectives for a recorded mic blend');
+    const alignment=options.alignment===undefined ? null : S.alignInstrumentSession(session,assets,options.alignment);
+    if (alignment) {
+      const unresolved=Object.entries(alignment.report.perspectives)
+        .filter(([,row])=>!['aligned','reference'].includes(row.status)).map(([name,row])=>name+' ('+row.status+')');
+      check(!unresolved.length,'Review unresolved microphone alignment for '+unresolved.join(', '));
+    }
+    const analysis=proposals(alignment?.value ?? session,assets), resolved=analysis.value, model=clock(resolved,assets);
     const {rate,slice}=model, perspective=options.perspective ?? model.perspective;
     check(Object.hasOwn(model.mics,perspective),'Unknown build perspective');
     const rows=analysis.report.takes, marks=new Map(resolved.takes.map(row=>[row.id,row]));
     const rendered={}, instruments={}, zones=[], cover=[], bodies=new Map();
+    let assetCount=0,assetSamples=0;
+    function keep(name,source,shape) {
+      assetSamples+=source.samples.length;
+      check(++assetCount<=128 && assetSamples<=12e6,'Playable session assets exceed the bank budget');
+      rendered[name]={...source,samples:Float64Array.from(source.samples,shape)};
+      return name;
+    }
     function bake(name,from,to,fadeIn,fadeOut) {
       const source=slice(perspective,from,to), n=to-from;
-      rendered[name]={...source,samples:Float64Array.from(source.samples,(x,i)=>{
+      return keep(name,source,(x,i)=>{
         const at=Math.floor(i/source.channels);
         return x*Math.min(1,at/Math.max(1,fadeIn),(n-1-at)/Math.max(1,fadeOut));
-      })};
-      return name;
+      });
     }
     function fitCell(cell,notes,index) {
       const id='voice-'+(index+1), levels=notes.map(row=>row.bodyRms), center=median(levels);
@@ -30,8 +76,14 @@
       const clean=notes.filter(row=>!clipped(row)), eligible=clean.length ? clean : notes;
       const sorted=eligible.slice().sort((a,b)=>Math.abs(a.bodyRms-center)+.15*Math.abs(a.brightness-brightness)-
         Math.abs(b.bodyRms-center)-.15*Math.abs(b.brightness-brightness) || a.id.localeCompare(b.id));
-      const representative=body==='recorded' ? sorted.find(row=>marks.get(row.id).loop) ?? sorted[0] : sorted[0];
+      const representative=body==='recorded' && !perspectives ? sorted.find(row=>marks.get(row.id).loop) ?? sorted[0] : sorted[0];
       const selected=[representative,...eligible.filter(row=>row.id!==representative.id)].slice(0,alternates);
+      if (perspectives) {
+        const {instrument,samples,ranges,method}=recordedPerspectives(cell,id,selected,marks,model,perspectives,keep);
+        instruments[id]=instrument;
+        return {id,method,take:representative.id,sourceCount:notes.length,clipped:selected.some(clipped),
+          alternates:selected.map(row=>row.id),samples,ranges,bodyRms:center,brightness};
+      }
       const take=marks.get(representative.id), count=take.attackEndSample-take.onsetSample;
       const minimum=Math.ceil(rate*.02), heldEnd=take.releaseSample ?? take.toSample;
       const audioEnd=heldEnd-take.fromSample>=minimum ? heldEnd : take.toSample;
@@ -121,19 +173,28 @@
       const status=actual ? actual.sourceCount>1 ? 'recorded' : 'single-take' : nearby ? 'borrowed' : 'missing';
       cover.push({...cell,status,donor:nearby?.id ?? null,...(modelRow && {instrument:modelRow.id}),
         capturedTakeCount:actual?.sourceCount ?? 0,playableTakeCount:modelRow?.alternates.length ?? 0,
-        flags:[...(modelRow?.clipped ? ['clipped-source'] : []),...(modelRow?.releaseSamples.length ? [] : ['no-key-up']),
-          ...(body==='recorded' && !modelRow?.loop ? ['no-loop'] : [])]});
+        flags:[...(modelRow?.clipped ? ['clipped-source'] : []),
+          ...(!perspectives && !modelRow?.releaseSamples.length ? ['no-key-up'] : []),
+          ...(!perspectives && body==='recorded' && !modelRow?.loop ? ['no-loop'] : [])]});
       if (modelRow) zones.push({instrument:modelRow.id,low:cell.low,high:cell.high,
         velocity:cell.band,articulation:cell.articulation});
     }
-    check(zones.length>0 && Object.keys(rendered).length<=128 &&
-      Object.values(rendered).reduce((sum,pcm)=>sum+pcm.samples.length,0)<=12e6,'Playable session assets are empty or exceed the bank budget');
+    check(zones.length>0,'Playable session assets are empty');
+    let sharedGain=1;
+    if (perspectives) {
+      let peak=.82;
+      for (const {samples} of Object.values(rendered)) for (const sample of samples) peak=Math.max(peak,Math.abs(sample));
+      sharedGain=.82/peak;
+      if (sharedGain<1) for (const {samples} of Object.values(rendered))
+        for (let i=0;i<samples.length;i++) samples[i]*=sharedGain;
+    }
     const patch={type:'zoned',instruments,zones,defaultArticulation:session.articulations[0],
-      performance:{connect:{gap:0,interval:0,fade:0},rules:[{when:'release',articulation:'key-up',level:.86}]}};
+      performance:{connect:{gap:0,interval:0,fade:0},rules:perspectives ? [] : [{when:'release',articulation:'key-up',level:.86}]}};
     P.musicGestures.patch(patch,rendered);
     const value={format,version:1,id:session.id,patch,coverage:cover};
-    return {value,assets:rendered,report:{perspective,body,fill,coverage:cover,takes:rows,
-      models:Object.fromEntries(bodies),takeCount:rows.length,assetCount:Object.keys(rendered).length},session:resolved};
+    return {value,assets:rendered,report:{...(perspectives ? {perspectives:positions(perspectives),sharedGain} : {perspective}),
+      ...(alignment && {alignment:alignment.report}),body,fill,coverage:cover,takes:rows,
+      models:Object.fromEntries(bodies),takeCount:rows.length,assetCount},session:resolved};
   }
 
   function distance(a,b) {
@@ -209,5 +270,5 @@
     return {value:result.value,report:{...result.report,sources:rows.map(({value,...row})=>row)}};
   }
 
-  A.instrumentSession=Object.freeze({analyze:proposals,build,audition,auditionTakes});
+  A.instrumentSession=Object.freeze({align:(...args)=>S.alignInstrumentSession(...args),analyze:proposals,build,audition,auditionTakes});
 })(KIT.procedural);

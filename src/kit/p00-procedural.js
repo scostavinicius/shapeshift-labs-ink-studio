@@ -1,5 +1,5 @@
 /* Renderer-independent procedural primitives. */
-(function (K) {
+const freezeProceduralContainer = (function (K) {
   const A = (K.procedural = {});
   function json(value, path) {
     path = path || '$';
@@ -21,12 +21,16 @@
     throw new Error(path + ': expected finite JSON data');
   }
   const frozenNodes = new WeakSet();
+  // Internal shortcut for owned containers whose children are already frozen.
+  function freezeContainer(value) {
+    frozenNodes.add(Object.freeze(value));
+    return value;
+  }
   function freeze(value) {
     if (value && typeof value === 'object') {
       if (frozenNodes.has(value)) return value;
       for (const v of Object.values(value)) freeze(v);
-      Object.freeze(value);
-      frozenNodes.add(value);
+      freezeContainer(value);
     }
     return value;
   }
@@ -50,5 +54,12 @@
     for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619);
     return h >>> 0;
   }
-  A.data = Object.freeze({ clone: json, freeze, merge, hash, isImmutable: value => frozenNodes.has(value) });
+  function hash01(text, seed) {
+    let h = hash(text, seed);
+    h = Math.imul(h ^ (h >>> 16), 0x7feb352d);
+    h = Math.imul(h ^ (h >>> 15), 0x846ca68b);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+  }
+  A.data = Object.freeze({ clone: json, freeze, merge, hash, hash01, isImmutable: value => frozenNodes.has(value) });
+  return freezeContainer;
 })(KIT);

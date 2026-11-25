@@ -487,6 +487,9 @@ Run `node examples/music-production/phrase-performance.cjs output` for
 the Split Reed played three ways and a comp that carries the held note
 through a bass pickup. [Gesture mapping research](https://nime.org/proc/nime2002_hunt/) · [Ableton comping](https://www.ableton.com/en/manual/comping/)
 
+Use [phrase contour borrowing](music-phrase-contour.md) to fit timing,
+accents, and breath from a played or gesture take to different notes.
+
 ## Reproduce the long-form audition
 
 ```sh

@@ -105,6 +105,10 @@ use the edited seconds. Pass the cue sheet or exported timeline back to
 `story performance` with a plan that includes explicit actor identities to
 render revised lettering separately from the original simulation.
 
+For recorded speech, use the [mouth cel compiler](performance-mouth-cels.md)
+to align the read and composite reviewed mouth exposures on a character's native
+sprite grid.
+
 ## Run the demos
 
 ```sh

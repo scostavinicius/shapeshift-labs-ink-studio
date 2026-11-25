@@ -168,7 +168,7 @@
     return P.data.freeze({production,themeMap,revision,report:{sections}});
   }
 
-  function createHistory(maps,duration,compiled,live=false) {
+  function createHistory(maps,duration,compiled,live=false,versionedThemes=new Set()) {
     const catalog=new Map(), indexes=new Map();
     for (const [name,map] of named(maps,32,'theme source')) {
       check(Object.hasOwn(compiled,name) && fields(map,['themes','appearances']) &&
@@ -203,16 +203,20 @@
             new Set(track.notes.map(note=>note.id)).size===track.notes.length,
             'Mapped theme performance must match the source notes');
           if (appearance.stage==='statement') check(track.count===identities.length,'A statement needs the complete theme');
-          for (const note of track.notes) if (Object.hasOwn(compiled[name].tracks,track.part)) hits.push({
-            appearance:appearance.id,theme:appearance.theme,stage:appearance.stage,
-            part:track.part,count:track.count,note:note.id,time:note.time,midi:note.midi
-          });
+          for (const note of track.notes) {
+            const event=performed[track.part].get(JSON.stringify([note.beat,note.time,note.midi]));
+            hits.push({appearance:appearance.id,theme:appearance.theme,stage:appearance.stage,
+              part:track.part,count:track.count,note:note.id,time:note.time,midi:note.midi,
+              ...(versionedThemes.has(appearance.theme)&&{onset:event.start??event.time,
+                off:Math.min(event.time+event.gate,event.choke??Infinity),velocity:event.velocity})});
+          }
         }
       }
       hits.sort(before);
       indexes.set(name,hits);
     }
     const pending=[], instances=new Map(), complete=[], heard=new Map();
+    const versions=versionedThemes.size?P.musicMotifRecall.history(indexes,compiled,versionedThemes):null;
     let cursor=0;
     const snapshot=()=>Object.fromEntries(Array.from(catalog,([theme,identities])=>{
       const state=heard.get(theme);
@@ -220,7 +224,9 @@
         counts:Object.fromEntries(stages.map(stage=>[stage,state?.counts[stage] ?? 0]))}];
     }));
     return {
+      ...(versions&&{versions}),
       add(placement) {
+        if(!live)versions?.schedule(placement,duration);
         const source=indexes.get(placement.source);
         if (!source?.length || !placement.gain) return;
         let lo=0,hi=source.length;
@@ -242,6 +248,7 @@
       at(time) {
         check(time>=cursor-epsilon,'Theme history must advance in playback order');
         cursor=time;
+        versions?.advance(time);
         pending.sort(before);
         let read=0;
         for (const hit of pending) {
@@ -267,6 +274,7 @@
       },
       finish(placement,time) {
         this.at(time);
+        versions?.finish(placement);
         for (const [key,instance] of instances) if (instance.placement===placement) instances.delete(key);
       },
       completed() {return complete.slice();}

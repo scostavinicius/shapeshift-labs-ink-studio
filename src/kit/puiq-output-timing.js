@@ -11,7 +11,8 @@
     check(fields(options,['path','measure','track','unit']),'Invalid simulation trace output options');
     const data=G.select(source,options.path), {format,version,info}=data;
     let {sampleRate,startSample=0,frames,channels}=data;
-    if([W.waveNetworks.traceFormat,W.resonantModes.traceFormat,W.contactExciters.traceFormat,W.virtualSensors.reportFormat].includes(format)){
+    if([W.waveNetworks.traceFormat,W.resonantModes.traceFormat,W.resonantModes.coupledTraceFormat,
+      W.contactExciters.traceFormat,W.virtualSensors.reportFormat].includes(format)){
       check(version===1&&int(data.start,0,Number.MAX_SAFE_INTEGER)&&int(data.end,data.start,Number.MAX_SAFE_INTEGER),
         'Native trace needs a version 1 sample range');
       sampleRate=info?.sampleRate??sampleRate;
@@ -24,6 +25,12 @@
       }else if(format===W.resonantModes.traceFormat){
         check(options.measure===undefined&&options.track===undefined,'Modal traces publish their named displacement pickups');
         channels=channelMap(data.pickups,()=>options.unit??'model-unit');
+      }else if(format===W.resonantModes.coupledTraceFormat){
+        const measure=options.measure??'displacement';
+        const rows=measure==='velocity'?data.velocities:data.pickups;
+        check(['displacement','velocity'].includes(measure)&&own(rows,options.track),
+          'Choose a coupled body and displacement or velocity');
+        channels=channelMap(rows[options.track],()=>options.unit??(measure==='velocity'?'model-unit/s':'model-unit'));
       }else if(format===W.virtualSensors.reportFormat){
         check(data.kind==='wave'&&options.measure===undefined&&options.track===undefined,'Select a sample-rate wave sensor report');
         channels=channelMap(data.readings,name=>data.rig?.sensors?.[name]?.quantity?.unit);

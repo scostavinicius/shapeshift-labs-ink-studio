@@ -35,6 +35,23 @@
       monoLossDb:relative(stats.folded,stats.rms),monoSilent:stats.folded===0,oversample:8};
   }
   const meter=(input,settings)=>measure(pcm(input),settings);
+  // Decoded floating-point delivery audio can exceed digital full scale.
+  function peaks(input) {
+    const {samples,channels,sampleRate}=input??{};
+    check((Array.isArray(samples)||ArrayBuffer.isView(samples))&&integer(samples.length,1,32000000)&&
+      integer(channels,1,64)&&samples.length%channels===0&&integer(sampleRate,1,768000),
+    'Peak measurement needs bounded interleaved PCM');
+    let maximum=0, sampleOvers=0;
+    for (const sample of samples) {
+      const amplitude=Math.abs(sample);
+      check(typeof sample==='number'&&Number.isFinite(amplitude)&&amplitude<=3.4028234663852886e38,
+        'Peak measurement needs finite float-range samples');
+      if (amplitude>1) sampleOvers++;
+      maximum=Math.max(maximum,amplitude);
+    }
+    const truePeak=S.mixerPeak.peak(samples,channels);
+    return {oversample:8,samplePeakDbFS:S.mixerPeak.levelDb(maximum),truePeakDbTP:S.mixerPeak.levelDb(truePeak),sampleOvers};
+  }
   function preview(input,settings={},focus) {
     const source=pcm(input);
     check(fields(settings,['mode','lowHz','highHz']),'Invalid mixer monitor settings');
@@ -126,5 +143,5 @@
       difference:{polarity:'processed-minus-bypass',sharedGainDb:level(trim)},
       effect:{polarity:'processed-minus-bypass',gainDb:level(effectTrim)}}};
   }
-  A.mixerMonitor=Object.freeze({meter,preview,match,compare});
+  A.mixerMonitor=Object.freeze({meter,peaks,preview,match,compare});
 })(KIT.procedural);

@@ -3,6 +3,7 @@ const path = require('node:path');
 const studio = require('..');
 const {inspect} = require('../src/mesh-uv.js');
 const files = require('./asset-files.js');
+const UV = require('../src/material-uv.js');
 
 const meshFormat='ink-studio/uv-mesh';
 const dark='#172331', grid='#253747', pale='#e3edf3', muted='#9bb2c1';
@@ -18,16 +19,43 @@ const label=(x,y,value,size=15,fill=pale)=>'<text x="'+x+'" y="'+y+'" fill="'+fi
 const svg=(width,height,parts)=>'<svg xmlns="http://www.w3.org/2000/svg" width="'+width+'" height="'+height+'" viewBox="0 0 '+
   width+' '+height+'" font-family="system-ui,sans-serif"><rect width="100%" height="100%" fill="'+dark+'"/>'+parts.join('')+'</svg>\n';
 
-function source(file,uvSet) {
+function source(file,selector,preserve = false) {
   if (/\.json$/i.test(file)) {
     const mesh=JSON.parse(fs.readFileSync(file,'utf8'));
+    if (mesh.format==='ink-studio/mesh-topology') {
+      const api=studio.load().KIT.meshTopology, doc=api.create(mesh), uvSet=UV.resolve(doc.uvBindings,selector);
+      const indices=new Map(doc.vertices.map((row,i)=>[row.id,i])), corner=new Map(), byFace=new Map();
+      for (const row of doc.faces) {
+        byFace.set(row.id,row.material);
+        row.corners.forEach(value=>corner.set(value.id,value));
+      }
+      const triangles=api.triangulate(doc).triangleSources;
+      const cutAt=set=>doc.edges.filter(row=>UV.seam(row,set)).map(row=>row.vertices.map(id=>indices.get(id)));
+      const layoutAt=set=>triangles.map(row=>{
+        const uv=row.corners.map(id=>UV.uv(corner.get(id),set));
+        return uv.every(Boolean) ? uv : null;
+      });
+      const sets=new Set();
+      if(preserve) for(const row of corner.values()) for(const set of UV.setsOf(row)) sets.add(set);
+      return {points:doc.vertices.map(row=>row.position),triangles:triangles.map(row=>row.corners.map(id=>indices.get(corner.get(id).vertex))),
+        uvs:layoutAt(uvSet),cutSeams:cutAt(uvSet),uvSet,uvBindings:doc.uvBindings,
+        ...(sets.size && {uvSets:Object.fromEntries([...sets].map(set=>[set,layoutAt(set)])),
+          uvCuts:Object.fromEntries([...sets].map(set=>[set,cutAt(set)]))}),
+        groupsByFace:triangles.map(row=>({material:byFace.get(row.face)}))};
+    }
     if (mesh.format && (mesh.format!==meshFormat || mesh.version!==1)) throw new TypeError('Unsupported UV mesh document');
-    return mesh;
+    const uvSet=UV.resolve(mesh.uvBindings,selector);
+    return {...mesh,uvs:uvSet ? mesh.uvSets?.[uvSet] : mesh.uvs,uvSet};
   }
+  const uvSet=typeof selector==='number'?selector:0;
   if (uvSet && /\.obj$/i.test(file)) throw new RangeError('OBJ has a single UV set');
-  const mesh=studio.readMesh(file,{attributes:true,uvSet});
+  const mesh=studio.readMesh(file,{attributes:true,uvSet,allUVSets:preserve||typeof selector==='string'});
+  const set=UV.resolve(mesh.uvBindings,selector);
+  if (mesh.uvBindingConflicts?.some(row=>preserve||row.channel===selector))
+    throw new RangeError('UV assignments differ across exported parts. Import the part as its own retained mesh.');
+  const layout=mesh.uvSets?.[set] ?? (set===uvSet ? mesh.uvs??mesh.uvFaces : undefined);
   const triples=data=>Array.from({length:data.length/3},(_,i)=>Array.from(data.subarray(i*3,i*3+3)));
-  return {points:triples(mesh.pos),triangles:triples(mesh.tri),uvs:mesh.uvs??mesh.uvFaces,
+  return {points:triples(mesh.pos),triangles:triples(mesh.tri),uvs:layout,uvSet:set,uvBindings:mesh.uvBindings, ...(preserve && mesh.uvSets && {uvSets:mesh.uvSets}),
     groupsByFace:Array.from(mesh.tmat,i=>({material:mesh.mats[i].name}))};
 }
 
@@ -100,19 +128,42 @@ function views(mesh, report, name) {
 }
 
 function command(pos,opt,{num,list}) {
-  const [mode,input]=pos;
-  if (!['inspect','simplify'].includes(mode) || !input || typeof opt.out!=='string')
-    throw new Error('Use ink-studio mesh-uv inspect|simplify <mesh.obj|.gltf|.glb|.json> --out <directory|mesh.json>');
+  const [mode,input,...rest]=pos;
+  if (!['inspect','simplify','import'].includes(mode) || !input || rest.length || typeof opt.out!=='string')
+    throw new Error('Use ink-studio mesh-uv inspect|simplify|import <mesh.obj|.gltf|.glb|.json> --out <directory|mesh.json>');
   const file=path.resolve(input), output=path.resolve(opt.out), uvSet=num('uv-set',0);
   if(!Number.isSafeInteger(uvSet)||uvSet<0||uvSet>31) throw new RangeError('UV set must be an integer from 0 to 31');
   if (opt['protected-seams']!==undefined && typeof opt['protected-seams']!=='string')
     throw new TypeError('--protected-seams needs a JSON file containing edge pairs');
   const sourceSeams=opt['protected-seams'] && path.resolve(opt['protected-seams']);
-  const mesh=source(file,uvSet);
+  if (opt.channel!==undefined && (!UV.channel(opt.channel)||opt['uv-set']!==undefined))
+    throw new RangeError('Choose --channel or --uv-set');
+  const explicitLayout=opt['uv-set']!==undefined || opt.channel!==undefined;
+  const mesh=source(file,opt.channel ?? uvSet,mode!=='inspect'&&!explicitLayout);
+  if (mode==='import' && explicitLayout) {
+    delete mesh.uvBindings;
+    delete mesh.uvSets;
+    delete mesh.uvCuts;
+  }
+  if (mode==='simplify' && !explicitLayout &&
+      (Object.keys(mesh.uvSets ?? {}).some(set=>Number(set)!==0) || Object.values(mesh.uvBindings ?? {}).some(Boolean)))
+    throw new RangeError('UV simplification outputs one layout. Choose --channel or --uv-set to reduce it explicitly');
   if (sourceSeams) mesh.protectedSeams=JSON.parse(fs.readFileSync(sourceSeams,'utf8'));
   const guard=target=>{
     if ([file,sourceSeams].includes(target)) throw new Error('Choose an output different from the input mesh and seam file');
   };
+  if (mode==='import') {
+    if (!/\.json$/i.test(output) || opt['join-coincident']!==undefined && !['on','off'].includes(opt['join-coincident']) ||
+        opt.id!==undefined && typeof opt.id!=='string')
+      throw new TypeError('Choose a topology JSON output and optional --id and --join-coincident on|off');
+    guard(output);
+    const topology=studio.load().KIT.meshTopology.uv.fromTriangles(mesh,{
+      id:opt.id ?? path.basename(file,path.extname(file)),joinCoincident:opt['join-coincident']==='on'
+    });
+    files.json(output,topology);
+    console.log(JSON.stringify({file:output,mesh:topology.id,faces:topology.faces.length},null,2));
+    return;
+  }
   if (mode==='inspect') {
     const dimensions=list('atlas');
     const report=inspect(mesh,{size:dimensions?.length===1?dimensions[0]:dimensions??1024,
@@ -121,7 +172,7 @@ function command(pos,opt,{num,list}) {
     const paths=['report.json','atlas.svg','seams.svg'].map(name=>path.join(output,name));
     paths.forEach(guard);
     const images=views(mesh,report,name);
-    files.json(paths[0],{source:name,uvSet,...report});
+    files.json(paths[0],{source:name,uvSet:mesh.uvSet, ...(mesh.uvBindings && {uvBindings:mesh.uvBindings}),...report});
     files.write(paths[1],images.atlas);
     files.write(paths[2],images.seams);
     console.log(JSON.stringify({...report.summary,overlapComplete:report.overlap.complete,paddingComplete:report.padding.complete,directory:output},null,2));
@@ -129,6 +180,7 @@ function command(pos,opt,{num,list}) {
   }
   if (!/\.json$/i.test(output)) throw new Error('Choose a .json output for the reduced UV mesh');
   guard(output);
+  if (mesh.cutSeams?.length) mesh.protectedSeams=[...(mesh.protectedSeams??[]),...mesh.cutSeams];
   if (!mesh.uvs?.length || mesh.uvs.some(uv=>!uv)) throw new TypeError('Simplification needs authored UVs on every triangle');
   const result=studio.load().KIT.procedural.geometry.simplifyQEM(mesh,{
     target:num('triangles',undefined),ratio:num('ratio',.5),preserveBoundary:opt.boundaries!=='off'

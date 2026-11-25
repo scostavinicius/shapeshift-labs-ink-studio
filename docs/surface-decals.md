@@ -36,12 +36,63 @@ triangle boundaries.
 Supply top-down RGBA8 pixels as a flat array, up to 256 × 256. Use
 `kind: 'lettering'` for lettering artwork and `kind: 'scuff'` for wear or
 impact graphics. Alpha, optional overall `opacity`, and lifetime fades use
-a stable cutout pattern in texture space. With `kind: 'relief'`, supply
+a stable cutout pattern in texture space. An optional `mask` is a flat
+array with one alpha byte per image pixel. Ink multiplies the image alpha
+by the mask before applying opacity and fades. With `kind: 'relief'`, supply
 `relief: { height, heights? }` where `height` is the maximum outward
 displacement in scene units. The optional grayscale byte raster matches
 the color image dimensions. Image alpha supplies height when that raster
 is omitted. The relief displaces the decal's render geometry. It leaves
 the receiver's collision and source geometry under the receiver's control.
+
+## Edit a decal layer
+
+Add the version 1 decal document as `surfaceDecals` on a JSON diorama.
+A rest projector names its receiving solid's stable ID in
+`anchor.object`. Include `anchor.part` to check the receiver's rig part.
+The projector uses the diorama's rest coordinates and follows the part's
+animated pose. The diorama binds its splat receivers automatically.
+Use native receiver bindings for mesh UV projectors or node and socket
+anchors.
+
+In the pixel document, add a `decal-layer` destination and link it to an
+existing scene binding for the receiving solid. A surface layer can point
+to that destination:
+
+```json
+{
+  "destinations": [
+    { "id": "label-edit", "kind": "decal-layer", "binding": "gate", "decal": "warning-label" }
+  ],
+  "layers": [
+    { "id": "label", "kind": "surface", "destination": "label-edit" }
+  ]
+}
+```
+
+Use `pixel-art targets --destination layer:label --scene gate.json` on the
+pixel document to inspect the anchor, lifetime, and source revision.
+Apply an edit using the regular pixel document revision, frame, and
+optional inspected source revision. Use `"destination": "layer:label"`
+to respect the layer's lock.
+
+| `operation.type` | Fields |
+| --- | --- |
+| `move` | `delta` in rest-space XYZ. The native API also accepts a two-component delta for a UV decal. |
+| `mask` | `mask` with one alpha byte per image pixel. Use `null` to clear. |
+| `replace` | Top-down RGBA `image` with `width`, `height`, and `pixels`. When resizing, supply a matching mask or clear it with `"mask": null`. |
+| `bake` | Flattens the mask into the current decal texture. Add `"source": "frame"` to bake the selected pixel frame's composite and apply the decal mask. The frame must fit within 256 × 256. |
+
+The texture bake keeps the decal ID, projection bounds, and lifetime.
+The saved layer continues to follow its receiver and fade on the scene
+clock. A shared pixel edit session can undo or redo the source edits
+alongside changes to the artwork. Preview and replay use the same
+revision checks as other bound edits.
+
+For a standalone decal document, use
+`K.surfaceDecals.edit(document, decalId, operation)` and bind the returned
+document to a receiver. To bake a new raster at the same anchor, pass the
+RGBA `image` to the native bake operation.
 
 ## Bind and switch receivers
 
@@ -96,3 +147,56 @@ Run `node examples/surface-decals.js <directory> --frames` for the Aster
 survey pod demo. The output includes the portable decal document, a report,
 and renders of the moving part switching from mesh to SDF to splats. The
 scuff expires while the painted lettering and raised badge stay attached.
+
+## Retained pixel brushes
+
+Use `K.surfaceDecals.fromBrush` to place an
+[indexed pixel tip](pixel-art-authoring.md#capture-and-reuse-a-pixel-brush).
+The returned decal carries the tip's colors, holes, and offset from its
+anchor. Add it to a version 1 surface decal document and bind the receiver
+as above.
+
+```js
+const patch = K.surfaceDecals.fromBrush({
+  id: 'jacket-patch',
+  tip,
+  anchor: { object: 'courier', part: 'coat', material: 'cloth', uv: [.42, .63] },
+  pixelSize: [.011, .014]
+});
+```
+
+For a native mesh, `anchor.uv` locates the brush anchor in the mesh's
+top-down UVs. `pixelSize` measures one resized tip pixel in UV units.
+The brush is clipped to the receiver's triangles and follows their
+barycentric positions through posing or skinning. Overlapping UVs share
+the mark on the selected material. Use the optional `material` to scope
+a stamp when several materials reuse the same UV range. A UV decal is
+visible while its mesh receiver is active.
+
+For rest-space projection, supply `anchor.at`, `anchor.normal`, and an
+optional `anchor.up`, `depth`, and node or socket. `pixelSize` is then
+measured in scene units. The existing conforming projector follows posed
+mesh triangles, reprojects when an SDF snapshot changes, and supports
+rigid node or socket attachments on splat receivers.
+
+## Control projection and chart padding
+
+For a rest projector, set `anchor.minFacing` to the minimum cosine
+between the projector's outward normal and the receiving normal. The
+default is `0.25`. Larger values reject grazing surfaces. An explicit
+facing threshold on a splat receiver requires recorded surface normals.
+`anchor.depth` limits how far on either side of the rest projector Ink
+searches for a surface. `anchor.maxStep` limits how far neighboring
+samples can separate in that direction before triangles are clipped.
+
+For a mesh UV decal or brush, supply the receiving atlas rectangle and
+its reserved margins in `anchor.chart`.
+
+```js
+const chart = { min: [0.25, 0], max: [0.5, 0.5], padding: [0.01, 0.015] };
+```
+
+The padding is measured in mesh UV units on each side. Ink clips the
+decal to the writable portion of that rectangle and keeps the brush's
+original UV registration through clipping and skinning. The mesh's
+material selector is also available when multiple materials share UVs.

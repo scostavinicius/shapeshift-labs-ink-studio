@@ -137,6 +137,8 @@ ink-studio graph batch examples/headless-graph.json cases.json --out graph-batch
 ink-studio graph session examples/headless-graph.json --protocol ndjson
 ```
 
+For editable material files with stable connection IDs and per-instance controls, see the [material graph guide](editable-material-graph.md).
+
 Use `"format": "ink-studio/graph-project"` and `"version": 1` with the same
 `inputs`, `nodes`, and `outputs` as a library graph. Set input defaults on the
 typed ports and pass overrides as a JSON object with `--inputs values.json`.
@@ -562,16 +564,18 @@ must stay immutable while cached.
 
 ### Array operations
 
-`array.map`, `array.filter`, `array.reduce`, and keyed `array.sort` take
+`array.map`, `array.mapById`, `array.filter`, `array.reduce`, and keyed `array.sort` take
 `items` and name a reusable callback with the node's `group` field. The group
 declares an `item` input and a `value` output. It can also declare a numeric
 `index` for the zero-based index in the input array. Further group inputs
 become ports on the array node. Each item gets a deterministic seed based
-on its index and the node seed.
+on its index and the node seed. `array.mapById` seeds each callback from
+its authored ID and keeps that ID with the result.
 
 | Operation | Group output and result |
 | --- | --- |
 | `array.map` | Replace each item with the group's `value`. |
+| `array.mapById` | Take record items with unique string IDs, and return `{id, value}` rows in input order. An optional `splitFrom` on the source carries into the row. The callback still receives the current index when declared. |
 | `array.filter` | Keep items whose group returns `true`, in input order. |
 | `array.reduce` | Pass `initial` to the group's `accumulator` input, then feed each returned `value` into the next call in input order. An empty array returns `initial`. |
 | `array.sort` | Use finite numbers or strings as keys, in `asc` or `desc` order. Equal keys preserve input order in both directions. Omit `group` to sort an array of numbers or strings directly. |
@@ -1698,7 +1702,7 @@ the graph clock in seconds. Set `options.time` to hold a specific sample.
 | `proc.repeat` | Repeat a raster at an explicit output size with pixel `offset` and two-axis `scale`. Channel counts and numeric values are retained. |
 | `proc.tiles` | Lay out weighted `definitions` with north, east, south and west sockets. `mode: "solve"` accepts `pins`, `ports`, `boundary` and `wrap`. `mode: "wang"` uses `labels` and a world-cell `origin` for independently generated chunks. Returns a layout with a status and, on success, row-major IDs. |
 | `proc.tileImage` | Paint a successful `layout` with an `images` record keyed by tile ID. Each tile uses the same pixel dimensions. Masked cells stay transparent. |
-| `proc.scatter` | Scatter points in 2D or 3D `bounds` at a minimum `radius`. Use a scalar field or raster `mask` and an exclusive `threshold`. A raster spans XY for planar scatter or XZ for spatial scatter. The default mask channel is alpha for RGBA and channel zero otherwise. Outputs include points, stable sample records and a work report. |
+| `proc.scatter` | Scatter points in 2D or 3D `bounds` at a minimum `radius`. Use a scalar field or raster `mask` and an exclusive `threshold`. A raster spans XY for planar scatter or XZ for spatial scatter. The default mask channel is alpha for RGBA and channel zero otherwise. Outputs include points, sample records and a work report. Set `grid` for cell IDs that persist across changes to the bounds or mask. |
 | `proc.path` | Make a typed path from planar or spatial `points`. Choose `mode: "linear"` or `"spline"`, interpolation `steps`, optional `closed`, and an optional count of equal-distance `samples`. Raw `points` and arc `length` have their own ports. |
 | `proc.reaction` | Sample Ink’s Gray–Scott grid at an integer `steps` input. Set `width`, `height`, `feed`, `kill`, `wrap`, a same-size `mask`, or authored row-major `spots`. Returns V as `value`, U as `u` and update counts as `report`. Use step easing when keying the integer step count. |
 | `proc.rain` | Rasterize `rain` or `snow` with configurable count, speed, wind, mark length, opacity and an optional raster mask. The `particles` port returns positions, tails and opacity in pixel space. |
@@ -2330,7 +2334,80 @@ ink-studio graph run graph-3d-review/relay-foundry.json --at 1.13 --out graph-3d
 
 `geometry.meshPaths(mesh, { sources, edgeCost, maxCost })` supports native and imported indexed meshes. It returns per-vertex distances and predecessors, plus `path(vertex)`, `curves(vertices)` and a sampled `distanceAt(point)` field. The cost function receives positions, vertex IDs, length and adjacent faces. Return infinity to block an edge.
 
-`attributes.mesh(mesh, { vertex, face })` builds a nearest-surface sampler. Use `{ type: 'number' | 'vec2' | 'vec3' | 'label', values }` per channel. Numeric values interpolate across triangles. Labels and stable IDs are assigned from the dominant vertex or authored face. `attributes.sdf(field, callback)` projects a point onto a signed field. `attributes.carrier(carrier, callback)` samples a named surface chart. Use `attributes.transfer(sampler, domain, entities)` for points, faces, vertices, curve control points or instances. Use `attributes.paths` to retain curve IDs and per-control-point attributes, `attributes.nearest` to sample another captured table, and `attributes.splats(world, sampler)` to generate a table indexed by splat slot.
+`attributes.mesh(mesh, { vertex, face, edge, corner })` builds a nearest-surface
+sampler. It accepts indexed meshes and retained mesh topology, including
+posed scene meshes with authored IDs. Use `{ type, values, interpolation }`
+for a channel. Types include `number`, `vec2`, `vec3`, `vec4`, and `label`.
+Numeric channels default to `linear`. Labels default to `dominant`. Use
+`constant` to require agreement among contributing samples.
+
+Face-corner data interpolates within its owning face. The same vertex
+can have different values on the two sides of a seam. Edge data comes
+from the nearest authored boundary of the sampled face. Use
+`edgeMaxDistance` to limit how far an edge channel reaches. Set
+`entity.source.face` or `entity.source.edge` to select an explicit
+source side or edge. Use `sourceDomain` in the transfer options to
+select a single domain. The combined sample applies vertex, face,
+corner, then edge values in that order.
+
+`attributes.sdf(field, callback)` projects a point onto a signed field.
+`attributes.carrier(carrier, callback)` samples a surface chart.
+`attributes.paths` retains curve IDs and samples per control.
+`attributes.splats(world, sampler, { identity: 'stable' })` uses stable
+splat IDs. The default retains the original slot addresses.
+
+### Transfer attributes through edits
+
+`attributes.entities(domain, geometry)` enumerates stable native
+element IDs and their positions. Use `edge` or `corner` for a mesh,
+`curve-control` for a retained spline, and `splat` for a world with
+unambiguous IDs. The graph operation `attributeElements` exposes
+these lists as points.
+
+`attributeTable` builds a versioned geometry attribute asset. Supply
+flat channel values in element order or omit `values` to read that
+channel from incoming rows' `attributes` fields. Its `field` output
+samples the nearest captured element. `attributeMesh` accepts typed
+tables on its domain inputs and publishes a surface field for
+`attributeTransfer`.
+
+Use `attributeLineage` and `attributeRemap` for topology changes.
+Each lineage row is `{ id, from: [{ id, weight }] }`. Source IDs and
+weights come from the edit evidence or an authored transfer. Remapping
+has these rules.
+
+- A retained same-domain ID copies its value. An edge split copies its
+  source edge onto both descendants. Merged edges use source length
+  weighted by the map's confidence.
+- Retained corners copy their exact mapped corner. A new corner can
+  sample within a linked source face. Equally close competing source
+  surfaces produce a review issue. The topology map pins both revisions.
+- A spline split interpolates control attributes at the authored Bézier
+  parameter. Cut copies inherit the control. A joined endpoint keeps
+  the surviving control's values.
+- Splat split children inherit per-element attributes. A merge uses
+  the redistribution solver's recorded mass fractions.
+- Cross-domain remaps require explicit ancestry. Linear channels average
+  their contributors. Dominant channels use the greatest weight with
+  ties ordered by stable ID. Constant channels retain a value when all
+  contributing values agree. Missing or conflicting channels are
+  recorded in the report. An authored null label remains a value.
+
+The SDK exposes the same operations under `KIT.procedural.attributes`.
+Use `meshLineage(domain, before, after, map)`, `curveLineage(report)`,
+or `splatLineage(report)` to prepare the lineage. A chained edit expands
+generated IDs back to the input table before applying the interpolation
+rule. The remap returns a portable `asset` and a `report` containing
+the ancestry, missing values, and unused intermediate rows.
+
+Run the [Signal Inlay example](../examples/geometry-attributes/demo.cjs)
+to follow a split seam into cable controls and a redistributed splat
+group.
+
+```sh
+node examples/geometry-attributes/demo.cjs inlay-review
+node cli/ink-studio.js graph run inlay-review/attributes.json --out inlay-review/replay
+```
 
 ## Materials, artwork and animation signals
 

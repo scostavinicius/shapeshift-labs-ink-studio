@@ -90,6 +90,9 @@ audio and scene cues.
 
 ## Remember what played
 
+Use [motif memory across branches](music-motif-branch-memory.md) to generate a recall
+from the performed version, including its rhythm or intervals.
+
 Add `thematic: {maps, routes}` to an existing adaptive production timeline.
 `maps` is keyed by source name. `routes` is keyed by the destination segment
 and lists alternatives in priority order. An alternative names a source and

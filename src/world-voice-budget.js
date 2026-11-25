@@ -27,21 +27,47 @@ const WorldVoiceBudget=(()=>{
       ...(aggregation!==undefined&&{aggregation:compileAggregation(aggregation)})});
   }
 
+  function compilePriority(raw){
+    if(!record(raw)||Object.keys(raw).some(key=>!['cues','backgroundVoices','groups'].includes(key)))
+      throw new TypeError('Invalid joint priority sound settings');
+    const {cues,backgroundVoices,groups={}}=raw;
+    if(!Array.isArray(cues)||!integer(cues.length,1,64)||!Array.from(cues).every(cue=>
+      typeof cue==='string'&&cue.trim()&&cue.length<=512)||new Set(cues).size!==cues.length||
+      !integer(backgroundVoices,0,128)||!record(groups)||Object.keys(groups).length>64||
+      !Object.entries(groups).every(([name,count])=>group(name)&&integer(count,0,128)))
+      throw new RangeError('Joint priorities need cue names and bounded background voice caps');
+    return Object.freeze({cues:Object.freeze(cues.slice()),backgroundVoices,groups:Object.freeze({...groups})});
+  }
+  function prioritize(candidates,policy,rule){
+    if(!rule)return {candidates,policy};
+    const cues=new Set(rule.cues);
+    return {
+      candidates:candidates.map(row=>cues.has(row.cue)?
+        {...row,protected:true,priority:100,priorityDirect:true}:row),
+      policy:{...policy,reservedVoices:Math.max(policy.reservedVoices,policy.maxVoices-rule.backgroundVoices),
+        backgroundGroups:rule.groups,aggregation:undefined}
+    };
+  }
+
   function select(candidates,policy,stable=true){
     const ordered=[...candidates].sort((a,b)=>Number(Boolean(b.protected))-Number(Boolean(a.protected))||
       (b.priority??0)-(a.priority??0)||b.gain-a.gain||
       (stable?(Number(Boolean(b.incumbent))-Number(Boolean(a.incumbent))||(a.id<b.id?-1:a.id>b.id?1:0)):0));
+    const local=policy.backgroundGroups, unprotected=local&&new Map();
     const selected=new Set(), rejected=new Map(), counts=new Map();
     let background=0;
     for(const voice of ordered){
       const {id,group}=voice;
       const count=counts.get(group)??0, cap=group!==undefined&&Object.hasOwn(policy.groups,group)?policy.groups[group]:Infinity;
-      if(count>=cap)rejected.set(id,'group-limit');
+      const groupBackground=unprotected?.get(group)??0;
+      if(count>=cap&&!voice.priorityDirect)rejected.set(id,'group-limit');
+      else if(!voice.protected&&local&&group!==undefined&&Object.hasOwn(local,group)&&groupBackground>=local[group])
+        rejected.set(id,'priority-group-limit');
       else if(selected.size>=policy.maxVoices)rejected.set(id,'voice-limit');
       else if(!voice.protected&&background>=policy.maxVoices-policy.reservedVoices)rejected.set(id,'reserved');
       else{
         selected.add(id);
-        if(!voice.protected)background++;
+        if(!voice.protected){background++;if(local)unprotected.set(group,groupBackground+1);}
         counts.set(group,count+1);
       }
     }
@@ -61,7 +87,7 @@ const WorldVoiceBudget=(()=>{
     if(candidates.some(voice=>!eligible(voice)&&full.selected.has(voice.id)&&!split.selected.has(voice.id)))return unchanged;
     return {...split,seats,overflow:new Set(incoming.filter(voice=>split.rejected.has(voice.id)).map(voice=>voice.id))};
   }
-  return Object.freeze({compile,select,selectWithTextures,validVoice});
+  return Object.freeze({compile,compilePriority,prioritize,select,selectWithTextures,validVoice});
 })();
 if (typeof module !== 'undefined') module.exports = WorldVoiceBudget;
 else globalThis[Symbol.for('ink-studio.world-voice-budget')] = WorldVoiceBudget;

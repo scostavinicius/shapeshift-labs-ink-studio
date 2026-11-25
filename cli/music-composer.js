@@ -161,6 +161,7 @@ module.exports=function musicCommand(pos,opt,kit) {
   if (mode==='pads') return require('./music-pads.js')(pos.slice(1),opt,kit);
   if (mode==='instrument') return require('./music-instrument.js')(pos.slice(1),opt,kit);
   if (mode==='deliver') return require('./music-delivery.js')(pos.slice(1),opt,kit);
+  if (mode==='separate') return require('./music-separate.js')(pos.slice(1),opt,kit);
   if (mode==='repair') return require('./music-repair.js')(pos.slice(1),opt,kit);
   if (mode==='mix') return require('./music-mixer.js')(pos.slice(1),opt,kit);
   if (mode==='rack') return require('./music-racks.js')(pos.slice(1),opt,kit);

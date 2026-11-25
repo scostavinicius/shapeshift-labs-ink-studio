@@ -184,6 +184,11 @@ after its timestamp is counted as late and handled causally from its arrival
 frame. A transition older than a request the engine has already seen is traced
 as stale. The chosen edge uses the section currently playing on the audio clock.
 
+Use [harmonic bridges](music-harmonic-bridges.md) to generate a playable
+pickup from sounding notes and continue common tones into the next cue.
+Use [branch-aware cadences](music-branch-cadences.md) to choose an authored
+ending that fits the current phrase and the existing exit marker.
+
 Persistent performers use the existing `performers.tracks` identity and desk
 validation. Their admitted notes run through the original gate, phase,
 resonator state and release. The matched performers share their tape echo
@@ -195,7 +200,7 @@ patches and PCM; external CLAP instrument renders use the existing offline path.
 
 Phrase history counts a full segment pass when an eligible listening track
 actually sounded. A phrase can change at the loop head according to who has
-already been heard. Theme history uses admitted mapped notes. The join record
+already been heard. Theme history uses admitted mapped notes. [Motif memory across branches](music-motif-branch-memory.md) can use their performed rhythm and intervals to build a recall on another instrument. The join record
 includes the committed intent and arrival, the requested and realized exit,
 entry source and phrase, prior listening and route, held and releasing pitches
 with phase and gate frames, and which effects continued.

@@ -26,6 +26,16 @@
       inputs:{sources:'record',settings:'record'},outputs:{audio:'record',entries:'record',report:'record'},
       run({sources,settings},{seed,time}) {return A.audioPrint.prepare(sources,settings,{seed,time});}
     },
+    'audio.separateHarmonicPercussive': {
+      description:'Split aligned tonal and transient layers with one stereo-linked spectral analysis.',
+      inputs:{source:'audio',options},outputs:{harmonic:'audio',percussive:'audio',report:'record'},
+      run({source,options}) {return A.harmonicPercussive.split(source,options);}
+    },
+    'audio.separateEditorial': {
+      description:'Split a recording into editable tonal and transient clips for one audio editorial session.',
+      inputs:{source:'audio',options},outputs:{value:'record',assets:'record',report:'record'},
+      run({source,options}) {return A.harmonicPercussive.session(source,options);}
+    },
     'audio.repairDialogue': {
       description: 'Repair clicks, hum, sibilance and localized spectral noise and audition the removed signal.',
       inputs:{source:'audio',options},outputs:{value:'audio',before:'audio',removed:'audio',report:'record'},
@@ -170,6 +180,11 @@
       description:'Bake a labeled key map into a standard Ink sampler patch and playable assets.',
       inputs:{assets:'record',source:'record'},outputs:{value:'record',assets:'record',report:'record'},
       run({assets,source}) {return A.sampleInstrument.build(assets,source);}
+    },
+    'audio.alignInstrumentSession': {
+      description:'Measure shared transients to calibrate the offsets and polarity of recording perspectives.',
+      inputs:{source:'record',assets:'record',options},outputs:{value:'record',report:'record'},
+      run({source,assets,options}) {return A.instrumentSession.align(source,assets,options);}
     },
     'audio.analyzeInstrumentSession': {
       description:'Propose attacks, key-up, and loops for related takes on one recording clock.',

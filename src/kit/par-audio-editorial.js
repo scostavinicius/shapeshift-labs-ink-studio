@@ -16,8 +16,8 @@
       integer(session.sampleRate,8000,96000) && record(assets) && Array.isArray(session.clips) &&
       session.clips.length<=512,'Expected a bounded audio editorial session');
     const {sampleRate}=session, clock=S.editorialClock(session), editDocs=new Map(table(session.sourceEdits ?? {},128,'source edit'));
-    const inputs=new Map(), edits=new Map(), stretchTail=S.editorialTails();
-    let budget=0;
+    const inputs=new Map(), edits=new Map(), pitched=new Map(), stretchTail=S.editorialTails();
+    let budget=0, pitchBudget=0;
     function load(asset) {
       check(id(asset) && Object.hasOwn(assets,asset),'Missing editorial source '+asset);
       if (!inputs.has(asset)) {
@@ -40,8 +40,22 @@
       check(index!==undefined,'Unknown source sync marker '+key);
       return index;
     }
+    function transpose(source,asset,semitones){
+      if(!semitones)return {pcm:source,gain:1};
+      const key=asset+'/'+semitones;
+      if(!pitched.has(key)){
+        const frames=source.samples.length/source.channels, speed=2**(semitones/12);
+        const target=Math.max(1,Math.round(frames/speed));
+        pitchBudget+=(frames+target)*source.channels;
+        check(pitchBudget<=16e6,'Editorial take pitches exceed the PCM budget');
+        const shifted=A.warpAudio(source,{mode:'repitch',targetFrames:target});
+        const restored=A.warpAudio(shifted.value,{mode:'tones',targetFrames:frames});
+        pitched.set(key,{pcm:restored.value,gain:1/(shifted.report.gain*restored.report.gain)});
+      }
+      return pitched.get(key);
+    }
     function take(raw) {
-      check(fields(raw,['asset','sync','fromSample','toSample','handles','slip','tail']),
+      check(fields(raw,['asset','sync','fromSample','toSample','handles','slip','tail','transpose'])&&finite(raw.transpose??0,-24,24),
         'Invalid editorial take');
       const {asset,sync,fromSample=0}=raw, {source,frames}=load(asset), {toSample=frames}=raw;
       const handles=raw.handles ?? {fromSample:0,toSample:frames};
@@ -55,8 +69,9 @@
       const step=source.sampleRate/sampleRate, ratio=T.div(T.read(sampleRate),T.read(source.sampleRate));
       check(finite(step,1/128,16),'Editorial resampling ratio exceeds its range');
       const offset=sourceSample=>ceil(T.mul(T.read(sourceSample-pin),ratio));
-      const tail=stretchTail(source,fromSample,toSample,pin,step,raw.tail);
-      const first=offset(fromSample), last=offset(tail?.end ?? toSample), original=S.pcmReader(source,fromSample,toSample,step);
+      const {pcm:recording,gain:pitchGain}=transpose(source,asset,raw.transpose);
+      const tail=stretchTail(recording,fromSample,toSample,pin,step,raw.tail);
+      const first=offset(fromSample), last=offset(tail?.end ?? toSample), original=S.pcmReader(recording,fromSample,toSample,step);
       const slip=raw.slip;
       let displaced, joinEnd=0, joinStart=0;
       if (slip!==undefined) {
@@ -67,7 +82,7 @@
           joinStart=joinEnd-slip.joinSamples;
           check(first<=joinStart && fromSample+slip.samples>=handles.fromSample &&
             fromSample+slip.samples<pin,'Head slip exceeds handles or leaves no join before the sync');
-          displaced=S.pcmReader(source,handles.fromSample,pin,step);
+          displaced=S.pcmReader(recording,handles.fromSample,pin,step);
         }
       }
       const pcm=(t,out,scratch)=>{
@@ -80,10 +95,12 @@
           out[0]=scratch[0]+(out[0]-scratch[0])*u;
           out[1]=scratch[1]+(out[1]-scratch[1])*u;
         }
+        if(pitchGain!==1){out[0]*=pitchGain;out[1]*=pitchGain;}
       };
       return {asset,sourceSync:pin,sourceRate:source.sampleRate,range:{fromSample,toSample},handles:{...handles},
         first,last,cost:original.cost*(displaced ? 2 : 1),pcm,
-        ...(marked && {marker:sync.marker}),...(slip && {slip:{...slip}}),...(tail && {tail:tail.info})};
+        ...(marked && {marker:sync.marker}),...(slip && {slip:{...slip}}),...(tail && {tail:tail.info}),
+        ...(raw.transpose&&{transpose:raw.transpose})};
     }
     const tracks=new Set(), ids=new Set(), clips=[];
     for (const raw of session.clips) {
@@ -266,7 +283,8 @@
         case 'handles':
         case 'trim':
         case 'slip-head':
-        case 'stretch-tail': {
+        case 'stretch-tail':
+        case 'transpose': {
           const name=row.take ?? clip.take;
           check(id(name) && Object.hasOwn(clip.takes,name),'Unknown editorial take');
           const take=clip.takes[name];
@@ -283,6 +301,10 @@
               'Invalid head slip edit');
             if (row.slip===null) delete take.slip;
             else take.slip=row.slip;
+          } else if (row.op==='transpose') {
+            check(fields(row,['op','clip','take','semitones'])&&finite(row.semitones,-24,24),'Invalid take transposition');
+            if(row.semitones)take.transpose=row.semitones;
+            else delete take.transpose;
           } else {
             check(fields(row,['op','clip','take','tail']) && (row.tail===null || record(row.tail)),
               'Invalid tail stretch edit');

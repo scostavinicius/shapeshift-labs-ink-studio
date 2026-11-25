@@ -94,11 +94,13 @@
         publish(next, key, brick);
         return snapshot(next);
       }
-      function edit({ bounds, sdf, operation = 'paint', smooth = 0, material, medium, maxSamples = 524288 } = {}) {
+      function edit({ bounds, sdf, operation = 'paint', smooth = 0, material, medium, weight, transform, maxSamples = 524288 } = {}) {
         if (!coordinate(bounds?.min, pointOK) || !coordinate(bounds?.max, pointOK) ||
             bounds.min.some((v, axis) => v > bounds.max[axis]) ||
-            !['paint', 'union', 'subtract'].includes(operation) ||
-            (sdf !== undefined || operation !== 'paint') && typeof sdf !== 'function' ||
+            !['paint', 'union', 'subtract', 'reshape'].includes(operation) ||
+            (sdf !== undefined || operation==='union' || operation==='subtract') && typeof sdf !== 'function' ||
+            (operation==='reshape' ? typeof transform!=='function' : transform!==undefined) ||
+            weight !== undefined && typeof weight !== 'function' ||
             !field(smooth) || smooth < 0 || material !== undefined && !label(material) ||
             medium !== undefined && !label(medium) || !integer(maxSamples) || maxSamples < 1 || maxSamples > 4000000)
           throw new TypeError('Invalid bounded sparse brush');
@@ -108,17 +110,22 @@
         if (counts.reduce((a, b) => a * b, 1) > maxSamples) throw new RangeError('Sparse brush exceeds its sample budget');
         const touched = new Map();
         for (let k = low[2]; k <= high[2]; k++) for (let j = low[1]; j <= high[1]; j++) for (let i = low[0]; i <= high[0]; i++) {
-          const xyz = [i * cell, j * cell, k * cell], brush = sdf ? checked(sdf(...xyz)) : -1;
+          const xyz = [i * cell, j * cell, k * cell], influence = weight ? weight(...xyz) : 1;
+          if (!finite(influence) || influence < 0 || influence > 1) throw new RangeError('Sparse brush weights must be in [0, 1]');
+          if (!influence) continue;
+          const brush = sdf ? checked(sdf(...xyz)) : -1;
           const [key, index] = location(i, j, k), previous = map.get(key) ?? empty;
           const old = entry(previous.offset, index);
           let offset = old;
           if (operation !== 'paint') {
             const baseline = checked(base(...xyz)), value = baseline + old;
-            const edited = operation === 'union' ? smoothMin(value, brush, smooth) : -smoothMin(-value, brush, smooth);
-            offset = Math.fround(checked(edited - baseline));
+            const edited = operation==='reshape' ? transform(...xyz,value) :
+              operation==='union' ? smoothMin(value,brush,smooth) : -smoothMin(-value,brush,smooth);
+            const next = checked(edited - baseline);
+            offset = Math.fround(checked(influence === 1 ? next : mix(old, next, influence)));
           }
-          const m = brush <= 0 && material !== undefined ? material : entry(previous.material, index);
-          const water = brush <= 0 && medium !== undefined ? medium : entry(previous.medium, index);
+          const m = influence >= .5 && brush <= 0 && material !== undefined ? material : entry(previous.material, index);
+          const water = influence >= .5 && brush <= 0 && medium !== undefined ? medium : entry(previous.medium, index);
           if (offset === old && m === entry(previous.material, index) && water === entry(previous.medium, index)) continue;
           if (!touched.has(key)) {
             const unpack = (channel, Type) => channel != null && typeof channel === 'object' ?
@@ -152,6 +159,62 @@
           return channel === undefined ? !equal(a,b) : !sameChannel(a[channel],b[channel]);
         }).map(key => box(at(key))));
       }
+      function sampleChangesFrom(previous, {channels: selected=channels} = {}) {
+        if (!Array.isArray(selected) || Array.from(selected).some(name=>!channels.includes(name)) ||
+            new Set(selected).size!==selected.length)
+          throw new TypeError('Sample changes need a list of distinct sparse brick channels');
+        if (previous===result) return [];
+        const old=previous==null ? undefined : states.get(previous);
+        if (previous!=null && old?.lineage!==lineage)
+          throw new TypeError('Sample changes require snapshots from the same sparse field');
+        const previousMap=old?.map ?? new Map(), resultRows=[];
+        for (const key of [...new Set([...previousMap.keys(),...map.keys()])].sort()) {
+          const a=previousMap.get(key) ?? empty, b=map.get(key) ?? empty;
+          if (a===b) continue;
+          const origin=key.split('/').map(n=>Number(n)*brickSize);
+          for (const name of selected) {
+            const diff=sampleDiff(a[name],b[name],origin);
+            if (diff) resultRows.push(Object.freeze({key,channel:name,...diff}));
+          }
+        }
+        return Object.freeze(resultRows);
+      }
+
+      function sampleDiff(before,after,origin) {
+        if (before===after) return;
+        const dense=value=>value!==null && typeof value==='object';
+        const all=!dense(before) && !dense(after), last=brickSize-1;
+        const rows=all ? null : new Uint32Array(brickSize**2);
+        const low=origin.map(()=>all ? 0 : last), high=origin.map(()=>all ? last : 0);
+        let samples=all ? length : 0;
+        if (rows) {
+          for (let z=0,i=0;z<brickSize;z++) for (let y=0;y<brickSize;y++) for (let x=0;x<brickSize;x++,i++) {
+            if (entry(before,i)===entry(after,i)) continue;
+            rows[y+z*brickSize] |= 1<<x;
+            samples++;
+            if (x<low[0]) low[0]=x;
+            if (y<low[1]) low[1]=y;
+            if (z<low[2]) low[2]=z;
+            if (x>high[0]) high[0]=x;
+            if (y>high[1]) high[1]=y;
+            if (z>high[2]) high[2]=z;
+          }
+        }
+        if (!samples) return;
+        const min=low.map((n,i)=>origin[i]+n), max=high.map((n,i)=>origin[i]+n);
+        const lattice=freeze({min,max}), bounds=freeze({min:min.map(n=>n*cell),max:max.map(n=>n*cell)});
+        return {samples,lattice,bounds,touches(box) {
+          if (box.min.some((n,i)=>n>max[i] || box.max[i]<min[i])) return false;
+          if (!rows) return true;
+          const lo=box.min.map((n,i)=>Math.max(n,min[i])-origin[i]);
+          const hi=box.max.map((n,i)=>Math.min(n,max[i])-origin[i]);
+          const bits=(0xffffffff<<lo[0]) & (0xffffffff>>>(31-hi[0]));
+          for (let z=lo[2];z<=hi[2];z++) for (let y=lo[1];y<=hi[1];y++)
+            if (rows[y+z*brickSize]&bits) return true;
+          return false;
+        }};
+      }
+
       let uniform = 0, sculpted = 0;
       const columns = new Set();
       for (const [key, brick] of map) {
@@ -170,7 +233,7 @@
         return columns.has(bx + '/' + bz) || columns.has(nx + '/' + bz) ||
           columns.has(bx + '/' + nz) || columns.has(nx + '/' + nz);
       }
-      result = Object.freeze({ cell, brickSize, distance, attributes, mediumField, setBrick, edit, changesFrom, affectsColumn,
+      result = Object.freeze({ cell, brickSize, distance, attributes, mediumField, setBrick, edit, changesFrom, sampleChangesFrom, affectsColumn,
         stats: freeze({ bricks: map.size, uniform, dense: map.size - uniform, sculpted }) });
       states.set(result, { map, cell, brickSize, box, lineage });
       return result;

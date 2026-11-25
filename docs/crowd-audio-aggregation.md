@@ -54,6 +54,10 @@ sector slots and aggregated cues. Offline voice budget reports include peak
 direct and texture slots, the number of streams rendered, and a sector index
 for each recorded `aggregated` decision.
 
+A [joint priority window](joint-load-priorities.md) can temporarily
+cap direct background voices and pause texture allocation around a marked
+action.
+
 Run `node examples/crowd-audio/demo.cjs <output-directory>` and open the
 generated `index.html`. Hear the same station scene with both allocation modes
 under a five-voice cap.

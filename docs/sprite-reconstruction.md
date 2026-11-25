@@ -40,7 +40,7 @@ representation owns all pixels. Zoom, field of view, the art-grid size and
 the atlas view's scale all affect the handoff. Supply one of `projectedRange`
 and `range`.
 
-Bake the near geometry at the same `at`, `yaw` and `scale` as the atlas placement. If `at(time)` moves the pivot, animate the full-detail object to match. `frame` also accepts a callback, and `playback` accepts the existing atlas time modes. Synchronize any native animation to the atlas bake's sample times. The closest baked heading and elevation are used while the atlas is active. More views reduce changes between neighbouring silhouettes.
+Bake the near geometry at the same `at`, `yaw` and `scale` as the atlas placement. If `at(time)` moves the pivot, animate the full-detail object to match. `frame` also accepts a callback, and `playback` accepts the existing atlas time modes. Synchronize any native animation to the atlas bake's sample times. The closest baked heading and elevation are used by default. Enable [depth-reprojected atlas views](impostor-atlases.md#depth-reprojected-views) to align nearby tiles before blending. Reconstruction uses the same reprojected depth and cutouts for drawing and ray picks.
 
 ## Render and inspect the handoff
 
@@ -110,6 +110,14 @@ and browser ray picks preserve the object, part, and material
 labels. Soft pixels follow their usual depth ownership rule.
 The frame report includes the representation, part, material,
 native coverage share, and selected sprite view for each binding.
+
+A headless render using a splat-fit asset keeps an edited object or part
+native while its atlas is stale. The frame report shows
+`reason: 'source-edited'` for that binding. Rebake the affected atlas
+with the same fit and bind the new atlas to re-enable the distance
+handoff. `ink-studio atlas scan.ply --splat-fit scan-fit.json` and
+`spriteAtlas(world, { view: { splatFit } })` record the fit revision in
+the atlas metadata.
 
 The [curve bake](curve-bake.md) exports registered color, coverage, depth, and optional normals for curve parts.
 

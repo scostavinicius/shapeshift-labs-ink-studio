@@ -8,7 +8,7 @@
   const median=rows=>rows.slice().sort((a,b)=>a-b)[Math.floor(rows.length/2)];
   const cellId=(key,dynamic,articulation)=>'key-'+key+'.'+dynamic+'.'+articulation;
 
-  function clock(session,assets) {
+  function clock(session,assets,{allowIncomplete=false}={}) {
     check(fields(session,['format','version','id','sampleRate','perspectives','analyze','range','registers','dynamics','articulations','takes']) &&
       session.format===format && session.version===1 && id(session.id) && integer(session.sampleRate,8000,96000) &&
       record(session.perspectives) && integer(Object.keys(session.perspectives).length,1,8) &&
@@ -18,7 +18,8 @@
     let pcmCount=0;
     const seen=new Set();
     const mics=Object.fromEntries(Object.entries(session.perspectives).map(([mic,row])=>{
-      check(id(mic) && fields(row,['asset','offsetSamples']) && id(row.asset) && Object.hasOwn(assets,row.asset) &&
+      check(id(mic) && fields(row,['asset','offsetSamples','polarity']) && id(row.asset) && Object.hasOwn(assets,row.asset) &&
+        (row.polarity===undefined || row.polarity===1 || row.polarity===-1) &&
         integer(row.offsetSamples ?? 0,-rate*10,rate*10),'Invalid recording perspective or sync offset');
       const pcm=A.audio(assets[row.asset]);
       if (!seen.has(row.asset)) {
@@ -27,7 +28,7 @@
       }
       check(pcm.channels<=2 && pcm.sampleRate===rate && pcmCount<=32e6,
         'Perspectives need one shared sample rate and a bounded PCM bank');
-      return [mic,{pcm,offset:row.offsetSamples ?? 0,asset:row.asset}];
+      return [mic,{pcm,offset:row.offsetSamples ?? 0,asset:row.asset,polarity:row.polarity ?? 1}];
     }));
     const {registers,dynamics,articulations,takes}=session;
     check(Array.isArray(registers) && integer(registers.length,1,12) &&
@@ -67,15 +68,16 @@
           integer(loop[0],attackEndSample ?? (onsetSample ?? from)+1,to-1) &&
           integer(loop[1],loop[0]+Math.ceil(rate*.015),releaseSample ?? to)),
       'Take markers must be ordered within '+take.id);
-      for (const {pcm,offset} of Object.values(mics)) check(from+offset>=0 && to+offset<=pcm.samples.length/pcm.channels,
+      for (const {pcm,offset} of Object.values(mics)) check(allowIncomplete || from+offset>=0 && to+offset<=pcm.samples.length/pcm.channels,
         'Perspective does not cover the shared take range for '+take.id);
       work+=to-from;ids.add(take.id);
     }
     check(work<=rate*190,'Session analysis exceeds 190 seconds of gesture material');
     const slice=(mic,from,to)=>{
-      const {pcm,offset}=mics[mic], {samples,channels}=pcm;
+      const {pcm,offset,polarity}=mics[mic], {samples,channels}=pcm;
       const start=(from+offset)*channels, end=(to+offset)*channels;
-      return {...pcm,samples:ArrayBuffer.isView(samples) ? samples.subarray(start,end) : samples.slice(start,end)};
+      const window=ArrayBuffer.isView(samples) ? samples.subarray(start,end) : samples.slice(start,end);
+      return {...pcm,samples:polarity===1 ? window : Float64Array.from(window,x=>-x)};
     };
     return {rate,perspective,mics,cells,slice,takes};
   }

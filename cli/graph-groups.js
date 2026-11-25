@@ -34,8 +34,8 @@ function groupDocument(document, bytes, label) {
   if (!record(document) || document.format !== 'ink-studio/graph-group' || document.version !== 1 ||
       own(document, 'revision') && !positive(document.revision))
     throw new TypeError('Expected ink-studio/graph-group version 1 with a positive revision in ' + label);
-  const { format, version, revision, ...definition } = document;
-  return { definition, version, revision: revision ?? 1,
+  const { format, version, revision, inspector, ...definition } = document;
+  return { definition, version, revision: revision ?? 1, ...(inspector !== undefined && {inspector}),
     versioned: revision !== undefined, sha256: createHash('sha256').update(bytes).digest('hex') };
 }
 
@@ -53,10 +53,10 @@ function requireGroupReference(reference, document, label) {
   if (issues.length) throw new RangeError('Graph group ' + label + ': ' + issues.join(', '));
 }
 
-function loadGraphGroups(definitions, baseDir, { check = true, onFile = () => {}, files = new Map() } = {}) {
+function loadGraphGroups(definitions, baseDir, { check = true, onFile = () => {}, files = new Map(), inspectors = {} } = {}) {
   const entries = [], active = new Set();
 
-  function loadScope(declarations, directory, prefix) {
+  function loadScope(declarations, directory, prefix, inspectors) {
     const scope = new Map();
     for (const [name, value] of groupEntries(declarations)) {
       const alias = prefix + name;
@@ -80,17 +80,18 @@ function loadGraphGroups(definitions, baseDir, { check = true, onFile = () => {}
       const definition = document ? document.definition : value;
       if (!record(definition)) throw new TypeError('Invalid graph group ' + alias);
       const { groups: local, ...spec } = definition;
-      const group = { name, alias, owner: scope, spec, reference, document, file, physical };
+      const inspector = document ? document.inspector : own(inspectors, name) ? inspectors[name] : undefined;
+      const group = { name, alias, owner: scope, spec, reference, document, file, physical, inspector };
       entries.push(group);
       scope.set(name, group);
       if (physical) active.add(physical);
-      group.scope = local === undefined ? scope : loadScope(local, file ? path.dirname(file) : directory, alias + '/');
+      group.scope = local === undefined ? scope : loadScope(local, file ? path.dirname(file) : directory, alias + '/', inspector?.groups ?? {});
       if (physical) active.delete(physical);
     }
     return scope;
   }
 
-  const scope = loadScope(definitions, baseDir, '');
+  const scope = loadScope(definitions, baseDir, '', inspectors);
   return { scope, entries };
 }
 
@@ -132,10 +133,12 @@ function findGraphGroupUsers(groupFile, { root = process.cwd() } = {}) {
   const targetDocument = groupDocument(JSON.parse(bytes.toString('utf8')), bytes, target);
   const { revision, sha256 } = targetDocument, files = new Map([[physical, targetDocument]]);
   const projects = [], errors = [];
+  const materialGraph = require('./material-graph.js');
 
   function inspect(file, project) {
     const projectName = relative(folder, file), baseDir = path.dirname(file);
     try {
+      if (project.format === materialGraph.format) project = materialGraph.toGraphProject(project, { requireOutputs: false });
       const tree = loadGraphGroups(project.groups ?? {}, baseDir, { check: false, files });
       const aliases = new Set(tree.entries.filter(group => group.physical === physical).map(group => group.alias));
       if (!aliases.size) return;
@@ -158,7 +161,7 @@ function findGraphGroupUsers(groupFile, { root = process.cwd() } = {}) {
           document = JSON.parse(fs.readFileSync(file, 'utf8'));
         }
         catch { continue; }
-        if (document?.format === 'ink-studio/graph-project') inspect(file, document);
+        if (['ink-studio/graph-project', materialGraph.format].includes(document?.format)) inspect(file, document);
       }
     }
   }

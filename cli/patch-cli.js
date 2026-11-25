@@ -15,11 +15,14 @@ const usage = [
   'ink-studio patch wire <project.json> <source> <destination> [--out new.json]',
   'ink-studio patch bind <project.json> <source> <destination> --id name --from 0,1 --to 0,2',
   'ink-studio patch plan <project.json> [--json | --dot]',
-  'ink-studio patch nodes [--json] | patch describe <operation>',
-  'ink-studio patch run <project.json> [--video file|-] [--audio file.wav|video] [--watch name=node:port,...]',
+  'ink-studio patch nodes [--json]',
+  'ink-studio patch describe <operation> [--json]',
+  'ink-studio patch run <project.json> [--video file|-] [--audio file.wav|video] [--watch name=node:port|name=node:@model,...]',
   '  [--frames 120] [--fps 12] [--size 320x180] [--controls controls.json] [--out folder] [--keep] [--progress]',
   'ink-studio patch show <cues.json> [--rehearse] [--report rehearsal.json] [--ffmpeg path] [--gpu-module path]',
   '  [--record-interventions journal.ndjson [--intervention-input <recording.json|->]]',
+  '  [--capture-performance directory [--live-score timeline.json --live-route route.json]]',
+  'ink-studio patch stress <case.json> [--repeat N] [--out report.json] [--ffmpeg path] [--gpu-module path]',
   require('./patch-choice-replay.js').usage
 ].join('\n');
 
@@ -27,9 +30,10 @@ const booleanOptions = new Set(['json','dot','keep','progress','rehearse']);
 const flags = {
   init:[], apply:['out'], wire:['out'], bind:['id','from','to','out'], plan:['json','dot'], nodes:['json'], describe:['json'],
   run:['video','audio','frames','fps','size','controls','out','keep','progress','ffmpeg','gpu-module','watch'],
-  show:['rehearse','report','ffmpeg','gpu-module','intervention-input','record-interventions'], choices:['out','track']
+  show:['rehearse','report','ffmpeg','gpu-module','intervention-input','record-interventions','capture-performance','live-score','live-route'],
+  stress:['repeat','out','ffmpeg','gpu-module'], choices:['out','track']
 };
-const counts = { init:2, apply:3, wire:4, bind:4, plan:2, nodes:1, describe:2, run:2, show:2, choices:3 };
+const counts = { init:2, apply:3, wire:4, bind:4, plan:2, nodes:1, describe:2, run:2, show:2, stress:2, choices:3 };
 
 async function print(value, compact=false) {
   const text=typeof value==='string' ? value : JSON.stringify(value,null,compact ? undefined : 2);
@@ -46,9 +50,14 @@ function parseWatches(text, plan) {
     const [name,source,extra]=pair.split('=');
     if (!watchName.test(name)||['__proto__','prototype','constructor'].includes(name)||used.has(name.toLowerCase())||extra!==undefined)
       throw new TypeError('Use --watch name=node:port,name=\$output with unique names');
-    const target=edit.endpoint(source);
+    const modeling=source?.endsWith(':@model');
+    const target=edit.endpoint(modeling?source.slice(0,-7):source);
     if (target.input) throw new TypeError('Watch a node port or a named output');
     used.add(name.toLowerCase());
+    if (modeling) {
+      if (!target.node || source.slice(0,-7).includes(':')) throw new TypeError('Use node:@model for modeling watches');
+      return [name,{node:target.node,modeling:true}];
+    }
     return [name,target];
   }));
 }
@@ -81,6 +90,7 @@ async function run(file,opt,settings) {
   const operations={...settings.operations,...patchNodes(settings.kit,media,gpu)};
   const project=readGraphProject(file,{...settings,operations});
   const plan=project.plan(), watches=parseWatches(opt.watch,plan);
+  const modelingView=opt.size===undefined?undefined:{w:dimensions.width,h:dimensions.height};
   const sourceFiles=project.sourceFiles().concat([opt.video,opt.audio,opt.controls].filter(value=>value&&value!=='-'&&value!=='video'));
   const fsWriter=opt.out && graphOutputs(sourceFiles.filter(name=>fs.existsSync(name)));
   const take=readControls(opt.controls,project);
@@ -102,7 +112,7 @@ async function run(file,opt,settings) {
       media.frame=frame;
       const {inputs,error}=take();
       if (index===0 && error) throw new Error('Invalid initial patch controls: '+error);
-      const result=await project.previewFrame(watches,{inputs,time:index/fps},{profile:true});
+      const result=await project.previewFrame(watches,{inputs,time:index/fps},{profile:true,modelingView});
       const frameFolder=opt.keep && 'frames/'+String(index).padStart(6,'0');
       report={...result.report,frame:index,fps,...(frameFolder && {frameFolder}),...(error && {controlsError:error})};
       passed&&=report.passed;
@@ -138,6 +148,7 @@ async function patchCommand(pos,opt,settings) {
   if (!Object.hasOwn(flags,mode)||pos.length!==counts[mode]||
       Object.entries(opt).some(([key,value])=>!flags[mode].includes(key)||(booleanOptions.has(key) ? value!==true : typeof value!=='string'))||
       opt.json&&opt.dot) throw new TypeError(usage);
+  if (mode==='stress') return require('./show-stress.js').command(file,opt,settings,value=>print(value,true));
   if (mode==='show') return require('./patch-show.js').runShow(file,opt,settings,value=>print(value,true));
   if (mode==='choices') return require('./patch-choice-replay.js').command(file, source, opt, settings, print);
   const context={...settings,operations:{...settings.operations,...patchNodes(settings.kit)}};
@@ -163,3 +174,5 @@ async function patchCommand(pos,opt,settings) {
 }
 
 module.exports=patchCommand;
+module.exports.usage=usage;
+module.exports.commandOptions=flags;

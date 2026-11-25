@@ -1,0 +1,292 @@
+{
+  "format": "ink-studio/staging-search",
+  "version": 1,
+  "until": 8,
+  "maxStates": 2000,
+  "actions": [
+    {
+      "id": "enter-deck",
+      "gate": {
+        "field": "world/position",
+        "at": {
+          "entity": "watcher"
+        },
+        "when": {
+          "value": [
+            -3.4,
+            1,
+            -2
+          ]
+        }
+      },
+      "commands": [
+        {
+          "action": "world/patch",
+          "args": {
+            "edits": [
+              {
+                "op": "set",
+                "path": "/entities/watcher/position",
+                "value": [
+                  -1.6,
+                  1,
+                  0
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "open-shutter",
+      "fromTick": 3,
+      "gate": {
+        "field": "world/position",
+        "at": {
+          "entity": "watcher"
+        },
+        "when": {
+          "value": [
+            -1.6,
+            1,
+            0
+          ]
+        }
+      },
+      "commands": [
+        {
+          "action": "world/input",
+          "args": {
+            "port": "shutter/pressed",
+            "value": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "round-divider",
+      "gate": {
+        "field": "world/position",
+        "at": {
+          "entity": "watcher"
+        },
+        "when": {
+          "value": [
+            -1.6,
+            1,
+            0
+          ]
+        }
+      },
+      "commands": [
+        {
+          "action": "world/patch",
+          "args": {
+            "edits": [
+              {
+                "op": "set",
+                "path": "/entities/watcher/position",
+                "value": [
+                  1.5,
+                  1,
+                  0
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "press-latch",
+      "fromTick": 1,
+      "gate": {
+        "field": "world/position",
+        "at": {
+          "entity": "watcher"
+        },
+        "when": {
+          "value": [
+            1.5,
+            1,
+            0
+          ]
+        }
+      },
+      "commands": [
+        {
+          "action": "world/input",
+          "args": {
+            "port": "latch-use/pressed",
+            "value": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "arm-warning",
+      "fromTick": 1,
+      "gate": {
+        "field": "world/position",
+        "at": {
+          "entity": "watcher"
+        },
+        "when": {
+          "value": [
+            -1.6,
+            1,
+            0
+          ]
+        }
+      },
+      "commands": [
+        {
+          "action": "world/input",
+          "args": {
+            "port": "warning/pressed",
+            "value": true
+          }
+        }
+      ]
+    },
+    {
+      "id": "take-ramp",
+      "gate": {
+        "field": "world/position",
+        "at": {
+          "entity": "watcher"
+        },
+        "when": {
+          "value": [
+            -1.6,
+            1,
+            0
+          ]
+        }
+      },
+      "commands": [
+        {
+          "action": "world/patch",
+          "args": {
+            "edits": [
+              {
+                "op": "set",
+                "path": "/entities/watcher/position",
+                "value": [
+                  -2.1,
+                  1,
+                  2.4
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "leave-pier",
+      "gate": {
+        "field": "world/position",
+        "at": {
+          "entity": "watcher"
+        },
+        "when": {
+          "value": [
+            -2.1,
+            1,
+            2.4
+          ]
+        }
+      },
+      "commands": [
+        {
+          "action": "world/patch",
+          "args": {
+            "edits": [
+              {
+                "op": "set",
+                "path": "/entities/watcher/position",
+                "value": [
+                  -3.8,
+                  1,
+                  3.6
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  ],
+  "checks": [
+    {
+      "id": "interrupted-reveal",
+      "kind": "reveal-during-dialogue",
+      "start": {
+        "kind": "dialogue-start",
+        "system": "world",
+        "where": {
+          "path": "/line",
+          "value": "hold-the-beam"
+        }
+      },
+      "end": {
+        "kind": "dialogue-end",
+        "system": "world",
+        "where": {
+          "path": "/line",
+          "value": "hold-the-beam"
+        }
+      },
+      "reveal": {
+        "kind": "gameplay-state-changed",
+        "system": "shutter",
+        "where": {
+          "path": "/to",
+          "value": "revealed"
+        }
+      }
+    },
+    {
+      "id": "hidden-latch",
+      "kind": "occluded-contact",
+      "event": {
+        "kind": "gameplay-state-changed",
+        "system": "latch-use",
+        "where": {
+          "path": "/to",
+          "value": "contact"
+        }
+      },
+      "trace": "walls/ray",
+      "camera": {
+        "entity": "camera"
+      },
+      "point": {
+        "entity": "latch",
+        "socket": "contact"
+      }
+    },
+    {
+      "id": "missed-warning",
+      "kind": "cue-out-of-range",
+      "event": {
+        "kind": "gameplay-state-changed",
+        "system": "warning",
+        "where": {
+          "path": "/to",
+          "value": "queued"
+        }
+      },
+      "emitter": {
+        "entity": "bell"
+      },
+      "listener": {
+        "entity": "watcher"
+      },
+      "delayTicks": 3,
+      "maxDistance": 3.6
+    }
+  ]
+}

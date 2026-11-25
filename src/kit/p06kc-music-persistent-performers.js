@@ -103,7 +103,7 @@
       const scope=uses.get(clip.source);
       if (!scope) continue;
       const source=timeline.compiled[clip.source], delta=clip.at-clip.from;
-      const additions=world?.additions.get(clip);
+      const additions=P.musicMotifRecall.additions(clip,world?.additions.get(clip));
       for (const name of scope) {
         automationSize+=automation(clip,source,name,tracks[name],perTrack[name],delta);
         check(automationSize<=65536,'Persistent performers exceed their automation budget');

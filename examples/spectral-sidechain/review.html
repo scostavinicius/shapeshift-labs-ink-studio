@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Signal Through the Keys · Ink Studio</title>
+<style>
+  :root{color-scheme:dark;--base:#101615;--panel:#19201e;--line:#35423b;--text:#edf3e9;--muted:#b0beb2;--accent:#d9f88a}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--base);color:var(--text);font:16px/1.55 system-ui,sans-serif}
+  main{max-width:1000px;margin:auto;padding:clamp(25px,5vw,52px) clamp(18px,5vw,54px)}
+  header p{max-width:60ch;margin:18px 0 28px;color:var(--muted)}
+  .product,.number,time{font:500 .78rem/1.4 ui-monospace,monospace;letter-spacing:.09em;text-transform:uppercase}
+  .product{color:var(--accent)}
+  h1{font-size:clamp(2.6rem,6.2vw,4.75rem);font-weight:650;line-height:1;letter-spacing:-.052em;margin:16px 0 0}
+  h2{font-size:1rem;margin:0;font-weight:620}
+  .desk{border:1px solid var(--line);border-radius:18px;background:var(--panel);overflow:hidden}
+  .toolbar,.footer{padding:18px clamp(12px,3vw,24px);display:flex;align-items:center;gap:16px;flex-wrap:wrap}
+  .toolbar{border-bottom:1px solid var(--line)}
+  .choices{display:flex;gap:4px;border:1px solid var(--line);border-radius:9px;padding:3px}
+  button{font:inherit;font-size:.88rem;font-weight:600;color:inherit;cursor:pointer;border:1px solid transparent;background:none;border-radius:7px;padding:7px 12px}
+  button:hover:not(:disabled){background:#303d33}
+  button[aria-pressed=true]{background:#364538;color:#f2f8ec}
+  #play{min-width:88px;background:var(--accent);color:#172011}
+  #play:hover:not(:disabled){background:#f0ffc1}
+  button:disabled{opacity:.55;cursor:wait}
+  :focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  time{margin-left:auto;color:var(--muted);font-variant-numeric:tabular-nums}
+  .chart{padding:20px clamp(12px,3vw,24px) 12px}
+  .chart-head{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;margin-bottom:14px}
+  .legend{display:flex;align-items:center;gap:7px;color:var(--muted);font-size:.72rem}
+  .legend i{width:68px;height:7px;border-radius:4px;background:linear-gradient(90deg,#29352c,#d9f88a)}
+  canvas{display:block;width:100%;height:clamp(164px,23vw,211px)}
+  #seek{width:calc(100% - 68px);display:block;margin:0 0 0 68px}
+  input[type=range]{accent-color:var(--accent);cursor:pointer}
+  .footer{border-top:1px solid var(--line);gap:12px 24px}
+  .knob{display:grid;grid-template-columns:1fr auto;align-items:center;gap:4px 15px;min-width:min(100%,272px)}
+  .knob label{font-size:.9rem;font-weight:600}
+  .knob input{grid-column:1/-1;width:100%;margin:3px 0 0}
+  output{font-variant-numeric:tabular-nums}
+  #ceiling-value{color:var(--accent);font-weight:650}
+  #status{margin:0 0 0 auto;color:var(--muted);font-size:.85rem;text-align:right}
+  small{display:block;color:var(--muted);padding:14px 2px}
+  @media(max-width:520px){.toolbar{gap:10px}.footer #status{margin-left:0}.toolbar time{margin-left:0}}
+</style>
+<main>
+  <header>
+    <div class="product">Ink Studio / Spectral sidechain</div>
+    <h1>Signal through the keys.</h1>
+    <p>A lead synth weaves through sustained stereo keys. Switch the insert in and out during playback, then solo the keys to hear the cut follow the lead.</p>
+  </header>
+  <section class="desk" aria-label="Spectral sidechain audition">
+    <div class="toolbar">
+      <button type="button" id="play" disabled>Play</button>
+      <div class="choices" role="group" aria-label="Insert state">
+        <button type="button" id="bypass" aria-pressed="false">Bypass</button>
+        <button type="button" id="processed" aria-pressed="true">Processed</button>
+      </div>
+      <button type="button" id="solo" aria-pressed="false">Solo keys</button>
+      <time id="position">0.00 / 8.00 s</time>
+    </div>
+    <div class="chart">
+      <div class="chart-head">
+        <h2>Cut on the keys</h2>
+        <div class="legend">0 dB <i aria-hidden="true"></i> 12+ dB</div>
+      </div>
+      <canvas id="mask" role="img" aria-label="Peak spectral cut by frequency band and time"></canvas>
+      <input id="seek" aria-label="Playback position in seconds" type="range" min="0" max="8" step=".01" value="0">
+    </div>
+    <div class="footer">
+      <div class="knob">
+        <label for="ceiling">Maximum cut</label><output id="ceiling-value" for="ceiling">8 dB</output>
+        <input id="ceiling" type="range" min="0" max="24" step="1" value="8" disabled>
+      </div>
+      <p id="status" role="status">Loading audio…</p>
+    </div>
+  </section>
+  <small>8-second loop. Compare at the same point in the phrase.</small>
+</main>
+<script>
+const demo=/*INK_SIDECHAIN_DATA*/;
+const inkBundle=/*INK_SIDECHAIN_ENGINE*/;
+/*INK_SIDECHAIN_SCRIPT*/
+</script>
+</html>

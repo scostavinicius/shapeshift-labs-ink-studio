@@ -80,6 +80,7 @@ Monitor through stereo, a half-sum mono fold, or a mono speaker-band
 approximation. The small-speaker default starts at 260 Hz and reaches
 4.6 kHz when the sample rate permits. Use `--low-hz` and `--high-hz`
 for another bandwidth. Preview WAVs leave the mix file intact.
+Use [measured playback translation](playback-translation.md) to audition device captures and check bass-dependent cues.
 An optional focus stem must match the mix's duration and sample rate.
 Its report compares focus RMS before and after monitoring, including
 its relative level against the mix. Audition the preview to judge

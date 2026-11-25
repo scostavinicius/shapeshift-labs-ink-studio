@@ -6,6 +6,9 @@ and pickup positions, and its shape representation. Moving a strike or
 pickup changes the weighted modal response. The same asset can serve
 several simultaneous excitation and pickup sites.
 
+Use [coupled resonance](coupled-resonance.md) to connect two of these
+assets at selected sites and play their changing contact on the sample clock.
+
 ## Bake a resonator
 
 A version 1 `ink-studio/resonant-mode-plan` has an `id`, optional positive

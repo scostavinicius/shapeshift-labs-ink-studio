@@ -22,8 +22,14 @@ The package includes geometry, materials, lighting, animation, character control
 - [Retained authoring](#retained-authoring)
 - [Editable 3D drawing](#editable-3d-drawing)
 - [Headless world simulation](docs/headless-worlds.md)
+- [Playable and editable Inkwell Rebirth scenes](examples/inkwell-rebirth/README.md)
+- [Searchable effect recipes](docs/effect-recipes.md)
+- [Shared PBR materials](docs/pbr-materials.md)
+- [Material-aware secondary emission](docs/secondary-emission.md)
+- [Material pickup and transfer](docs/material-response.md#pick-up-and-transfer-material)
 - [Editable starter recipes](examples/starter-recipes/README.md)
 - [Rendering and command reference](#rendering-and-command-reference)
+- [Searchable public reference](docs/reference/index.md)
 - [View-dependent surface materials](#view-dependent-surface-materials)
 - [Projected and procedural effects](#projected-and-procedural-effects)
 - [Reflections, ripples and atmosphere](#reflections-ripples-and-atmosphere)
@@ -35,11 +41,21 @@ The package includes geometry, materials, lighting, animation, character control
 - [Event-driven visual effects](docs/event-visual-effects.md)
 - [Persistent visual consequences](docs/visual-consequences.md)
 - [Adaptive story audio](docs/adaptive-story-audio.md)
+- [Directional captions from playback](docs/directional-captions.md)
 - [Seeded sound recipes](docs/seeded-sound-recipes.md)
 - [Editable story picture and audio](docs/story-editorial-handoff.md)
 - [Configurable story presentation packs](docs/story-presentation-pack.md)
 - [Interactive story installation inputs](docs/story-installation-inputs.md)
 - [Story-aware rehearsal reports](docs/story-rehearsal.md)
+- [Search for hard-to-stage routes](docs/staging-route-search.md)
+- [Blind audiovisual review](docs/blind-av-review.md)
+- [Video codec round-trip approval](docs/video-round-trip.md)
+- [Flash and flicker review](docs/flash-flicker-review.md)
+- [Beat-level live performance captures](docs/beat-performance-captures.md)
+- [Ambisonic ambience export](docs/ambisonic-ambience.md)
+- [Compressed-audio round-trip approval](docs/audio-round-trip.md)
+- [Playback translation through measured devices](docs/playback-translation.md)
+- [Display and speaker latency calibration](docs/output-latency.md)
 - [WebGPU graphs and Gaussian splat import](#webgpu-graphs-and-gaussian-splat-import)
 - [Screen transitions](#screen-transitions)
 - [Module reference](#module-reference)
@@ -291,6 +307,7 @@ const { KIT: K } = require('@shapeshift-labs/ink-studio').load();
 const spec = {
   id: 'small-scene', name: 'Stone', seed: 1, style: 'slate',
   camera: { target: [0, 1, 0], dist: 10, pitch: 0.2, yaw: 0.4 },
+  finish: { shadowMarch: { emptySpace: 'clear' } },
   solids: [{ kind: 'ball', at: [0, 1, 0], r: 1, mat: 'stone', res: 0.15 }]
 };
 const problems = K.diorama.check(spec);
@@ -309,6 +326,8 @@ Use the [Pixel Stamp Workshop](docs/pixel-stamps.md) to draw indexed surface
 paint and contour masks, or author held cels for depth-aware effects.
 [Signal Fall](examples/signal-fall.js) shows the editable signal glyphs and
 the cels that make up a falling stream.
+[Native-grid 2D lighting](docs/pixel-lighting.md) lights indexed sprites and tiles with authored palette steps, normal or height maps, and grid-aligned cast shadows in WebGL and headless.
+
 [Animated pixel tiles](docs/pixel-tiles.md) join hand-drawn cels into
 circuits and frost that travel through corners and forks.
 [Tile color attributes](docs/tile-attributes.md) let a sprite or effect rewrite the ink and paper of whole tiles over a fixed bitmap.
@@ -318,6 +337,12 @@ circuits and frost that travel through corners and forks.
 [Rigid phase changes](docs/coupled-phase-changes.md#freeze-liquid-into-rigid-pieces) share mass and heat between liquid fields and movable solid parcels.
 [Directional contact marks](docs/contact-marks.md) pin hand-drawn flashes
 and skids at the point of contact, with their own clock through a pose hold.
+[Terrain trails](docs/terrain-trails.md) turn timed contacts into footprints,
+displaced vegetation pixels, and expanding ripples on a shared native grid.
+[Material response recipes](docs/material-response.md) route footsteps,
+wheel contacts, and impacts to projected marks, ripples, particles, and sound.
+The [effect inspector](docs/material-response.md#inspect-a-pixel) traces a
+rendered swatch to the receiving material, its field sample, and the source contact.
 
 Reuse unchanged bake inputs in the editor and pass `--asset-cache DIR` to retain diorama bake results across CLI runs. [Incremental baking](docs/scene-editor.md#incremental-baking)
 
@@ -391,6 +416,22 @@ Trace the first audible bounces off room geometry and finite panels in live and 
 
 Blend recorded or baked room impulse responses as the listener moves, with tails that carry across doorways. [Position-dependent room responses](docs/room-response.md)
 
+Capture a calibrated room sweep and edit the early reflections and decay separately. [Room impulse capture](docs/room-impulse-capture.md)
+
+Generate live pickups into the next cue and carry notes shared by both harmonies. [On-the-fly harmonic bridges](docs/music-harmonic-bridges.md)
+
+Choose an authored pickup or full resolution from the phrase underway and the time available before a branch exit. [Branch-aware cadence selection](docs/music-branch-cadences.md)
+
+Borrow a played phrase's timing, accents, and breath for a different melody while retaining its pitches and articulations. [Phrase contour borrowing](docs/music-phrase-contour.md)
+
+Call back to the motif version played on the route, with its rhythm or intervals on a new instrument. [Motif memory across branches](docs/music-motif-branch-memory.md)
+
+Split a recording into tonal and transient layers, then move or retune them in one session. [Harmonic and percussive separation](docs/harmonic-percussive-separation.md)
+
+Make room for a foreground part by attenuating the frequencies it shares with a competing strip. Set a ceiling for the cut and audition it in context. [Spectral sidechain](docs/spectral-sidechain.md)
+
+Align shared transients across raw microphone captures and play the same take from close through room perspective. [Automatic multisample alignment](docs/multisample-session-alignment.md)
+
 Pin the same headphone impulse dataset for live audio and deterministic headless spatialization. [Pinned binaural profiles](docs/pinned-binaural.md)
 
 Shape the bass, mids, and treble an emitter sends toward the listener as its body rotates. [Directional sound emitters](docs/directional-audio.md)
@@ -398,6 +439,8 @@ Shape the bass, mids, and treble an emitter sends toward the listener as its bod
 Choose which sources use physical arrival time and Doppler, with independent controls for delay and pitch. [Propagation delay and Doppler](docs/propagation-doppler.md)
 
 Synthesize breakaway, slip, and catch pulses from runtime contact load and friction. [Stick-slip contact synthesis](docs/stick-slip-audio.md)
+
+Share vibration between modal bodies through a sample-rate contact, then let each body ring as the contact opens. [Coupled resonance](docs/coupled-resonance.md)
 
 Keep distant crowds and debris audible when the mix runs out of individual voices. [Crowd and debris sound aggregation](docs/crowd-audio-aggregation.md)
 
@@ -687,6 +730,10 @@ console.log(world.count);
 
 The file example assumes the current working directory is this repository. OBJ supports a companion MTL; glTF supports companion buffers; GLB is read from binary data. Material and vertex colors become palette ramps. Texture images are not imported. Open meshes become sheets with thickness. Imported geometry becomes a distance-field solid, so it can join, be carved, receive materials and break like authored geometry.
 
+Use [editable mesh topology](docs/mesh-topology.md) to retain polygon rings,
+shared edges, and face-corner UVs while deriving indexed triangles for an
+Ink scene. The CLI can inspect or patch the same topology document.
+
 ## Exporting GLB models
 
 ```sh
@@ -701,6 +748,7 @@ The exporter uses Ink Studio and the Node standard library. It preserves self-co
 - **Rest fields.** `KIT.model.fromSdf(field, { bounds })` accepts a signed function or a bounded field object. The field must stay positive on the box boundary. Extraction tries a quad surface first, with indexed tetrahedra for ambiguous cases. The optional `--method` accepts `surfaceNets`, `dualContour`, `adaptive` or `tetrahedra`. Use `--bounds xmin,ymin,zmin,xmax,ymax,zmax` to tighten the static bounds of a JSON diorama.
 - **Details and fur.** Give a torus or ellipsoid `model: { separate: true, name }` in its sculpt options to export it at its own resolution. This also works for emissive ellipsoids authored as ghost shapes. In JSON use `separate: true` on a ball or torus and put material channels under `mat.model`. Authored fur grows solid locks and curved cutout cards from the coat's length, comb direction, droop, clumping and palette. The optional `fur: { density, maxLocks }` controls its budget and `fur: false` produces a bare mesh.
 - **Materials.** The baker places padded UV charts on the runtime mesh and samples the rest field per texel. It can embed base color, tangent-space normals, metallic/roughness, and emission. An authored material can set these channels through `model: { color, roughness, metallic, emission, normal }` or a `model(point, normal)` function. Color and emission use linear RGB. Texture sizes range from 256 to 4096 in powers of two. Set `--texture-size 0` to export palette materials. View-dependent splat lighting, particles and per-pixel decals are handled by the splat renderer.
+- **Geometry masks.** Bake slope, cavity, exposure, and thickness together on the mesh's registered UV atlas. [Geometry mask workflow](docs/registered-material-bake.md#bake-geometry-masks)
 - **Animation.** A JavaScript scene can return its indexed mesh or a `{ meshes, joints, animations }` model from `model(seed, options)`. Use `KIT.model.fromPuppet(mesh, puppet, { clips })` to sample a tagged puppet or `KIT.model.fromCreature(mesh, creature, { clips, parents, bones, weightZones })` with a bound creature. Creature splits provide per-region weights. Optional `weightZones: [{ center, radius, a, b, axis }]` blend adjacent regions around joints. Fur uses the weights at its roots. A model uses its authored rig for joint names, weights, and clips. JSON dioramas can export rigidly weighted parts from their motion data. `--duration` and `--fps` control sampling where the scene exposes those options.
 
 A custom indexed mesh supplies `points` and triangle or quad `faces`. It may provide linear RGB `colors` per point, face-corner `uvs`, `materials: [{ name, color }]` and a material index per face in `faceMaterials`. A model joint has `{ name, parent, head, tail }` with the parent index preceding its children. Each skinned mesh supplies a list of `[jointIndex, weight]` pairs per vertex. Use `static: true` for scenery. The writer keeps and normalizes the four strongest weights. Each custom clip supplies `frames: [{ time, matrices }]` beginning at time zero. Matrices are rest-to-pose transforms in world space, with nine row-major linear components followed by XYZ translation. The export uses a pair of nodes when a sampled affine transform needs shear.
@@ -774,6 +822,9 @@ S.bake();
 ```
 
 Use `ink-studio catalog <words>` to search catalog entries and follow their `where` fields to the implementation.
+Add `--all` to search the [public reference](docs/reference/index.md), including
+CLI usage, exported APIs, graph operations, and guide headings. Add `--json`
+for structured results.
 
 ## Editable 3D drawing
 
@@ -801,6 +852,10 @@ Use `ink-studio authoring inspect` to list stable part IDs, bounds and anchors i
 Preview a JSON edit with an optional PNG, then apply it to a new snapshot after the scene's checks pass.
 The [editable passage walkthrough](docs/headless-authoring.md#edit-generated-parts-from-the-cli) moves a
 doorway and landing while checking that a character can still walk through.
+
+Use [agent-driven project authoring](docs/agent-projects.md) to pick a frame and
+batch scene, layered pixel, timeline, and audio cue edits into one portable
+project revision.
 
 The [headless authoring guide](docs/headless-authoring.md) covers typed graphs,
 cached simulation, attribute transfer, mesh paths, layered artwork, animation
@@ -853,7 +908,14 @@ The watershed and quarry examples run entirely from the CLI. The [puzzle recipes
 switches to a physical gate, inspect blockers and verify a solution. The [agent decision guide](docs/agent-decisions.md)
 covers reachable activity choices and confirmed arrivals.
 
+[Natively rendered hero shots](docs/hero-render.md) can use posed sculpt surfaces, traced indirect light and splat footprints fitted to approved views.
+
 ## Rendering and command reference
+
+Draw and revise exact indexed layers for sprites, projected paint and masks with the [native pixel-art authoring CLI](docs/pixel-art-authoring.md).
+Approve a highlight, contour, or gap at a reference frame and propagate it through verified scene matches with [tracked pixel corrections](docs/pixel-art-authoring.md#approve-and-apply-a-tracked-correction).
+
+Use the [standard render comparison suite](docs/render-suite.md) to measure matched camera moves on the gatehouse, signal coil, and Saltgate night watch.
 
 The CLI and Node `render()` use the CPU renderer. Use the [browser renderer](docs/browser-renderer.md) for an interactive WebGL canvas. The two backends share scene data and several pixel-art controls. Use the same backend when recording and checking exact image baselines.
 
@@ -861,13 +923,14 @@ The CLI and Node `render()` use the CPU renderer. Use the [browser renderer](doc
 | --- | --- |
 | `help` | Print supported commands and options. |
 | `scenes` | List scenes from the default demos or configured collection. |
-| `catalog [words] [--full]` | Search feature names, descriptions and tags. |
+| `catalog [words] [--full] [--json] [--all]` | Search the feature catalog or the full public reference. |
 | `acts` | List action clips, reactions, easing names and cues. |
 | `authoring inspect\|preview\|apply <scene>` | Inspect generated parts, preview JSON edits and save validated snapshots. |
 | `render <scene> --t 1.5` | Render one PNG at a chosen time. |
 | `data-inputs <scene-or-catalog> [dataset] [--sample JSON] [--rows]` | Inspect typed columns, sample values, or export normalized rows and spatial features. |
 | `camera-rig <scene> [--at seconds] [--camera-shot id]` | Inspect the resolved shot, projection, blend, and occlusion clearance. |
 | `camera-review <scene> --from 0 --to 2 --frames 5 --w 160 --h 96` | Check subject framing across a shot at the native export crop. |
+| `canvas-grid-check [plan.json]` | [Measure canvas pixel widths and slow-pan edge motion](docs/canvas-grid-check.md) across browser viewport sizes and DPRs. |
 | `passes <scene>` | Save art-pixel coverage, depth, normals, IDs and emission previews. |
 | `export-deep <scene> --out file.exr` | Export depth-sorted samples and camera calibration as deep OpenEXR for compositing. |
 | `export-layers <scene>` | Export transparent color, depth, normals, object IDs, and material mattes on one grid. |
@@ -1097,6 +1160,8 @@ compares it with the center sort and measures frame cost.
 
 Build [WebGPU texture and geometry graphs](docs/webgpu-graphs.md) with reusable buffers, textures and custom WGSL compute passes. The [GPU Studies gallery](examples/webgpu-graphs/index.html) includes a live shader editor, a deformed mesh, and a Gaussian splat viewer for Graphdeco PLY and Niantic SPZ. The [Pelagic viewer](examples/live-gaussian/index.html) compares live directional RGB and palette color. The [part proxy guide](docs/gaussian-part-proxies.md) shows how to bind a painted region to a stroke or mesh while keeping its live directional color. The [material workshop](examples/gaussian-materials/index.html) assigns painted regions independent [ramps and light response](docs/gaussian-materials.md). The CLI supports fixed-view renders of the same formats. Run the examples with a [local server](docs/webgpu-graphs.md#run-the-gallery).
 
+[Gaussian glTF import](docs/gaussian-gltf.md) loads native triangles and ratified Gaussian ellipse primitives from one asset, using shared node transforms on the CPU and in WebGL.
+
 ```sh
 npx ink-studio render scan.spz --raw --out preview.png
 ```
@@ -1200,6 +1265,12 @@ Other directories:
 
 ## Validation and development
 
+Run `npm run docs:build` after adding or changing a public command, API member,
+graph operation, or guide. `npm run docs:check` regenerates the reference in
+memory and checks it against the committed files. The test suite and the
+documentation workflow run that check. See the
+[reference maintenance guide](docs/reference-maintenance.md) for what it verifies.
+
 ```sh
 npm test
 npm run lint
@@ -1260,6 +1331,8 @@ Use [tessellated render grids](docs/render-grids.md) to resolve SDF/splat scenes
 Use [custom splat footprints](docs/splat-footprints.md) for square, wedge, star, cross, chipped, polygonal or painted marks on individual materials. Explore the [Mark Foundry](examples/splat-footprints.html), including a live silhouette editor.
 
 Use [surface-aligned brush strokes](docs/surface-brush.md) for gouache, bristle, wash and ink marks following curvature, contours or authored vector fields. Their retained axes follow animated bones and CPU deformation. Try the [Pigment Coast / Painted Koi demos](examples/surface-brush.html).
+
+Paint and inspect a velocity grid, then export the same [editable flow map](docs/flow-maps.md) for water, smoke, cloth, and debris.
 
 Use [engraving and tonal art maps](docs/engraving.md) for light-responsive hatching, cross engraving, white-cut woodcut and stippled native surfaces. Explore the [Copperplate Cabinet](examples/engraving.html), with an animated moth and etched observatory.
 

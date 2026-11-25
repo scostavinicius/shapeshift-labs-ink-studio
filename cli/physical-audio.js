@@ -22,6 +22,7 @@ function prepare(kit,request,file,dependency=()=>{}){
   const producers={
     [W.waveNetworks.runFormat]:require('./wave-network.js'),
     [W.resonantModes.runFormat]:require('./modal-resonator.js'),
+    [W.resonantModes.coupledRunFormat]:require('./modal-resonator.js'),
     [W.virtualSensors.runFormat]:require('./virtual-sensors.js')
   };
   const native=new Map();

@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Signals at the crossing · Ink Studio</title>
+<style>
+  :root{color-scheme:dark;--bg:#18201f;--panel:#222e2b;--border:#455b50;--ink:#eee9d7;--muted:#b9c9bd;--amber:#ffc387;--mint:#afd7b3;--blue:#abcfee}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif}
+  main{max-width:960px;margin:auto;padding:clamp(24px,6vw,64px) clamp(15px,4vw,38px)}
+  h1,h2{font-family:Georgia,serif;font-weight:400}
+  h1{font-size:clamp(44px,8vw,79px);line-height:1;letter-spacing:-.045em;margin:0 0 12px}
+  h2{font-size:1.55rem;margin:0 0 10px}
+  p{margin:0;color:var(--muted)}
+  section{border:1px solid var(--border);background:var(--panel);border-radius:12px;padding:clamp(15px,4vw,25px);margin-top:20px}
+  button{cursor:pointer;border:1px solid var(--border);border-radius:6px;background:#192521;color:var(--ink);padding:8px 13px;font:inherit}
+  button:hover:enabled{border-color:var(--mint)}
+  button:disabled{cursor:default;opacity:.57}
+  :focus-visible{outline:2px solid var(--amber);outline-offset:3px}
+  #start,button[aria-pressed="true"]{color:#122219;background:var(--mint);border-color:var(--mint);font-weight:650}
+  .controls{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+  label{cursor:pointer;padding:4px 0 4px 5px}
+  input{accent-color:var(--mint)}
+  #status{margin:14px 0 10px;min-height:1.5em}
+  .destinations{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+  .destinations button{text-align:left;padding:10px}
+  .destinations button[aria-current="true"]{border-color:var(--mint)}
+  .destinations button[data-section="signal"] strong{color:var(--amber)}
+  .destinations button[data-section="depot"] strong{color:var(--blue)}
+  .destinations strong,.destinations span{display:block}
+  .destinations span{font-size:.86rem;color:var(--muted)}
+  .result{border-top:1px solid var(--border);margin:16px 0 0;padding-top:13px}
+  .notes{display:flex;flex-wrap:wrap;gap:8px;margin-top:9px}
+  .chip{color:var(--ink);min-width:56px;padding:3px 8px;font-size:.86rem;border-radius:4px;border:1px solid #4e6356}
+  .chip[data-kind="pickup"]{border-color:var(--amber);color:var(--amber)}
+  .chip[data-kind="held"]{border-color:var(--mint);color:var(--mint)}
+  audio{width:100%;margin:10px 0 8px}
+  #examples p{margin:5px 0 10px}
+  @media(max-width:460px){.destinations{grid-template-columns:1fr}.destinations button{display:flex;justify-content:space-between}}
+</style>
+<main>
+  <header>
+    <h1>Signals at the crossing</h1>
+    <p>Send the live score to a different chord. Listen for the pickup and the pad notes that carry through the change.</p>
+  </header>
+  <section aria-labelledby="live-title">
+    <h2 id="live-title">Live score</h2>
+    <div class="controls">
+      <button type="button" id="start">Start score</button>
+      <button type="button" id="stop" disabled>Stop</button>
+      <label><input type="checkbox" id="with-bridges" checked> Generate bridges</label>
+    </div>
+    <p id="status" role="status">Start the score to choose a destination.</p>
+    <div id="destinations" class="destinations" aria-label="Choose a destination"></div>
+    <div class="result" id="result" hidden>
+      <p id="join-label"></p>
+      <div id="pitches" class="notes"></div>
+    </div>
+  </section>
+  <section id="examples" aria-labelledby="compare-title">
+    <h2 id="compare-title">Recorded comparison</h2>
+    <p>Switch between both treatments at the same playback position.</p>
+    <div class="controls">
+      <button type="button" data-take="bridged" aria-pressed="true">Generated pickups</button>
+      <button type="button" data-take="hard" aria-pressed="false">Straight cuts</button>
+      <button type="button" id="seek">Jump to first join</button>
+    </div>
+    <audio controls preload="metadata" aria-label="Recorded score"></audio>
+  </section>
+</main>
+<script>
+const config=/*INK_DEMO_DATA*/;
+const compressedEngine=/*INK_DEMO_ENGINE*/;
+/*INK_DEMO_SCRIPT*/
+</script>
+</html>

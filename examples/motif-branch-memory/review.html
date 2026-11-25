@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Echoes at the overlook · Ink Studio</title>
+<style>
+ :root{color-scheme:dark;--bg:#151e23;--panel:#1d2930;--line:#435763;--ink:#f2ece1;--dim:#bcc9d0;--water:#a4dedc;--gold:#ffcc94}
+ *{box-sizing:border-box}
+ body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,sans-serif}
+ main{max-width:920px;margin:auto;padding:clamp(22px,6vw,64px) clamp(16px,4vw,34px)}
+ h1,h2{font-family:Georgia,serif;font-weight:400}
+ h1{font-size:clamp(40px,8vw,77px);line-height:1;letter-spacing:-.048em;margin:0 0 12px}
+ h2{font-size:1.43rem;line-height:1.2;margin:0 0 10px}
+ p{margin:0;color:var(--dim)}
+ section{padding:clamp(14px,4vw,25px);border:1px solid var(--line);background:var(--panel);border-radius:12px;margin-top:20px}
+ .choices,.playback,.mode{display:flex;flex-wrap:wrap;align-items:center;gap:8px}
+ .mode{margin:13px 0}
+ button,select{padding:8px 12px;color:var(--ink);background:#17242b;border:1px solid var(--line);border-radius:6px;font:inherit}
+ button{cursor:pointer}button:disabled{cursor:default;opacity:.55}
+ button[aria-pressed="true"],#play{color:#182624;background:var(--water);border-color:var(--water);font-weight:650}
+ :focus-visible{outline:2px solid var(--gold);outline-offset:3px}
+ audio{width:100%;margin:12px 0 4px}
+ #status{min-height:1.5em;margin-top:8px}
+ dl{display:grid;grid-template-columns:1fr 1fr;gap:15px;margin:0}
+ dt{color:var(--dim);margin-bottom:5px}
+ dd{margin:0}
+ ol{display:flex;flex-wrap:wrap;gap:6px;margin:0;padding:0;list-style:none}
+ li{padding:4px 8px;border-radius:5px;background:#16242a;border:1px solid var(--line);color:var(--water);font-size:.89rem}
+ li span{display:block;color:var(--dim);font-size:.75rem}
+ #recall li{color:var(--gold)}
+ #provenance{margin-top:12px}
+ @media(max-width:510px){dl{grid-template-columns:1fr} .choices button{flex:1 1 auto}}
+</style>
+<main>
+ <header>
+  <h1>Echoes at the overlook</h1>
+  <p>Two paths teach the score different versions of the same motif. At the Overlook, a cello recalls the version you heard.</p>
+ </header>
+ <section aria-labelledby="route-title">
+  <h2 id="route-title">Path to the Overlook</h2>
+  <div class="choices" role="group" aria-label="Path to the Overlook">
+   <button type="button" data-route="waterline" aria-pressed="true">Waterline</button>
+   <button type="button" data-route="clocktower" aria-pressed="false">Clock tower</button>
+   <button type="button" data-route="early" aria-pressed="false">Leave early</button>
+  </div>
+  <label class="mode" for="preserve">Recall <select id="preserve">
+   <option value="both">Rhythm and intervals</option>
+   <option value="rhythm">Rhythm only</option>
+   <option value="intervals">Intervals only</option>
+  </select></label>
+  <div class="playback">
+   <button type="button" id="play">Play route</button>
+   <button type="button" id="seek">Jump to the Overlook</button>
+  </div>
+  <audio controls preload="metadata" aria-label="Score route"></audio>
+  <p id="status" role="status"></p>
+ </section>
+ <section aria-labelledby="memory-title">
+  <h2 id="memory-title">Motif memory</h2>
+  <dl>
+   <div><dt id="source-label">Heard on the route</dt><dd><ol id="heard"></ol></dd></div>
+   <div><dt>Cello recall</dt><dd><ol id="recall"></ol></dd></div>
+  </dl>
+  <p id="provenance"></p>
+ </section>
+</main>
+<script>
+const project=/*INK_MOTIF_PROJECT*/;
+const compressedEngine=/*INK_MOTIF_ENGINE*/;
+/*INK_MOTIF_SCRIPT*/
+</script>
+</html>

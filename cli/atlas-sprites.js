@@ -14,7 +14,7 @@ function heading(v) {
 
 function rasterize(placements, settings) {
   const {eye,V,W,H,focal,ortho,near,rayAt,time:sceneTime,interfaceTime,override,sun,visibility,clip,objectDither,
-    subject,captureIds,shutterTime,reconstructed,spriteLOD,budgets,budgetTime,budgetFrame,artScale=1}=settings;
+    subject,allow,captureIds,captureUV,sourceBinding,shutterTime,reconstructed,spriteLOD,budgets,budgetTime,budgetFrame,impostorBlend,artScale=1}=settings;
   const layers = new Map();
   if (budgets !== undefined && budgets !== false) {
     if (!budgets || typeof budgets !== 'object' || Array.isArray(budgets))
@@ -30,6 +30,7 @@ function rasterize(placements, settings) {
   const artRow = y => Math.floor((H - 1 - y) / artScale);
   if (override!==undefined&&!['card','impostor','scenery'].includes(override))
     throw new RangeError('Sprite atlas mode must be card, impostor or scenery');
+  Atlas.viewBlend(impostorBlend);
   const results=[];
   const viewForward=[V[2],V[6],V[10]];
   const project=point=>{
@@ -52,18 +53,20 @@ function rasterize(placements, settings) {
   }
   const sample={ color:[0,0,0],normal:[0,0,0],emission:[0,0,0] };
   for (const [placementIndex, placement] of placements.entries()) {
+    const lod=reconstructed?.get(placement);
+    const part = lod?.part ?? placement.partId;
+    if (allow && !allow({object:placement.objectId,part})) continue;
     const layer = layers.get(placement.budgetLayer);
     const budgetIndex = layer?.entries.length;
     const entry = layer && { id: placement.budgetId ?? String(placementIndex), priority: placement.budgetPriority,
       top: artHeight, bottom: artHeight };
     if (entry) layer.entries.push(entry);
-    const lod=reconstructed?.get(placement);
     const time = lod ? sceneTime :
       placement.clock === 'interface' ? interfaceTime ?? sceneTime : shutterTime?.(placement) ?? sceneTime;
     const {atlas,opacity}=placement, mode=lod?'impostor':override??placement.mode;
     const protection=subject?.({object:placement.objectId,entity:placement.objectId,material:placement.materialId});
-    const ids = (captureIds || lod?.part !== undefined) &&
-      { objectId:placement.objectId, materialId:placement.materialId, partId:lod?.part };
+    const ids = (captureIds || part !== undefined) &&
+      { objectId:placement.objectId, materialId:placement.materialId, partId:part };
     if (!opacity || placement.visibleAt && !placement.visibleAt(time)) continue;
     const at=lod?.at??(typeof placement.at==='function'?vector(placement.at(time),'Sprite atlas anchor'):placement.at);
     const fixed=mode==='scenery';
@@ -74,13 +77,25 @@ function rasterize(placements, settings) {
     if (!direction||(!fixed&&anchorScreen[2]<near)) continue;
     const rotation=basis(placement.yaw,0);
     const frame=lod?undefined:typeof placement.frame==='function'?placement.frame(time,frameView):placement.frame??placement.frameAt?.(time);
-    const tile=lod?.view??atlas.select(frame,mode,local(rotation,direction));
-    const effect=atlas.effect?.(tile), fringe=atlas.fringe?.(tile,time), transition=atlas.transition?.(tile,time);
-    const normalAxes=basis(tile.yaw+placement.yaw,tile.pitch);
-    const axes=lod?.axes??(fixed?normalAxes:basis(...heading(direction)));
+    const localDirection=local(rotation,direction);
+    const authored=lod?.view??atlas.select(frame,mode,localDirection);
+    const pixelsPerTexel=authored.unitsPerPixel*placement.scale*focal/(artScale*(ortho||fixed?1:anchorScreen[2]));
+    const reprojection=lod ? lod.reprojection : mode==='impostor' && Atlas.reproject(placement,authored,localDirection,{
+      blend:impostorBlend, distance:ortho ? Infinity : Math.hypot(...eye.map((n,i)=>n-at[i])), pixelsPerTexel, time });
+    const tile=reprojection?.view ?? authored;
+    const effect=reprojection?null:atlas.effect?.(authored), fringe=reprojection?null:atlas.fringe?.(authored,time),
+      transition=reprojection?null:atlas.transition?.(authored,time);
+    const normalAxes=basis(authored.yaw+placement.yaw,authored.pitch);
+    const axes=lod?.axes??(reprojection ? basis(reprojection.report.yaw+placement.yaw,reprojection.report.pitch) :
+      fixed?normalAxes:basis(...heading(direction)));
     const units=tile.unitsPerPixel*placement.scale;
-    const mip=!fixed&&!exact&&!transition&&atlas.cutoutImage?.(tile,
-      lod?.cutoutLevel??atlas.cutoutLevel(tile,units*focal/(artScale*(ortho?1:anchorScreen[2]))));
+    const mip=!reprojection&&!fixed&&!exact&&!transition&&atlas.cutoutImage?.(tile,
+      lod?.cutoutLevel??atlas.cutoutLevel(tile,pixelsPerTexel));
+    const source = sourceBinding && placement.objectId && part && placement.depth &&
+      !reprojection && (!mip || mip.width === tile.rect.width && mip.height === tile.rect.height) && !transition && !fixed && {
+        key:placement,
+        identity:{ kind:'sprite',asset:placement.budgetId ?? placement.objectId,object:placement.objectId,part,frame:authored.frame,yaw:authored.yaw,pitch:authored.pitch }
+      };
     const {x:tileX,y:tileY,width,height}=tile.rect, px=tile.pivot.x,py=tile.pivot.y;
     // Round the card origin once. Every texel then gets one integer art-pixel address.
     const offset=exact&&placement.pixelOffset?placement.pixelOffset(time):null;
@@ -131,7 +146,8 @@ function rasterize(placements, settings) {
             const strands=fringe?.at(u,v);
             if (!inside&&!strands&&!transition) continue;
             const p=y*W+x;
-            const body=mip?inside&&atlas.cutoutSample(tile,mip,uAt,vAt,placement,sample):
+            const body=reprojection ? Atlas.sampleReprojected(reprojection,uAt,vAt,placement,sample) :
+              mip?inside&&atlas.cutoutSample(tile,mip,uAt,vAt,placement,sample):
               (inside||transition)&&atlas.sample(tile,u,v,placement,sample,id,transition);
             if (body && (!lod || spriteLOD.alpha(sample.alpha,lod,x,y))) {
               const hit=fragmentAt(ray,fixed?plane:plane+placement.scale*sample.depth/facing);
@@ -142,7 +158,7 @@ function rasterize(placements, settings) {
                   if (mode==='card') {
                     const inView=atlas.normalSpace==='view'?sample.normal:local(tile.basis,sample.normal);
                     normal=unit(combine(axes,inView));
-                  } else normal=unit(combine(atlas.normalSpace==='view'?normalAxes:rotation,sample.normal));
+                  } else normal=unit(combine(!reprojection&&atlas.normalSpace==='view'?normalAxes:rotation,sample.normal));
                 }
                 const gain=sun&&normal&&placement.lighting ?
                   sun.ambient+sun.intensity*Math.max(0,dot(normal,sun.direction))*(visibility?.(position,normal)??1) : 1;
@@ -152,8 +168,11 @@ function rasterize(placements, settings) {
                   if (atlas.emissionMode==='add') return clamp(value*gain+glow,0,1);
                   return gain===1 ? value : clamp(Math.max(0,value-glow)*gain+glow,0,1);
                 });
+                const baked = source && atlas.bakedPoint(authored,u,v);
                 results.push({p,...hit,...ids,alpha:lod?1:sample.alpha*opacity,color,normal,emission,protection,swatches:atlas.swatches,
                   objectPosition:local(rotation,position.map((n,i)=>(n-at[i])/placement.scale)), objectScale:placement.scale,
+                  ...(baked && { source:{ ...source,coordinate:baked } }),
+                  ...(captureUV && inside && { uv:[uAt/width,1-vAt/height] }),
                   ...(objectDither && mode==='card' && { patternPosition:[(uAt-px)*tile.unitsPerPixel,(py-vAt)*tile.unitsPerPixel,0] })});
               }
             }

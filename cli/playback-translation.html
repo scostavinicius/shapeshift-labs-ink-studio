@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Playback translation · Ink Studio</title>
+<style>
+  :root{color-scheme:dark;--bg:#131c20;--panel:#1d2a2c;--ink:#f1edde;--muted:#b0c0ba;--line:#3e5352;--accent:#bce3b2;--attention:#ffd191}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.55 system-ui,sans-serif}
+  main{max-width:1080px;margin:auto;padding:34px clamp(16px,5vw,50px) 45px}
+  h1,h2,p{margin:0}
+  h1{font:500 clamp(42px,7vw,73px)/.99 Georgia,serif;letter-spacing:-.05em;overflow-wrap:anywhere}
+  h2{font-size:23px;margin-bottom:8px}
+  header p:last-child{margin:9px 0 18px;color:var(--muted)}
+  .overline{font:650 11px/1.45 ui-monospace,monospace;letter-spacing:.13em;text-transform:uppercase;color:var(--accent);margin-bottom:8px}
+  .monitor,.table-wrap{border:1px solid var(--line);border-radius:5px;background:var(--panel);overflow:hidden}
+  .monitor{padding:14px}
+  .profiles{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:10px}
+  button{background:#263637;color:var(--ink);border:1px solid var(--line);border-radius:4px;padding:6px 10px;font:650 14px system-ui,sans-serif;cursor:pointer}
+  button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#20291c}
+  button:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  audio{display:block;width:100%}
+  .monitor p{margin-top:7px;color:var(--muted);font-size:13px}
+  section{margin-top:23px}
+  .table-wrap{overflow:auto;margin-top:8px}
+  table{border-collapse:collapse;text-align:left;width:100%;min-width:640px}
+  td,th{border-bottom:1px solid var(--line);padding:9px 11px}
+  tbody tr:last-child td,tbody tr:last-child th{border-bottom:0}
+  td{color:var(--muted);font-variant-numeric:tabular-nums}
+  td.risk{color:var(--attention);font-weight:650}
+  td.ok{color:var(--accent)}
+  .muted{color:var(--muted)}
+  a{color:var(--accent)}
+  .table-wrap button{padding:3px 6px;text-align:left}
+  .time{display:block;color:var(--muted);font:11px ui-monospace,monospace;margin-top:3px}
+  #report{margin-top:14px}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="overline">Ink Studio / Playback translation</p>
+    <h1 id="title"></h1>
+    <p>Switch devices at the same point in the mix.</p>
+  </header>
+  <div class="monitor">
+    <div id="profiles" class="profiles" role="group" aria-label="Playback target"></div>
+    <audio id="player" controls preload="metadata" aria-label="Mix audition"></audio>
+    <p id="playing" role="status"></p>
+  </div>
+  <section>
+    <h2>Does the cue survive?</h2>
+    <p class="muted" id="summary"></p>
+    <div class="table-wrap" id="evidence" hidden>
+      <table aria-label="Cue translation measurements">
+        <thead>
+          <tr><th scope="col">Cue</th><th scope="col">Target</th><th scope="col">Source bass</th>
+            <th scope="col">Bass response</th><th scope="col">Cue level</th><th scope="col">Result</th></tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+  <p id="report"><a href="report.json">Open measured response and cue data</a></p>
+</main>
+<script>
+'use strict';
+const report = /* REPORT */ {};
+const byId=id=>document.getElementById(id), player=byId('player');
+const lanes=[{id:'reference',label:'Reference mix',...report.reference},...report.targets];
+const deviceLabels={phone:'Phone',laptop:'Laptop','small-speaker':'Small speaker',other:'Playback device'};
+const statuses={'bass-risk':'Bass-dependent cue','needs-isolation':'Check isolated stem','no-bass-flag':'No bass flag','quiet-source':'Quiet source','lost-in-routing':'Lost in mono fold'};
+const dB=value=>value===null?'—':value.toFixed(1)+' dB';
+const percent=value=>value===null?'—':Math.round(value*100)+'%';
+const time=sample=>(sample/report.sampleRate).toFixed(2)+' s';
+function node(tag,label) {
+  const value=document.createElement(tag);
+  if (label!==undefined) value.textContent=label;
+  return value;
+}
+byId('title').textContent=report.title;
+let selected, pendingPosition, resume=false, revision=0;
+function select(lane) {
+  if (lane.id===selected) return;
+  pendingPosition??=player.currentTime;
+  resume=resume||!player.paused;
+  const request=++revision;
+  selected=lane.id;
+  for (const button of byId('profiles').children) button.setAttribute('aria-pressed',String(button.dataset.id===lane.id));
+  player.pause();
+  player.src=lane.file;
+  player.currentTime=pendingPosition;
+  byId('playing').textContent=lane.id==='reference'?'Reference mix':
+    deviceLabels[lane.device]+' · '+(lane.input==='mono'?'Mono fold':'Stereo')+' · measured response';
+  if (resume) player.play().catch(()=>{
+    if (request===revision) byId('playing').textContent=lane.label+' · press Play to resume';
+  });
+}
+player.addEventListener('loadedmetadata',()=>{
+  const lane=lanes.find(row=>row.id===selected);
+  if (player.currentSrc!==new URL(lane.file,location.href).href) return;
+  if (pendingPosition!==undefined) player.currentTime=Math.min(pendingPosition,player.duration);
+  pendingPosition=undefined;resume=false;
+});
+player.addEventListener('error',()=>{byId('playing').textContent='Could not load this audition WAV.';});
+for (const lane of lanes) {
+  const button=node('button',lane.label);
+  button.type='button';button.dataset.id=lane.id;button.addEventListener('click',()=>select(lane));
+  byId('profiles').append(button);
+}
+function jump(sample) {
+  const position=sample/report.sampleRate;
+  if (pendingPosition!==undefined) pendingPosition=position;
+  player.currentTime=position;
+}
+const risks=report.flags.filter(row=>row.status==='bass-risk').length;
+const needs=report.flags.length-risks;
+byId('summary').textContent=report.cues.length?
+  risks+' isolated cue–target matches flagged'+(needs?' · '+needs+' mix-window matches need isolation':'')+'.':
+  'No cue windows were supplied. The measured-device auditions are available above.';
+byId('evidence').hidden=!report.cues.length;
+for (const cue of report.cues) for (const [index,measurement] of cue.measurements.entries()) {
+  const row=node('tr'), first=node('th');
+  first.scope='row';
+  if (index===0) {
+    first.rowSpan=cue.measurements.length;
+    const button=node('button',cue.label);
+    button.type='button';button.addEventListener('click',()=>jump(cue.fromSample));
+    const address=node('span',time(cue.fromSample)+' · '+(cue.basis==='isolated-stem'?'Isolated stem':'Mix window'));
+    address.className='time';first.append(button,address);row.append(first);
+  }
+  const target=lanes.find(lane=>lane.id===measurement.target);
+  const result=node('td',statuses[measurement.status]);
+  if (measurement.status==='bass-risk'||measurement.status==='needs-isolation') result.className='risk';
+  if (measurement.status==='no-bass-flag') result.className='ok';
+  const bass=node('td',measurement.bassAbsent?'Absent':dB(measurement.bassResponseDb));
+  row.append(node('td',target.label),node('td',percent(measurement.sourceBassShare)),bass,
+    node('td',dB(measurement.responseDb)),result);
+  byId('rows').append(row);
+}
+select(lanes[0]);
+</script>
+</body>
+</html>

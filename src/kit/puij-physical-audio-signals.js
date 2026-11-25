@@ -32,7 +32,7 @@
   }
 
   function fromTrace(trace,selection){
-    check(fields(selection,['name','channel','metersPerUnit','previous','beforePrevious'])&&W.data.id(selection.name)&&
+    check(fields(selection,['name','body','channel','metersPerUnit','previous','beforePrevious'])&&W.data.id(selection.name)&&
       (selection.previous===undefined||Number.isFinite(selection.previous))&&
       (selection.beforePrevious===undefined||(selection.previous!==undefined&&Number.isFinite(selection.beforePrevious))),
     'Select a named physical trace channel');
@@ -40,6 +40,8 @@
     const {start,end}=trace??{};
     let kind, quantity, sampleRate, values, scale=1;
     check(trace?.version===1,'Expected a version 1 physical trace');
+    check(selection.body===undefined||trace.format===W.resonantModes.coupledTraceFormat,
+      'Only a coupled modal pickup needs a body');
     switch(trace.format){
       case W.waveNetworks.traceFormat:
         check((channel===undefined||channel==='pressure'||channel==='flow')&&metersPerUnit===undefined,
@@ -56,6 +58,17 @@
         values=own(trace.pickups,name)?trace.pickups[name]:undefined;
         scale=metersPerUnit;
         break;
+      case W.resonantModes.coupledTraceFormat: {
+        check(W.data.id(selection.body)&&(channel===undefined||['displacement','velocity'].includes(channel))&&
+          Number.isFinite(metersPerUnit)&&metersPerUnit>0,'Choose a coupled body, pickup and metres-per-unit calibration');
+        kind=channel??'displacement';
+        sampleRate=trace.info?.sampleRate;
+        const rows=kind==='velocity'?trace.velocities:trace.pickups;
+        const body=own(rows,selection.body)?rows[selection.body]:null;
+        values=own(body,name)?body[name]:undefined;
+        scale=metersPerUnit;
+        break;
+      }
       case W.virtualSensors.reportFormat: {
         check(trace.kind==='wave'&&channel===undefined&&metersPerUnit===undefined,
           'Use a sample-rate wave sensor report for physical audio');
@@ -80,7 +93,7 @@
 
   W.physicalSignals=Object.freeze({format,units,maxFrames,inspect,validate,fromTrace});
   P.graph.operations=Object.freeze({...P.graph.operations,'audio.physicalSignal':Object.freeze({
-    cacheVersion:1,description:'Select a calibrated physical signal and absolute sample addresses from a simulation trace.',
+    cacheVersion:2,description:'Select a calibrated physical signal and absolute sample addresses from a simulation trace.',
     inputs:{trace:'record',selection:'record'},outputs:{value:'record'},
     run({trace,selection}){return {value:fromTrace(trace,selection)};}
   })});

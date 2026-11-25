@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Last Ferry · Joint picture and sound priorities</title>
+<style>
+  :root{color-scheme:dark;--bg:#141a24;--panel:#1b2632;--edge:#38495a;--text:#f0eadc;--muted:#afb9c5;--gold:#f4cf92;--mint:#a5d9c9}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 50% -35%,#3a5462,var(--bg) 72%);color:var(--text);font:14px/1.45 system-ui,sans-serif}
+  main{max-width:1120px;margin:auto;padding:25px 27px 38px}
+  header{display:flex;justify-content:space-between;align-items:end;gap:16px;margin-bottom:14px}
+  h1{font:500 clamp(38px,6vw,56px)/.97 Georgia,serif;letter-spacing:-.046em;margin:5px 0 7px}
+  h2,p,dl,dd{margin:0}
+  h2{font-size:14px}
+  p{color:var(--muted)}
+  .mono,output,time{font:600 11px/1.4 ui-monospace,monospace;font-variant-numeric:tabular-nums}
+  .eyebrow{color:var(--gold);letter-spacing:.13em;text-transform:uppercase}
+  button{font:inherit;background:#21303c;color:var(--text);border:1px solid var(--edge);border-radius:6px;padding:6px 9px;cursor:pointer}
+  button:hover{background:#354450}
+  button:focus-visible,input:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+  .switch{display:flex;padding:3px;border:1px solid var(--edge);border-radius:9px;flex-shrink:0;gap:4px;background:#131e29}
+  .switch button{border-color:transparent;background:none;padding:7px 11px;font-size:13px}
+  .switch [aria-pressed=true]{background:#ecd2a3;color:#282622}
+  .workspace{display:grid;grid-template-columns:1.85fr 1fr;gap:12px}
+  .viewer,.readout,.timing{background:var(--panel);border:1px solid var(--edge);border-radius:10px;overflow:hidden}
+  .stage{position:relative;aspect-ratio:16/9;background:#18232c;overflow:hidden}
+  video{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;image-rendering:pixelated}
+  #badge{position:absolute;top:9px;left:10px;background:#121e2bde;padding:3px 6px;border-radius:4px;color:var(--text);pointer-events:none}
+  #badge.active{color:var(--gold)}
+  .transport{padding:8px;display:flex;align-items:center;gap:8px;border-top:1px solid var(--edge)}
+  .transport input{width:100%;min-width:0;accent-color:var(--gold)}
+  .transport output{white-space:nowrap;color:var(--muted)}
+  .readout{padding:14px}
+  .readout h2{margin-bottom:8px}
+  .info{font-size:12px;line-height:1.5;margin-bottom:12px}
+  dl{display:grid;grid-template-columns:1fr auto;gap:0 8px}
+  dt,dd{padding:8px 0;border-bottom:1px solid var(--edge)}
+  dd{color:var(--mint);text-align:right}
+  .dropped{color:#ffd4aa}
+  .readout button{margin-top:13px}
+  .timing{margin-top:12px;padding:13px 15px}
+  .timing header{margin:0 0 9px}
+  .band{position:relative;height:18px;background:#293744;border:1px solid #425363;border-radius:4px}
+  .span{position:absolute;top:0;bottom:0;background:#7a6144;border-inline:1px solid var(--gold)}
+  .point{position:absolute;top:-3px;height:22px;width:2px;background:var(--mint)}
+  .ends{display:flex;justify-content:space-between;margin-top:5px;color:var(--muted)}
+  .legend{margin-top:8px;font-size:12px;color:var(--muted)}
+  @media(max-width:800px){main{padding:14px 13px 24px}.workspace{grid-template-columns:1fr}}
+  @media(max-width:500px){header{align-items:start;flex-direction:column;gap:9px}.switch button{padding:5px 7px}}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <div class="eyebrow mono">Ink Studio / Joint load priorities</div>
+      <h1>Last Ferry</h1>
+      <p>A bell strike in a harbor squall, with four spatial voices available.</p>
+    </div>
+    <div class="switch" role="group" aria-label="Compare priorities">
+      <button id="ordinary" aria-pressed="true">Ordinary budget</button>
+      <button id="protected" aria-pressed="false">Joint priority</button>
+    </div>
+  </header>
+  <div class="workspace">
+    <div class="viewer">
+      <div class="stage">
+        <video id="ordinary-video" preload="auto" playsinline aria-label="Ordinary budget playback"></video>
+        <video id="protected-video" preload="auto" playsinline aria-label="Joint priority playback" hidden></video>
+        <output id="badge"></output>
+      </div>
+      <div class="transport">
+        <button id="play">Play</button>
+        <input id="seek" type="range" min="0" step="0.001" value="0" aria-label="Playback position">
+        <output id="time"></output>
+        <button id="mute" aria-pressed="false">Mute</button>
+      </div>
+    </div>
+    <section class="readout" aria-label="Measured overload results">
+      <h2>At the strike</h2>
+      <p class="info">Draw work measured at 1.85 s. Voice admission measured at 1.70 s.</p>
+      <dl>
+        <dt>Raster fragments</dt><dd id="rows" class="mono"></dd>
+        <dt>Rain rows omitted</dt><dd id="rain" class="mono"></dd>
+        <dt>Background voice limit</dt><dd id="slots" class="mono"></dd>
+        <dt>Bell voice</dt><dd id="bell" class="mono"></dd>
+      </dl>
+      <button id="jump">Play around the strike</button>
+    </section>
+  </div>
+  <section class="timing" aria-label="Priority window">
+    <header>
+      <h2>Priority window</h2>
+      <output id="interval"></output>
+    </header>
+    <div class="band"><div class="span" id="span"></div><div class="point" id="point"></div></div>
+    <div class="ends mono"><time>0.00 s</time><time id="end"></time></div>
+    <p class="legend">The band marks the shared picture and sound window. The line marks the bell strike.</p>
+  </section>
+</main>
+<script>
+  const report=/* REPORT */ {}, clips=/* MOVIES */ {};
+  const get=id=>document.getElementById(id), play=get('play'), seek=get('seek'), mute=get('mute');
+  const keys=['ordinary','protected'], videos=Object.fromEntries(keys.map(key=>[key,get(key+'-video')]));
+  for(const key of keys){
+    const bytes=Uint8Array.from(atob(clips[key]),n=>n.charCodeAt(0));
+    videos[key].src=URL.createObjectURL(new Blob([bytes],{type:'video/mp4'}));
+  }
+  const ms=time=>time.toFixed(2)+' s', percent=time=>time/report.duration*100+'%';
+  seek.max=report.duration;
+  get('end').textContent=ms(report.duration);
+  get('interval').value=ms(report.window.from)+' – '+ms(report.window.to);
+  get('span').style.left=percent(report.window.from);
+  get('span').style.width=percent(report.window.to-report.window.from);
+  get('point').style.left=percent(report.strike);
+  let mode='ordinary', active=videos[mode], muted=false;
+  function status(){
+    const t=active.currentTime, flagged=t>=report.window.from&&t<report.window.to;
+    seek.value=t;
+    get('time').value=t.toFixed(3)+' s';
+    get('badge').value=flagged?(mode==='protected'?'Priority active':'At the strike'):'Harbor';
+    get('badge').classList.toggle('active',flagged&&mode==='protected');
+    play.textContent=active.paused?(active.ended?'Replay':'Play'):'Pause';
+  }
+  function metrics(){
+    const row=report.metrics[mode];
+    get('rows').textContent=row.fragments.toLocaleString('en-US');
+    get('rain').textContent=row.particleRowsSkipped.toLocaleString('en-US');
+    get('slots').textContent=row.backgroundSlots;
+    get('bell').textContent=row.bell.action==='admitted'?'Direct':'Dropped';
+    get('bell').classList.toggle('dropped',row.bell.action==='dropped');
+  }
+  function start(){
+    if(active.ended)active.currentTime=0;
+    active.play().catch(status);
+  }
+  play.addEventListener('click',()=>active.paused?start():active.pause());
+  seek.addEventListener('input',()=>{active.currentTime=Number(seek.value);status();});
+  mute.addEventListener('click',()=>{
+    muted=!muted;
+    for(const video of Object.values(videos)) video.muted=muted;
+    mute.textContent=muted?'Unmute':'Mute';
+    mute.setAttribute('aria-pressed',String(muted));
+  });
+  get('jump').addEventListener('click',()=>{active.currentTime=report.strike-.32;start();});
+  for(const key of keys){
+    get(key).addEventListener('click',()=>{
+      if(key===mode)return;
+      const time=active.currentTime, resume=!active.paused;
+      active.pause();
+      active.hidden=true;
+      get(mode).setAttribute('aria-pressed','false');
+      mode=key;
+      active=videos[mode];
+      active.currentTime=time;
+      active.hidden=false;
+      get(mode).setAttribute('aria-pressed','true');
+      if(resume)start();
+      metrics();
+      status();
+    });
+    for(const event of ['timeupdate','playing','pause','ended','seeked'])videos[key].addEventListener(event,status);
+  }
+  metrics();
+  status();
+</script>
+</body>
+</html>

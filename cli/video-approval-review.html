@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Video delivery approval · Ink Studio</title>
+<style>
+  :root{color-scheme:dark;--bg:#121821;--panel:#1b2531;--line:#3e4c5b;--ink:#f3ebd8;--muted:#aebbc6;--amber:#f4b24c;--rose:#ff648f;--cyan:#73dce6}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.53 system-ui,sans-serif}
+  main{max-width:1160px;margin:auto;padding:31px clamp(16px,5vw,53px) 40px}
+  h1,h2,p{margin:0}
+  h1{font:500 clamp(40px,7.4vw,72px)/1 Georgia,serif;letter-spacing:-.045em}
+  h2{font-size:22px;margin-bottom:6px}
+  header p{color:var(--muted);margin-top:8px;overflow-wrap:anywhere}
+  #status{font:650 12px ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase;margin-bottom:10px;color:var(--cyan)}
+  #status[data-status="flagged"]{color:var(--rose)} #status[data-status="inconclusive"]{color:var(--amber)}
+  section{margin-top:21px}
+  .stage-tools{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:7px;flex-wrap:wrap}
+  .viewport{overflow:auto;border:1px solid var(--line);border-radius:4px;background:#0e141a;padding:9px}
+  .picture-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+  figure{min-width:0;margin:0}
+  figcaption{color:var(--muted);padding:3px 5px 6px;font-weight:650}
+  img{display:block;max-width:none;width:100%;height:auto;image-rendering:pixelated;background:#10151b}
+  select{font:inherit;padding:4px 7px;border-radius:3px;border:1px solid var(--line);background:var(--panel);color:var(--ink)}
+  summary:focus-visible,select:focus-visible{outline:2px solid var(--cyan);outline-offset:2px}
+  ul.stats{padding:0;margin:7px 0;list-style:none;display:flex;gap:7px;flex-wrap:wrap}
+  .stats li{border:1px solid var(--line);border-radius:3px;padding:4px 8px;background:var(--panel)}
+  .palette{color:var(--amber)}.accents{color:var(--rose)}.flicker{color:var(--cyan)}
+  .muted{color:var(--muted)}
+  .findings{display:grid;gap:5px;margin-top:9px}
+  .finding{border:1px solid var(--line);border-radius:3px;padding:7px 10px;background:var(--panel);overflow-wrap:anywhere}
+  .finding p{color:var(--muted);margin-top:4px}
+  summary{cursor:pointer}
+  dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 14px;margin:8px 0;color:var(--muted)}
+  dd{margin:0;overflow-wrap:anywhere}
+  [hidden]{display:none!important}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <p id="status"></p>
+    <h1>Video delivery approval</h1>
+    <p id="delivery"></p>
+  </header>
+  <section id="stage" hidden aria-labelledby="first-title">
+    <div class="stage-tools">
+      <h2 id="first-title"></h2>
+      <label>View <select id="view"><option value="compare">Source and delivery</option><option value="damage">Delivery and flagged pixels</option></select></label>
+      <label>Zoom <select id="zoom"><option value="fit">Fit</option><option>1×</option><option>2×</option><option>4×</option><option>8×</option></select></label>
+    </div>
+    <div class="viewport">
+      <div class="picture-grid" id="pictures">
+        <figure><figcaption id="left-label">Source</figcaption><img id="left" alt="Source frame"></figure>
+        <figure><figcaption id="right-label">Decoded delivery</figcaption><img id="right" alt="Decoded delivery frame"></figure>
+      </div>
+    </div>
+    <ul id="first-issues" class="stats" aria-label="Problems on this frame"></ul>
+    <p class="muted" id="legend" hidden>Amber marks palette loss. Pink marks thin accents. Cyan marks new flicker. White marks overlapping findings.</p>
+    <div id="proof" class="findings"></div>
+  </section>
+  <section>
+    <h2>Scan summary</h2>
+    <ul id="summary" class="stats"></ul>
+    <div id="unchecked" class="muted"></div>
+    <details>
+      <summary>Delivery identity</summary>
+      <dl id="identity"></dl>
+    </details>
+  </section>
+</main>
+<script>
+'use strict';
+const report = /* REPORT */ {};
+const labels = {approved:'Approved',flagged:'Flagged',inconclusive:'Inconclusive'};
+const names = {palette:'Palette separation',accents:'One-pixel accents',flicker:'New flicker'};
+const first = report.firstDamaged, byId = id=>document.getElementById(id);
+function node(tag,value) {
+  const e=document.createElement(tag);
+  if(value!==undefined)e.textContent=value;
+  return e;
+}
+byId('status').textContent=labels[report.status];
+byId('status').dataset.status=report.status;
+const {width,height,codec,pixelFormat,file,sha256,timeBase,firstPts,lastPts}=report.delivery;
+byId('delivery').textContent=file+' · '+width+' × '+height+' · '+(codec??'video')+' · '+(report.source.to-report.source.from)+' frames';
+for(const [kind,count] of Object.entries(report.flaggedFrames)){
+  const li=node('li',names[kind]+' · '+(report.options[kind]?count+' flagged frames':'disabled'));
+  li.className=kind;byId('summary').append(li);
+}
+for(const row of report.unchecked)byId('unchecked').append(node('p',
+  row.kind==='palette'?'No matched source swatches for '+row.id+'.':
+  row.kind==='accents'?'No matching one-pixel source accent.':
+  row.reason==='no-held-source-pixels'?'No source pixels held steady across a three-frame span.':'No uninterrupted three-frame span for flicker.'));
+for(const [label,value] of [['Codec',codec],['Pixel format',pixelFormat],['Time base',timeBase],
+  ['First and last PTS',firstPts+' to '+lastPts],['Delivery SHA-256',sha256]]){
+  byId('identity').append(node('dt',label),node('dd',value??'Unspecified'));
+}
+if(first){
+  byId('stage').hidden=false;
+  byId('first-title').textContent='First damaged frame '+first.sourceFrame;
+  const source=byId('left'), decoded=byId('right'), view=byId('view'), zoom=byId('zoom');
+  for(const [kind,value] of Object.entries(first.problems)){
+    const li=node('li',names[kind]);
+    li.className=kind;byId('first-issues').append(li);
+    if(kind==='palette')for(const row of value){
+      const evidence=row.worst?'Worst edge retained '+Math.round(row.worst.retained*100)+'% of the original contrast.':
+        'Decoded swatches retained '+Math.round(row.meanRetained*100)+'% of the original contrast.';
+      const item=node('div');item.className='finding';
+      item.append(node('strong',row.colors.join(' and ')),node('p',evidence));byId('proof').append(item);
+    }else {
+      const item=node('div'), worst=value.worst, amount=kind==='accents'?value.damaged:value.affected;
+      item.className='finding';item.append(node('strong',names[kind]+' · '+amount+' pixels'));
+      item.append(node('p','Strongest finding at art pixel ('+worst.at.join(', ')+').'));byId('proof').append(item);
+    }
+  }
+  function setView(){
+    const evidence=view.value==='damage';
+    byId('legend').hidden=!evidence;
+    byId('left-label').textContent=evidence?'Decoded delivery':'Source';
+    byId('right-label').textContent=evidence?'Flagged pixels':'Decoded delivery';
+    source.src=evidence?first.decoded:first.source;source.alt=byId('left-label').textContent;
+    decoded.src=evidence?first.damage:first.decoded;decoded.alt=byId('right-label').textContent;
+  }
+  zoom.addEventListener('change',()=>{
+    byId('pictures').style.width=zoom.value==='fit'?'auto':(width*2*parseInt(zoom.value,10)+8)+'px';
+  });
+  view.addEventListener('change',setView);setView();
+}
+</script>
+</body>
+</html>

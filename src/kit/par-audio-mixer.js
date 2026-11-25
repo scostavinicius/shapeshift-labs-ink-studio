@@ -9,7 +9,7 @@
     return Object.entries(value);
   }
   function compile(source,assets,host,premix,delivery,transport,stream) {
-    check(fields(source,['id','sampleRate','map','end','tail','output','strips','processors','taps','peakPolicy','meter']) &&
+    check(fields(source,['id','sampleRate','map','end','tail','output','strips','processors','taps','peakPolicy','meter','focusTrack']) &&
       id(source.id) && id(source.output) && record(assets) &&
       (source.meter===undefined || typeof source.meter==='boolean') &&
       ['keep','cut'].includes(source.tail ?? 'keep') &&
@@ -21,6 +21,7 @@
       transport ? S.mixerTransport(timeline,transport) : timeline;
     const bounds=source.end===undefined ? null : time.frame(time.position(source.end));
     check(bounds===null || integer(bounds,1,maximum),'Mixer end must be positive and within one hour');
+    const focus=P.focusTrack.prepare(source.focusTrack);
     const audio=new Map(), strips=new Map(), routes=[];
     let assetSamples=0, clipCount=0, sourceEnd=0;
     function asset(name) {
@@ -59,6 +60,7 @@
       check(fields(row,['processor','sidechain']) && processor &&
         (key===undefined || processor.sidechain && fields(key,['strip','tap']) && id(key.strip) &&
           taps.includes(key.tap ?? 'post')),'Invalid mixer insert or sidechain assignment');
+      check(!processor.requiresSidechain || key,'Spectral sidechain needs a foreground sidechain tap');
       return {id:row.processor,processor,key:key && {strip:key.strip,tap:key.tap ?? 'post'}};
     }
     for (const [name,raw] of named(source.strips,48,'strips')) {
@@ -81,6 +83,12 @@
       strips.set(name,row);
     }
     check(strips.has(source.output),'Mixer output strip is missing');
+    for (const name of focus?.strips ?? []) {
+      const strip=strips.get(name);
+      check(strip,'Unknown mixer strip in shared focus track: '+name);
+      const lane=P.focusTrack.mixLane(focus,name,rate);
+      if (lane) strip.focus=time.lane(lane,0,-60,12,'focus gain in dB');
+    }
     if (delivery) for (const [name,role] of named(delivery,48,'delivery roles'))
       check(strips.has(name) && deliveryRoles.includes(role),'Invalid delivery role for strip '+name);
     function tap(spec) {
@@ -158,6 +166,12 @@
     return {rate,sourceEnd,frames,order,routes,master,exports};
   }
   const read=(data,index)=>data[index] ?? 0;
+  function stripFader(row) {
+    const base=row.fader.reader();
+    if (!row.focus) return base;
+    const focus=row.focus.reader();
+    return sample=>base(sample)*db(focus(sample));
+  }
   function render(source,assets,host,premix,delivery,transport) {
     const {rate,sourceEnd,frames,order,routes,master,exports}=compile(source,assets,host,premix,delivery,transport);
     const buffers=new Map();
@@ -236,7 +250,7 @@
       if (row.uses.has('pre')) slot.pre={samples:processed,latency:row.timing.pre.latency};
       if (row.uses.has('post')) {
         const post=row.reusePost ? processed : allocate(row.timing.post), {latency}=row.timing.post;
-        const fader=row.fader.reader(), pan=row.pan.reader();
+        const fader=stripFader(row), pan=row.pan.reader();
         for (let at=latency;at<post.length/2;at++) {
           const t=at-latency, gain=fader(t), balance=pan(t);
           post[2*at]=processed[2*at]*gain*Math.sqrt(1-balance);
@@ -309,7 +323,7 @@
           ') needs offline rendering. Use a causal, zero-lookahead insert or bypass it for live playback.');
         return [{process:processor.make(),wet:processor.wet.reader(),key:key && read(key.strip,key.tap)}];
       });
-      return {name:row.name,input,pre,post,routes,inserts,inputGain:controlled(row.inputGain,row.name),fader:row.fader.reader(),pan:row.pan.reader(),
+      return {name:row.name,input,pre,post,routes,inserts,inputGain:controlled(row.inputGain,row.name),fader:stripFader(row),pan:row.pan.reader(),
         inputEnd:row.timing.input.end,end:row.timing.post.end};
     });
     const processes=strips.flatMap(row=>row.inserts.map(insert=>insert?.process));
@@ -322,7 +336,7 @@
           tail:processor.tail,outputLatency:processor.latency,mainDelay:0,
           ...(key && {sidechain:{...key,compensation:0}})}))
       }]))};
-    const controls=order.flatMap(({inputGain,fader,pan,routes})=>[inputGain,fader,pan,...routes.filter(edge=>edge.kind==='send').map(edge=>edge.level)]);
+    const controls=order.flatMap(({inputGain,fader,pan,focus,routes})=>[inputGain,fader,pan,...(focus ? [focus] : []),...routes.filter(edge=>edge.kind==='send').map(edge=>edge.level)]);
     return {report,controls,
       snapshot:()=>processes.map(process=>process.snapshot()),
       restore:states=>processes.forEach((process,i)=>process.restore(states[i])),

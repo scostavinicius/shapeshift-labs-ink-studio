@@ -25,13 +25,14 @@
   }
   function pathSpec(path) {
     return { ...(path.id !== undefined && { id: path.id }), points: path.points, closed: path.closed, up: path.up,
-      frame: typeof path.frame === 'function' ? distance => path.frame(distance).N : undefined };
+      frame: typeof path.frame === 'function' ? distance => path.frame(distance).N : undefined,
+      ...(typeof path.radiusAt === 'function' && {radiusAt:distance=>path.radiusAt(distance)}) };
   }
 
   function bundle(spec) {
     check(spec && typeof spec === 'object' && !Array.isArray(spec), 'expected bundle settings');
     const input = spec.guide;
-    check(Array.isArray(input) || input && ['path', 'spline', 'family', 'surface'].includes(input.kind ?? 'path'),
+    check(Array.isArray(input) || input && ['path', 'spline', 'family', 'surface', 'retained-spline', 'socket-cable'].includes(input.kind ?? 'path'),
       'a strand bundle needs one guide path, spline, family or surface stroke');
     const guide = input.kind === 'family' ? K.curve.create(input.definition) : input;
     const compiled = typeof guide.frame === 'function' && typeof guide.at === 'function';
@@ -68,6 +69,13 @@
         return [{ id: source.id, points: K.curve.spline(controls, per), up: source.up }];
       }
       case 'family': return [pathSpec(K.curve.create(source.definition))];
+      case 'retained-spline': return [pathSpec(source.points ? source : K.curve.retained.compile(source.document,source.spline))];
+      case 'socket-cable': {
+        const planned=K.procedural.cableRoutes.plan(source.document,{graph:source.graph});
+        check(planned.route,'cable '+planned.source.id+' is '+planned.report.status+
+          (planned.report.failure ? ' ('+planned.report.failure+')' : ''));
+        return [{id:planned.source.id,points:planned.route.points,radius:planned.source.radius,closed:false}];
+      }
       case 'surface': return [surfacePath(source)];
       case 'bundle': return bundlePaths(bundle(source));
       case 'bundle-plan':
@@ -739,8 +747,8 @@
           if (active && (next - previous) * length >= 1e-7) {
             const [tip, fade] = ends ? endWeights(sample, run, caps, closed) : [1, 1];
             const pool = ends ? poolAt(sample, pools, closed) : { spread: 1, density: 1 };
-            const size = Math.min(100, (profileWidth ? profileWidth.sample(sample) / 2 : baseRadius) *
-              profileTaper.sample(sample) * tip * pool.spread);
+            const strandRadius = profileWidth ? profileWidth.sample(sample) / 2 : radius ?? strand.radiusAt?.(arc) ?? baseRadius;
+            const size = Math.min(100, strandRadius * profileTaper.sample(sample) * tip * pool.spread);
             const rowOpacity = styledOpacity(materials.opacity?.sample(sample) ?? opacity, fade, pool.density, edge);
             if (size < 1e-6) {
               previous = next;
@@ -839,7 +847,7 @@
       const start = builder.count();
       const group = nextGroup && rows.length ? nextGroup++ : undefined;
       const strand = rows.length && builder.registerCurveStrand?.({ name: id, object: plan.object,
-        material: plan.material, length, ...(isProxy && { aggregate: true }) });
+        material: plan.material, length, ...(plan.target?.part!==undefined && {part:plan.target.part}), ...(isProxy && { aggregate: true }) });
       for (const { from, to, shade, radius, opacity, profile, clips, finish, lighting, timeRange, pattern, arc, attachment } of rows)
         builder.curveSplat(from, to, radius, shade, opacity, profile, plan.edge, group, clips, finish, lighting,
           timing && [timing, ...timeRange], pattern && { ...pattern, program }, plan.shadows, strand ? [strand, ...arc] : undefined,
@@ -862,7 +870,8 @@
     }
     let aggregate, shadow;
     if (plan.proxy) aggregate = { ...proxyRange(plan.proxy,plan.lod.simplify), pitch:plan.proxy.pitch,
-      transition:plan.proxy.settings.transition, coverage:plan.proxy.settings.coverage };
+      transition:plan.proxy.settings.transition, coverage:plan.proxy.settings.coverage,
+      object:plan.object, part:plan.target?.part };
     if (plan.shadowProxy) shadow = { ...proxyRange(plan.shadowProxy), maxError:plan.shadowProxy.settings.maxError };
     if (runs.length || aggregate || shadow) {
       record={runs,simplify:plan.lod?.simplify,aggregate,shadow};
@@ -882,7 +891,8 @@
     const plan = prepare(source, options, palette, true);
     const ranges = emit(builder, plan), hidden = new Uint8Array(ranges.segments);
     const slots = [4, 5, 6, 8, 9, 10];
-    function pose(world, context = {}) {
+    function pose(world, context = {}, { isolated = false } = {}) {
+      const visibility = isolated ? hidden.slice() : hidden;
       const { stage, rows = stage?.rows } = context;
       const data = world?.anim?.bones && world.rest ? world.rest : world?.data;
       check(data instanceof Float32Array && world.count >= ranges.end && data.length >= ranges.end * 16,
@@ -921,7 +931,7 @@
           const from = at(segment, first), to = at(segment, last);
           if (active?.[segment] === false || K.V.dist(from, to) < 1e-7) {
             data[q + 3] = 0;
-            hidden[h] = 1;
+            visibility[h] = 1;
           } else {
             let profile = row.profile;
             if (profile) {
@@ -954,8 +964,8 @@
                 world.curvePattern.set(side, at + CurvePattern.sideOffset);
               }
             }
-            if (hidden[h] && data[q + 3] <= 0) data[q + 3] = row.opacity;
-            hidden[h] = 0;
+            if (visibility[h] && data[q + 3] <= 0) data[q + 3] = row.opacity;
+            visibility[h] = 0;
             if (row.clips) CurveSplat.writeClips(world.curveClips, indexOfRow, geometry.center, row.clips.map(clip));
           }
           if (rows) rows[indexOfRow >> 9] = 1;
@@ -966,8 +976,10 @@
         const parts = posed.flatMap(({ current }, i) => plan.strands[i].rows.length ?
           [{ points: current, radius: plan.strands[i].maxRadius }] : []);
         const coarse = aggregateGuide(parts,proxy.settings);
-        if (coarse && descriptor.pitch !== undefined) descriptor.pitch = coarse.pitch;
         const [start, end] = descriptor.proxy;
+        const target = isolated ? world.curveLod?.map(row => row[descriptor === ranges.lod.aggregate ? 'aggregate' : 'shadow'])
+          .find(row => row?.proxy[0] === start && row.proxy[1] === end) : descriptor;
+        if (coarse && target?.pitch !== undefined) target.pitch = coarse.pitch;
         for (let i = start; i < end; i++) {
           const { segment, first, last } = proxy.plan.strands[0].rows[i - start].attachment;
           const q = i * 16;

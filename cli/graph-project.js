@@ -15,6 +15,11 @@ const { fingerprint } = require('./graph-artifact-cache.js');
 const { estimateGraphMemory } = require('./graph-memory.js');
 const Assets = require('./asset-references.js');
 const { resolveTakeFile } = require('./take-document.js');
+const materialGraph = require('./material-graph.js');
+const MaterialMetadata = require('./material-metadata.js');
+const Base = require('../src/material-base-settings.js');
+const materialImage = require('./material-image-export.js');
+const OutputUsages = require('./material-output-usages.js');
 
 const format = 'ink-studio/graph-project';
 const reportFormat = 'ink-studio/graph-report';
@@ -77,11 +82,26 @@ function jsonBytes(value) {
   return Buffer.from(JSON.stringify(visit(value),null,2)+'\n');
 }
 
+function imageContract(value) {
+  if (value?.format !== 'ink-studio/graph-image' || value.version !== 1 ||
+      !record(value.descriptor) || !record(value.raster)) return;
+  const { width, height, data } = value.raster;
+  return { kind: 'typedImage', width, height, samples: data?.length, descriptor: value.descriptor };
+}
+
 function describe(value, depth = 0) {
   if (typeof value === 'function') return {kind:'runtime',type:'function'};
   if (value === undefined || typeof value === 'bigint' || typeof value === 'symbol' ||
       typeof value === 'number' && !Number.isFinite(value)) return {kind:'runtime',type:typeof value};
   if (!value || typeof value !== 'object') return value;
+  const contract = imageContract(value);
+  if (contract) return contract;
+  if (value.format === 'ink-studio/material-channels' && value.version === 1 && record(value.channels) &&
+      Object.values(value.channels).every(entry => record(entry?.raster) && record(entry.metadata))) {
+    return { kind: 'materialChannels', version: value.version, channels: Object.fromEntries(
+      Object.entries(value.channels).map(([name, { raster, metadata }]) =>
+        [name, { ...(imageContract(raster) ?? { width: raster.width, height: raster.height, samples: raster.data?.length }), metadata }])) };
+  }
   if (Number.isSafeInteger(value.width) && Number.isSafeInteger(value.height) && value.data)
     return {kind:'image',width:value.width,height:value.height,samples:value.data.length,
       ...(typeof value.colorSpace==='string' && {colorSpace:value.colorSpace})};
@@ -260,26 +280,54 @@ function cacheReport(frame) {
 }
 
 function createGraphProject(source, { kit=require('../index.js').load(), baseDir=process.cwd(), operations={}, adapters={},
-  sourceFile, workerPool, planAssets=false }={}) {
+  sourceFile, workerPool, planAssets=false, instance, baseContext, requireOutputs=true }={}) {
+  let materialMetadata, groupInspectors;
+  if (source?.format===materialGraph.format) {
+    const authored=source;
+    source=materialGraph.toGraphProject(source,{instance,requireOutputs});
+    groupInspectors=structuredClone(materialGraph.portVisibility(authored.graph)?.groups);
+    if (Object.hasOwn(authored,'metadata')) materialMetadata=MaterialMetadata.summary(authored);
+  }
+  else if (instance!==undefined) throw new TypeError('Graph instances require a material graph');
   if (workerPool && !workerPool.matches(kit)) throw new TypeError('Graph worker pool and project need the same toolkit');
-  const {graph,data,mediaGraph,takeTime}=kit.KIT.procedural;
+  const procedural=kit.KIT.procedural, {graph,data,mediaGraph,takeTime}=procedural;
   const host=createGraphHost(adapters,{kit});
   const {broadcast}=graph.arrays;
   const groupOperators=[...graph.arrays.groupOperators,...kit.KIT.procedural.animationGraph.groupOperators];
   const project=data.freeze(data.clone(source));
+  materialMetadata=materialMetadata && data.freeze(structuredClone(materialMetadata));
   const {format:kind,version:revision,groups:definitions={},assets:assetDefinitions={},assetRegistry,exports:exportsSpec={},
-    assertions:assertionSpecs=[],time=0,seed=0,...root}=fields(project,
-    ['format','version','inputs','nodes','outputs','groups','assets','assetRegistry','exports','assertions','time','seed'],'graph project');
+    assertions:assertionSpecs=[],time=0,seed:authoredSeed,base:baseSpec,inheritance,primaryInput,outputUsages,...root}=fields(project,
+    ['format','version','inputs','nodes','outputs','groups','assets','assetRegistry','exports','assertions','time','seed','base','inheritance','primaryInput','outputUsages'],'graph project');
   if (kind!==format || revision!==version) throw new TypeError('Expected ink-studio/graph-project version 1');
-  const spec=graphSpec(root,'project graph',groupOperators);
+  const base=baseSpec===undefined ? undefined : data.freeze(Base.resolve(baseSpec,{seed:authoredSeed}));
+  const seed=base?.seed ?? (authoredSeed===undefined ? 0 : authoredSeed);
+  const rules=inheritance===undefined ? undefined : Base.checkRules(inheritance);
+  const context=data.freeze(Base.checkContext(baseContext));
+  if (!base && (rules || primaryInput!==undefined || Object.keys(context).length))
+    throw new TypeError('Material inheritance needs shared base settings');
+  if (primaryInput!==undefined && context.primary)
+    throw new TypeError('Choose a primary graph input or a primary settings provider');
+  if (base && root.inputs!==undefined) named(root.inputs,'project graph parameters');
+  if (base && Object.hasOwn(root.inputs ?? {}, 'materialBase'))
+    throw new TypeError('The materialBase graph input is reserved by shared base settings');
+  const spec=graphSpec(base ? {...root,inputs:{...root.inputs,materialBase:{type:'record',default:base}}} : root,
+    'project graph',groupOperators);
+  if (primaryInput!==undefined) {
+    const socket=id(primaryInput) && Object.hasOwn(spec.inputs,primaryInput) ? spec.inputs[primaryInput] : undefined;
+    const type=typeof socket==='string' ? socket : socket?.type;
+    if (!['typedImage','colorImage','heightImage'].includes(type))
+      throw new TypeError('Material primaryInput must name a declared typed image input');
+  }
   const paths=new Set(sourceFile ? [path.resolve(sourceFile)] : []);
   const api=kit.KIT.authoring.assetReferences;
   const resolveAsset=Assets.scope(api,path.join(baseDir,'graph.json'),assetRegistry,{onFile:file=>paths.add(file)});
-  const groupTree=loadGraphGroups(definitions,baseDir,{onFile:file=>paths.add(file)});
+  const groupTree=loadGraphGroups(definitions,baseDir,{onFile:file=>paths.add(file),inspectors:groupInspectors});
   const groupSpecs=new Map(groupTree.entries.map(group=>[group,graphSpec(group.spec,'group '+group.alias,groupOperators)]));
   const assets=new Map(named(assetDefinitions,'assets').map(([name,definition])=>{
-    const {format,file,type,codec,options}=fields(definition,
-      definition?.format==='codec' ? ['format','file','type','codec','options'] : ['format','file'],'graph asset '+name);
+    const {format,file,type,codec,options,precision}=fields(definition,
+      definition?.format==='codec' ? ['format','file','type','codec','options'] :
+        definition?.format==='png' ? ['format','file','precision'] : ['format','file'],'graph asset '+name);
     if (!['png','indexed-png','json','wav','sound-recipe','inputs','codec'].includes(format) ||
         !(typeof file==='string'&&file||api.isRef(file)))
       throw new TypeError('Graph assets need a PNG, JSON, WAV, sound recipe, input recording or hosted codec file');
@@ -293,9 +341,15 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
     const bytes=selected?.bytes??fs.readFileSync(full);
     let value, kind, modelHash;
     if (format==='png') {
-      const {w,h,data,max}=planAssets ? PNG.layout(bytes) : PNG.raster(bytes);
-      value=planAssets ? {width:w,height:h} : {width:w,height:h,
-        data:max===255 ? data : Uint8Array.from(data,n=>Math.round(n*255/max))};
+      if (precision!==undefined && precision!=='native') throw new TypeError('PNG asset precision can be native');
+      if (planAssets) {
+        const {w,h,bitDepth}=precision==='native' ? PNG.nativeLayout(bytes) : PNG.layout(bytes);
+        value={width:w,height:h,...(bitDepth===16 && {sampleBytes:2})};
+      } else {
+        const {w,h,data,max}=PNG.raster(bytes);
+        value={width:w,height:h,data:max===255 || precision==='native' && max===65535 ?
+          data : Uint8Array.from(data,n=>Math.round(n*255/max))};
+      }
       kind='raster';
     } else if (format==='indexed-png') {
       if (planAssets) {
@@ -368,11 +422,15 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
     const {output,format,encoding,type,codec,options}=fields(definition,definition?.format==='wav' ?
       ['output','format','encoding'] : definition?.format==='codec' ? ['output','format','type','codec','options'] :
       ['output','format'],'graph export '+name);
-    if (!id(output) || !Object.hasOwn(rootPlan.outputs,output) || !['png','json','atlas','wav','codec'].includes(format))
-      throw new TypeError('Graph export '+name+' needs a known output and png, json, atlas, wav or codec format');
+    if (!id(output) || !Object.hasOwn(rootPlan.outputs,output) || !['png','json','atlas','wav','codec','material-image'].includes(format))
+      throw new TypeError('Graph export '+name+' needs a known output and png, json, atlas, wav, codec or material-image format');
     const port=rootPlan.outputs[output].type, compatible=kit.KIT.procedural.graphTypes.compatible;
+    if (format==='material-image' && (!base || !['typedImage','colorImage','heightImage'].includes(port)))
+      throw new TypeError('Material image export '+name+' needs shared base settings and a typed image output');
     if ((format==='png' || format==='codec' && type==='raster') && port==='linearRaster')
       throw new TypeError('Graph image export '+name+' needs display RGB. Use color.rasterToDisplay first.');
+    if ((format==='png' || format==='codec' && type==='raster') && ['typedImage','colorImage','heightImage'].includes(port))
+      throw new TypeError('Graph image export '+name+' needs a display raster. Use image.toDisplay for color or export the typed image as JSON.');
     if (format==='png' && !compatible(port,'raster')) throw new TypeError('Graph PNG export '+name+' needs an image output');
     if (format==='atlas' && !compatible(port,'atlas')) throw new TypeError('Graph atlas export '+name+' needs an atlas output');
     if (format==='wav' && (!compatible(port,'audio') || encoding!==undefined && !WAV.encodings.includes(encoding)))
@@ -382,7 +440,10 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
     if (format==='codec') host.requireCodec(codec,'encode');
     return {name,output,format,...(encoding && {encoding}),...(codec && {type,codec,...(options && {options})})};
   });
-  separateNames(exports.map(entry=>entry.name),'Graph exports');
+  const maps=data.freeze(outputUsages===undefined ? [] : OutputUsages.normalize(outputUsages,rootPlan.outputs));
+  OutputUsages.checkPorts(maps,rootPlan.outputs);
+  const mapIds=new Map(maps.map(row=>[row.id,row]));
+  separateNames([...exports.map(entry=>entry.name),...maps.filter(row=>row.export).map(row=>row.id)],'Graph exports');
   const assertions=prepareAssertions(assertionSpecs,rootPlan);
   const assetInfo=Object.fromEntries([...assets].map(([name,{value,...entry}])=>[name,{...entry,...(entry.type==='raster' &&
     {width:value.width,height:value.height}),...(entry.type==='audio' && {
@@ -397,7 +458,7 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
     { reference:group.reference, sha256:group.document.sha256 }]));
   const projectHash=sha256(jsonBytes({project,
     groups:Object.fromEntries([...groupSpecs].map(([group,body])=>[group.alias,body])),assets:assetInfo,
-    ...(versionedGroups.length && {groupFiles})}));
+    ...(versionedGroups.length && {groupFiles}),...(Object.keys(context).length && {baseContext:context})}));
   const header={format:reportFormat,version,projectHash};
 
   function clock(t,s) {
@@ -405,7 +466,8 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
     return {time:t,seed:s};
   }
   clock(time,seed);
-  const projectPlan={...header,kind:'plan',...rootPlan,time,seed,assets:assetInfo,exports,assertions:assertionSpecs,
+  const projectPlan={...header,kind:'plan',...rootPlan,time,seed,...(base && {base, ...Base.measure(base)}),
+    assets:assetInfo,exports,assertions:assertionSpecs,...(outputUsages!==undefined && {outputUsages:maps}),
     groups:Object.fromEntries([...preparedGroups].map(([name,{plan}])=>[name,plan])),
     groupDependencies:dependencyRows,hostOperations:Object.keys(extensions).sort()};
 
@@ -443,17 +505,90 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
 
   const groupDetails=()=>Object.fromEntries([...preparedGroups].map(([name,{compiled,scope}])=>[name,describeScope(compiled,scope)]));
 
+  function describeSubgraph(target) {
+    const {scope=[],group:name,node,inputs={}}=fields(target,['scope','group','node','inputs'],'subgraph target');
+    named(inputs,'subgraph inspection values');
+    if (!Array.isArray(scope) || !Array.from(scope).every(id) || (name===undefined)===(node===undefined) ||
+        !id(name ?? node))
+      throw new TypeError('Choose a group or an instance node within a subgraph scope');
+    const byPath = segments => groupTree.entries.find(item=>item.alias===segments.join('/'));
+    const owner=scope.length ? byPath(scope) : undefined;
+    if (scope.length && !owner) throw new RangeError('Unknown subgraph scope '+scope.join('/'));
+    const local=owner?.scope ?? groupTree.scope, body=owner?.spec ?? spec;
+    const selected=node===undefined ? local.get(name) :
+      Object.hasOwn(body.nodes,node) ? groupFor(local,body.nodes[node]) : undefined;
+    if (!selected) throw new RangeError('Unknown subgraph '+(name ?? node));
+    const plan=preparedGroups.get(selected.alias).plan, segments=selected.alias.split('/');
+    let file=sourceFile, start=0;
+    for (let length=1; length<=segments.length; length++) {
+      const ancestor=byPath(segments.slice(0,length));
+      if (ancestor?.file) { file=ancestor.file; start=length; }
+    }
+    const source={kind:selected.file ? 'file' : 'inline', ...(file && {file:path.resolve(file)}),
+      groups:segments.slice(start), ...(selected.document && {revision:selected.document.revision,sha256:selected.document.sha256})};
+    const outputs=Object.fromEntries(Object.entries(plan.outputs).map(([key,{type,quantity}])=>
+      [key,{type,...(quantity && {quantity})}]));
+    const result={alias:selected.alias,source,inputs:data.clone(plan.inputs),outputs};
+    const runner=owner ? preparedGroups.get(owner.alias).compiled : compiled;
+    if (node!==undefined) {
+      const call=describeScope(runner,local).nodes[node], given={...body.nodes[node].params,...body.nodes[node].inputs};
+      result.instance={node,op:call.op,inputs:Object.fromEntries(Object.entries(call.inputs).map(([key,{source}])=>
+        [key,{...source,authored:Object.hasOwn(given,key)}]))};
+    }
+    if (selected.inspector) {
+      const { inputs:portRules, outputs:outputRules, controls }=selected.inspector;
+      const portInputs=Object.fromEntries(Object.entries(result.inputs).map(([key,definition])=>
+        [key,{...portRules?.[key],definition}]));
+      const portOutputs=Object.fromEntries(Object.keys(result.outputs).map(key=>[key,{...outputRules?.[key]}]));
+      const parentInputs=owner ? preparedGroups.get(owner.alias).plan.inputs : rootPlan.inputs;
+      const values=Object.fromEntries(Object.entries(result.instance?.inputs ?? {}).map(([key,binding])=>[
+        key, binding.kind==='value' ? binding.value : binding.kind==='input' ? parentInputs[binding.id].default : undefined
+      ]));
+      const rulePath=start ? '/inspector'+segments.slice(start).map(id=>'/groups/'+id).join('') :
+        '/graph'+segments.map(id=>'/groups/'+id+'/graph').join('');
+      result.visibility=structuredClone(procedural.graphVisibility.inspect({inputs:portInputs,outputs:portOutputs,controls},
+        {values:{...values,...inputs},path:rulePath}));
+    }
+    return result;
+  }
+
+  function resolveBase(inputs, seedOverride) {
+    const effectiveSeed=seedOverride===undefined ? seed : seedOverride;
+    if (!rules) return {seed:effectiveSeed, base:base && (effectiveSeed===base.seed ? base : {...base,seed:effectiveSeed})};
+    let providers=context;
+    if (primaryInput && Object.entries(rules).some(([key, rule])=>rule.mode==='primary' &&
+        (key!=='seed' || seedOverride===undefined))) {
+      const image=Object.hasOwn(inputs,primaryInput) ? inputs[primaryInput] : rootPlan.inputs[primaryInput].default;
+      if (image===undefined) throw new RangeError('Material inheritance needs primary graph input '+primaryInput);
+      providers={...context,primary:kit.KIT.procedural.materialBase.primaryImage(primaryInput,image)};
+    }
+    const result=Base.inherit(baseSpec,rules,providers,{seed:authoredSeed,seedOverride});
+    return {...result,seed:result.base.seed};
+  }
+
+  function checkBaseInput(values) {
+    if (base && Object.hasOwn(values,'materialBase'))
+      throw new TypeError('Change shared material settings in base, or use the seed override');
+  }
+
   function snapshot(options={}) {
-    const {inputs={},time:at=time,seed:sampleSeed=seed}=fields(options,['inputs','time','seed'],'graph snapshot options');
-    clock(at,sampleSeed);
-    const values=Object.fromEntries(named(inputs,'input values').map(([name,value])=>{
+    const {inputs={},time:at=time,seed:seedOverride}=fields(options,['inputs','time','seed'],'graph snapshot options');
+    const declared=named(inputs,'input values');
+    checkBaseInput(inputs);
+    const values=Object.fromEntries(declared.map(([name,value])=>{
       if (!Object.hasOwn(rootPlan.inputs,name)) throw new RangeError('Unknown graph input '+name);
       const type=rootPlan.inputs[name].type, types=kit.KIT.procedural.graphTypes;
       if (!types.validator(type)(value))
         throw new TypeError('Wrong input value for graph socket '+name+': expected '+types.description(type));
       return [name,value];
     }));
-    return JSON.parse(jsonBytes({format:snapshotFormat,version,projectHash,settings:{seed:sampleSeed,time:at},
+    const effective=resolveBase(values,seedOverride);
+    clock(at,effective.seed);
+    if (base) values.materialBase=effective.base;
+    return JSON.parse(jsonBytes({format:snapshotFormat,version,projectHash,
+      settings:{seed:effective.seed,time:at,...(base && {base:values.materialBase}),
+        ...(effective.provenance && {baseProvenance:effective.provenance}),
+        ...(outputUsages!==undefined && {outputUsages}),...(materialMetadata && {materialMetadata})},
       graph:describeScope(compiled,groupTree.scope,values),
       groups:groupDetails(),
       assets:assetInfo, references:Object.fromEntries(dependencyRows.map(({group,used,...reference})=>[group,reference])),
@@ -461,15 +596,18 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
   }
 
   function request(options={}) {
-    const {inputs={},take,time:t=take?.start ?? time,seed:s=seed}=fields(options,['inputs','time','seed','take'],'graph run options');
-    const resolved=clock(t,s);
+    const {inputs={},take,time:t=take?.start ?? time,seed:seedOverride}=fields(options,['inputs','time','seed','take'],'graph run options');
     if (take!==undefined) {
       takeTime.requireFrame(take);
       if (t!==take.start) throw new RangeError('Graph seconds must match the take frame start');
     }
     for (const [name] of named(inputs,'input values'))
       if (!Object.hasOwn(rootPlan.inputs,name)) throw new RangeError('Unknown graph input '+name);
-    return {...resolved,take,inputs:compiled.parameters(snapshotInputs(inputs,data.clone))};
+    checkBaseInput(inputs);
+    const effective=resolveBase(inputs,seedOverride);
+    const supplied=base ? {...inputs,materialBase:effective.base} : inputs;
+    return {...clock(t,effective.seed),take,inputs:compiled.parameters(snapshotInputs(supplied,data.clone)),
+      ...(effective.provenance && {baseProvenance:effective.provenance})};
   }
 
   function execution() {
@@ -498,9 +636,10 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
       return values;
     }
 
-    function done(frame,values,{time,seed,take}) {
+    function done(frame,values,{time,seed,take,baseProvenance}) {
       previous=new Map(Object.entries(values));
-      return {frame,report:{...header,time,seed,...(take!==undefined && {take}),cache:cacheReport(frame),
+      return {frame,report:{...header,time,seed,...(base && {base:values.materialBase}),
+        ...(baseProvenance && {baseProvenance}),...(take!==undefined && {take}),cache:cacheReport(frame),
         inputs:Object.fromEntries(Object.entries(values).map(([name,value])=>[name,describe(value)]))}};
     }
     function failed(error) {
@@ -549,28 +688,64 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
     const {frame,report}=evaluate(prepared);
     const {assertions:checks,passed}=prepareFrameChecks(frame);
     const artifacts=exports.flatMap(({name,output,format,...settings})=>{
-      const value=frame.outputs[output], encoded=format==='atlas' ? encodeAtlas(name,value) : [encode(name,value,format,settings)];
+      const value=frame.outputs[output];
+      if (format==='material-image') {
+        const effective=report.base;
+        const image=kit.KIT.procedural.materialBase.fit(value,effective), delivery=effective.output.format;
+        const bytes=delivery==='png' ? materialImage.png(kit.KIT.procedural,image,effective) : jsonBytes(image);
+        return [{name,output,file:'artifacts/'+name+'.'+delivery,format:delivery,sha256:sha256(bytes),bytes}];
+      }
+      const encoded=format==='atlas' ? encodeAtlas(name,value) : [encode(name,value,format,settings)];
       return encoded.map(artifact=>({name,output,...artifact}));
     });
+    const image=OutputUsages.imagesFor(procedural,maps,frame.outputs);
+    const deliveries=maps.map(row=>{
+      const value=image(row.id), details={...row,image:describe(value)};
+      if (!row.export) return details;
+      const {format,bitDepth}=row.format, file='artifacts/'+row.id+'.'+format;
+      const bytes=format==='png' ? OutputUsages.png(procedural,value,bitDepth) : jsonBytes(value), hash=sha256(bytes);
+      artifacts.push({name:row.id,file,format,sha256:hash,bytes,usage:row.usage,...(row.source && {output:row.source.output})});
+      return {...details,artifact:{file,sha256:hash}};
+    });
     return {outputs:frame.outputs,artifacts,report:{...report,kind:'run',passed,assertions:checks,
+      ...(outputUsages!==undefined && {outputUsages:deliveries}),
       ...(workerPool && {workers:workerPool.stats()}),
       outputs:Object.fromEntries(Object.entries(frame.outputs).map(([name,value])=>[name,describe(value)])),
       artifacts:artifacts.map(({bytes,...entry})=>({...entry,bytes:bytes.length}))}};
   }
 
+  function mapTarget(map,component) {
+    if (!id(map) || !mapIds.has(map)) throw new RangeError('Unknown material map '+map);
+    const row=mapIds.get(map);
+    OutputUsages.previewComponent(row,component);
+    return row;
+  }
+
+  function mapPreview(value,row,component) {
+    const {bytes,...details}=OutputUsages.preview(procedural,value,row,component);
+    return {artifact:{file:'artifacts/preview.png',format:'png',sha256:sha256(bytes),bytes},details};
+  }
+
   function inspect(target,options) {
-    const {output,node,port='value'}=fields(target,['output','node','port'],'graph inspection target');
-    if ((output===undefined)===(node===undefined) || output!==undefined && !id(output) ||
-        node!==undefined && (typeof node!=='string' || !node.split('/').every(id) || !id(port)))
-      throw new TypeError('Inspect one named graph output or one node and port');
+    const {output,node,port,map,component}=fields(target,['output','node','port','map','component'],'graph inspection target');
+    const row=map===undefined ? undefined : mapTarget(map,component);
+    if ([output,node,map].filter(name=>name!==undefined).length!==1 ||
+        output!==undefined && !id(output) || component!==undefined && !row ||
+        node!==undefined && (typeof node!=='string' || !node.split('/').every(id) || port!==undefined && !id(port)))
+      throw new TypeError('Inspect one material map, named graph output or node and port');
     workerPool?.resetStats();
     const {frame,report}=evaluate(request(options));
-    const value=output!==undefined ? select(frame,output,[]).value : frame.preview(node,port);
-    const {file,format,sha256,bytes}=preview(value)??{};
-    return {value,artifacts:bytes ? [{file,format,sha256,bytes}] : [],
-      report:{...report,kind:'inspect',target:output!==undefined ? {output} : {node,port},value:describe(value),
+    const value=row ? OutputUsages.imagesFor(procedural,maps,frame.outputs)(map) :
+      output!==undefined ? select(frame,output,[]).value : frame.preview(node,port ?? 'value');
+    const previewed=row && mapPreview(value,row,component);
+    const artifact=row ? previewed.artifact : preview(value);
+    const selection=row ? {map,...(component!==undefined && {component})} :
+      output!==undefined ? {output} : {node,port:port ?? 'value'};
+    return {value,artifacts:artifact ? [artifact] : [],
+      report:{...report,kind:'inspect',target:selection,value:describe(value),
+        ...(row && {outputUsage:row,materialPreview:previewed.details}),
         ...(workerPool && {workers:workerPool.stats()}),
-        artifacts:bytes ? [{file,format,sha256,bytes:bytes.length}] : []}};
+        artifacts:artifact ? [{file:artifact.file,format:artifact.format,sha256:artifact.sha256,bytes:artifact.bytes.length}] : []}};
   }
 
   function audioTaps(targets,options={}) {
@@ -602,18 +777,36 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
     return {sources,traces,projectHash,time,seed};
   }
 
-  async function previewFrame(targets, options, { profile = false, encodeArtifacts = true } = {}) {
+  async function previewFrame(targets, options, { profile = false, encodeArtifacts = true, modelingView } = {}) {
     const watches=named(targets,'patch previews');
     if (watches.length>64) throw new RangeError('A patch frame supports up to 64 previews');
     separateNames(watches.map(([name])=>name),'Patch previews');
-    for (const [,target] of watches) {
-      const {output,node,port}=fields(target,['output','node','port'],'patch preview');
-      if ((output===undefined)===(node===undefined) || output!==undefined && (!id(output) || !Object.hasOwn(rootPlan.outputs,output)) ||
-          node!==undefined && (typeof node!=='string' || !node.split('/').every(id) || port!==undefined && !id(port)))
-        throw new TypeError('Patch preview needs a known output or node and port');
-    }
-    const {frame,report}=await evaluateAsync(request(options),profile);
-    const results=watches.map(([name,{output,node,port}])=>{
+    const targetsByName=watches.map(([name,target])=>{
+      const {output,node,port,modeling,map,component}=fields(target,
+        ['output','node','port','modeling','map','component'],'patch preview');
+      const row=map===undefined ? undefined : mapTarget(map,component);
+      if ([output,node,map].filter(source=>source!==undefined).length!==1 || component!==undefined && !row ||
+          output!==undefined && (!id(output) || !Object.hasOwn(rootPlan.outputs,output)) ||
+          node!==undefined && (typeof node!=='string' || !node.split('/').every(id) || port!==undefined && !id(port)) ||
+          modeling!==undefined && (modeling!==true || node===undefined || port!==undefined))
+        throw new TypeError('Patch preview needs a known material map, output or node and port');
+      return [name,{output,node,port,modeling,row,component}];
+    });
+    const modeling=targetsByName.some(([,target])=>target.modeling);
+    const prepared=request(options);
+    const {frame,report}=await evaluateAsync({...prepared,modeling},profile);
+    const image=OutputUsages.imagesFor(procedural,maps,frame.outputs);
+    const results=targetsByName.map(([name,{output,node,port,modeling,row,component}])=>{
+      if (row) {
+        const value=image(row.id), rendered=encodeArtifacts && mapPreview(value,row,component);
+        return {name,value,links:[],usage:row,previewDetails:rendered && rendered.details,
+          artifact:rendered && {...rendered.artifact,file:'previews/'+name+'.png'}};
+      }
+      if (modeling) {
+        const {value,artifacts}=require('./modeling-watch.js').review(frame.stage(node),
+          {name,node,kit,time:prepared.time,view:modelingView,encodeArtifacts});
+        return {name,value,links:[],modeling,artifacts:artifacts.map(item=>({...item,sha256:sha256(item.bytes)}))};
+      }
       const value=output!==undefined ? frame.outputs[output] : frame.preview(node,port);
       const artifact=encodeArtifacts && preview(value,{grayscale:true});
       const links=kit.KIT.world.inspectionLinks.references(value);
@@ -621,9 +814,11 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
     });
     const assertions=prepareFrameChecks(frame);
     return {outputs:frame.outputs,values:Object.fromEntries(results.map(({name,value})=>[name,value])),
-      artifacts:results.flatMap(({artifact})=>artifact?[artifact]:[]),
+      artifacts:results.flatMap(({artifact,artifacts})=>artifacts??(artifact?[artifact]:[])),
       report:{...report,kind:'patch-frame',...assertions,...(frame.timings && {timingsMs:frame.timings}),
-        previews:Object.fromEntries(results.map(({name,value,artifact,links})=>[name,{value:describe(value),
+        previews:Object.fromEntries(results.map(({name,value,artifact,links,modeling,artifacts,usage,previewDetails})=>[name,{value:modeling?value:describe(value),
+          ...(usage && {outputUsage:usage}),...(previewDetails && {materialPreview:previewDetails}),
+          ...(artifacts && {artifacts:artifacts.map(({file,sha256})=>({file,sha256}))}),
           ...(links.length&&{links}),
           ...(artifact && {file:artifact.file,sha256:artifact.sha256})}]))}};
   }
@@ -673,12 +868,20 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
 
   return Object.freeze({
     sockets: compiled.sockets,
+    describeSubgraph,
     plan(inputs,{memory=false}={}) {
-      const resolved=inputs===undefined ? undefined : request({inputs}).inputs;
-      return {...data.clone(projectPlan),
-        ...(resolved && {resolvedInputs:Object.fromEntries(Object.entries(resolved).map(([name,value])=>[name,planValue(value)]))}),
-        ...(memory && {memory:estimateGraphMemory({graph:describeScope(compiled,groupTree.scope),
-          groups:groupDetails(),assets,overrides:resolved??{},kit,hostOperations:projectPlan.hostOperations})})};
+      const plan=data.clone(projectPlan), prepared=inputs===undefined ? undefined : request({inputs});
+      if (materialMetadata) plan.materialMetadata=structuredClone(materialMetadata);
+      const resolved=prepared?.inputs;
+      if (rules) {
+        const effective=prepared ? {base:resolved.materialBase,seed:prepared.seed,provenance:prepared.baseProvenance} : resolveBase({});
+        Object.assign(plan,{seed:effective.seed,base:effective.base,baseProvenance:effective.provenance,...Base.measure(effective.base)});
+        plan.inputs.materialBase.default=effective.base;
+      }
+      if (resolved) plan.resolvedInputs=Object.fromEntries(Object.entries(resolved).map(([name,value])=>[name,planValue(value)]));
+      if (memory) plan.memory=estimateGraphMemory({graph:describeScope(compiled,groupTree.scope),
+        groups:groupDetails(),assets,overrides:resolved ?? (rules ? {materialBase:plan.base} : {}),kit,hostOperations:plan.hostOperations});
+      return plan;
     },
     validate(inputs) {
       if (inputs!==undefined) request({inputs});
@@ -692,17 +895,21 @@ function createGraphProject(source, { kit=require('../index.js').load(), baseDir
       const { inputs, seed, ...settings } = fields(options,
         ['output','from','to','warmup','format','clock','renderOptions','capture','inputs','seed'], 'graph clip options');
       if (frameInputs!==undefined&&typeof frameInputs!=='function') throw new TypeError('Graph frame inputs need a host callback');
-      const start=frameInputs===undefined?request({inputs,seed}):clock(time,seed??projectPlan.seed);
+      const start=frameInputs===undefined ? request({inputs,seed}) : undefined;
+      let sampledSeed=start?.seed;
       const runner = execution();
       workerPool?.resetStats();
       try {
-        const result=clip(settings,{kit,plan:projectPlan,checks:assertions,seed:start.seed,
+        const result=clip(settings,{kit,plan:projectPlan,checks:assertions,seed:sampledSeed ?? projectPlan.seed,
           sample(take,sequence) {
             if(frameInputs===undefined)return runner.evaluate({...start,time:take.start,take},sequence).frame;
             const supplied=frameInputs(take);
             if(!record(supplied))throw new TypeError('Graph frame inputs must return a record');
-            return runner.evaluate(request({inputs:{...inputs,...supplied},take,seed:start.seed}),sequence).frame;
+            const prepared=request({inputs:{...inputs,...supplied},take,seed:seed ?? undefined});
+            sampledSeed??=prepared.seed;
+            return runner.evaluate(prepared,sequence).frame;
           }});
+        result.report.seed=sampledSeed ?? result.report.seed;
         if (workerPool) result.report.workers=workerPool.stats();
         return result;
       } finally { runner.clear(); }

@@ -20,7 +20,7 @@
   }
 
   function parse(raw,total,clock,notes) {
-    check(fields(raw,['id','from','to','drivers','mapping','notes','sources']) && id(raw.id) &&
+    check(fields(raw,['id','from','to','drivers','mapping','notes','sources','borrowed']) && id(raw.id) &&
       finite(raw.from,0,total) && finite(raw.to,raw.from+1e-5,total) && record(raw.drivers) &&
       integer(Object.keys(raw.drivers).length,1,8) && Object.keys(raw.drivers).every(id) &&
       fields(raw.mapping,Object.keys(limits)) && Object.keys(raw.mapping).length>0 &&
@@ -54,15 +54,17 @@
     const overrides=new Map();
     for (const row of raw.notes ?? []) {
       const address=noteKey(row ?? {}), event=notes.get(address);
-      check(fields(row,['clip','voice','note','delay','accent','gate','articulation']) &&
+      check(fields(row,['clip','voice','note','delay','accent','gate','articulation','fit']) &&
         event && event.beat>=raw.from-eps && event.beat<raw.to-eps && !overrides.has(address) &&
         finite(row.delay ?? 0,-.125,.125) && finite(row.accent ?? 1,.02,2) && finite(row.gate ?? 1,.1,3) &&
-        (row.articulation===undefined || id(row.articulation)) && (!event.ties || row.gate===undefined),
+        (row.articulation===undefined || id(row.articulation)) && (!event.ties || row.gate===undefined) &&
+        (row.fit===undefined || row.fit===true),
       'Phrase note edits need a distinct written attack and valid performance settings');
       overrides.set(address,row);
     }
     if (raw.sources!==undefined) validateSources(raw.sources,raw);
-    return {raw,drivers,mapping,lanes,overrides};
+    if (raw.borrowed!==undefined) P.musicPhraseContour.validateSource(raw.borrowed);
+    return {raw,from,to,drivers,mapping,lanes,overrides,fit:[...overrides.values()].some(row=>row.fit)};
   }
 
   function validateSources(sources,span) {
@@ -152,12 +154,12 @@
       const entry=phrases[region(note.beat)].overrides.get(key);
       const exit=phrases[region(clock.sample(note.end).beat-eps*2)].overrides.get(key);
       if (entry?.delay===undefined && entry?.accent===undefined && entry?.articulation===undefined && exit?.gate===undefined) return [];
-      const {clip,voice,note:name}=note, {delay,accent,articulation}=entry ?? {};
+      const {clip,voice,note:name}=note, {delay,accent,articulation,fit}=entry ?? {};
       return [{clip,voice,note:name,...(delay!==undefined && {delay}),...(accent!==undefined && {accent}),
-        ...(articulation!==undefined && {articulation}),...(exit?.gate!==undefined && {gate:exit.gate})}];
+        ...(articulation!==undefined && {articulation}),...(exit?.gate!==undefined && {gate:exit.gate}),...(fit && {fit})}];
     });
     return {id,...span,drivers,mapping:first.mapping,notes,sources:sections};
   }
 
-  P.musicPhrasePerformance=Object.freeze({compile,at,bind,noteKey,comp});
+  P.musicPhrasePerformance=Object.freeze({compile,at,bind,noteKey,comp,sample});
 })(KIT.procedural);

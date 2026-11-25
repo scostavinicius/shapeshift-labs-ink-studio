@@ -127,6 +127,20 @@ function readTake(file, { kit = require('../index.js').load(), checkpoint, ...op
 function command(pos, opt, settings) {
   if(pos[0]==='map'&&pos.length===2)
     return require('./take-clock-map.js').command(pos[1],opt,settings);
+  if(pos[0]==='mouth-cels'&&pos.length===2)
+    return require('./mouth-cels.js').command(pos[1],opt,settings);
+  if(pos[0]==='audition-handoff'&&pos.length===2)
+    return require('./attention-handoff.js').command(pos[1],opt,settings);
+  if(pos[0]==='approve-audio'&&pos.length===2)
+    return require('./audio-round-trip.js').command(pos[1],opt,settings);
+  if(pos[0]==='approve-video'&&pos.length===2)
+    return require('./video-approval.js').command(pos[1],opt,settings);
+  if(pos[0]==='review-flashes'&&pos.length===2)
+    return require('./flash-flicker.js').command(pos[1],opt,settings);
+  if(pos[0]==='check-sync'&&pos.length===2)
+    return require('./delivered-sync.js').command(pos[1],opt,settings);
+  if(['blind-review','blind-review-score'].includes(pos[0]))
+    return require('./blind-av-review.js').command(pos,opt,settings);
   if(pos[0]==='render-av'&&pos.length===2)
     return require('./audiovisual-take.js').command(pos[1],opt,settings);
   const usage = 'Use take sample <take.json> --frame N [--iteration N --resume checkpoint.json --checkpoint file.json --out report.json]';

@@ -9,12 +9,38 @@ function format(file) {
   return extension;
 }
 
-function readGltfAsset(file) {
+function readGltfSource(file) {
   const location = path.resolve(file), extension = format(location), bytes = fs.readFileSync(location);
   let { gltf, bin } = extension === '.glb' ? readGlb(bytes) : { gltf: JSON.parse(bytes.toString('utf8')) };
+  return { location, gltf, bin };
+}
+
+function retain({ location, gltf, bin }, onFile) {
+  onFile?.(location);
   if (gltf.buffers?.some(buffer => buffer.uri !== undefined) || gltf.images?.some(image => image.uri !== undefined))
-    ({ gltf, bin } = readGlb(embed(gltf, location, bin)));
+    ({ gltf, bin } = readGlb(embed(gltf, location, bin, onFile)));
   return require('../index.js').load().KIT.authoring.gltfAssets.create({ document: gltf, binary: bin });
+}
+
+function readGltfAsset(file, { onFile } = {}) {
+  return retain(readGltfSource(file), onFile);
+}
+
+async function readAssetRevisionPart(file, instance, placement, { onFile, decodeImage } = {}) {
+  const { gltfAssetPart } = await import('../src/gaussian-gltf.mjs');
+  return gltfAssetPart(readGltfAsset(file, { onFile }), instance, placement, {
+    toolkit: require('../index.js').load(), decodeImage: decodeImage ?? require('./gltf-image.js')
+  });
+}
+
+async function readGaussianGltf(file, { optional, onFile, decodeImage, ...options } = {}) {
+  const { gaussianGltfWorld, hasGaussianGltf, hasScanSurfaceGltf } = await import('../src/gaussian-gltf.mjs');
+  const source = readGltfSource(file);
+  if (optional && !hasGaussianGltf(source.gltf) && !hasScanSurfaceGltf(source.gltf)) return null;
+  const toolkit = require('../index.js').load();
+  return gaussianGltfWorld(retain(source,onFile), {
+    toolkit, decodeImage:decodeImage ?? require('./gltf-image.js'), ...options
+  });
 }
 
 function writeGltfAsset(source, { out } = {}) {
@@ -30,4 +56,4 @@ function writeGltfAsset(source, { out } = {}) {
   return { file };
 }
 
-module.exports = { readGltfAsset, writeGltfAsset };
+module.exports = { readGltfAsset, readAssetRevisionPart, readGaussianGltf, writeGltfAsset };

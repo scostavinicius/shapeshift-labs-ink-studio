@@ -143,6 +143,7 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
     cidx = [],
     nrms = [];
   let footprintRecorder, engravingRanges;
+  let authoredSplats, authoredSplatIds;
   function describeEngraving(first,end,spec,frame) {
     if(first>=end||spec===undefined)return;
     const prepared=Engraving.prepare(spec);engravingRanges??=[];const last=engravingRanges.at(-1);
@@ -150,6 +151,7 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
     else engravingRanges.push([first, end, prepared, frame]);
   }
   let ownerRows, materialRows, targetRows, muteEmission, materialAlbedo, materialPixelStyles, opticalSplats;
+  let shadingNormals, paintedEmission, inkControls;
   let unnamedOwners = new WeakMap(), unnamedMaterials = new WeakMap();
   const ownerIds = new Map(), materialIds = new Map();
   const ownerNames = [null], materialNames = [null];
@@ -227,6 +229,23 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
     for (let i = first; i < end; i++) opticalSplats.set(packed, i * stride);
   }
 
+  function describePaintedShading(first,end,normal,emission,controls) {
+    function write(values,row) {
+      if(!row||first===end)return values;
+      const stride=row.length;
+      if(!values||values.length<cap*stride){
+        const next=new Float32Array(cap*stride);
+        if(values)next.set(values);
+        values=next;
+      }
+      for(let i=first;i<end;i++)values.set(row,i*stride);
+      return values;
+    }
+    shadingNormals=write(shadingNormals,normal);
+    paintedEmission=write(paintedEmission,emission);
+    inkControls=write(inkControls,controls);
+  }
+
   function describeSplats(first, end, { object, material, target } = {}) {
     if (!renderMetadata || first === end) return;
     if (!Number.isSafeInteger(first) || !Number.isSafeInteger(end) || first < 0 || end < first || end > n)
@@ -270,6 +289,9 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
     if (!renderMetadata) return { normals };
     return {
       normals,
+      ...(shadingNormals && {shadingNormals:Float32Array.from({length:n*3},(_,i)=>shadingNormals[i]??0)}),
+      ...(paintedEmission && {paintedEmission:Float32Array.from({length:n*3},(_,i)=>paintedEmission[i]??0)}),
+      ...(inkControls && {inkControls:Float32Array.from({length:n*4},(_,i)=>inkControls[i]??0)}),
       muteEmission: muteEmission?.slice(0, n),
       objectIds: ownerRows?.slice(0, n),
       materialIds: materialRows?.slice(0, n),
@@ -421,6 +443,15 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
     fine[o + 11] = 1;
   };
   function push(x, y, z, c00, c01, c02, c11, c12, c22, col, a, an, normal = null) {
+    if (an?.splatId !== undefined) {
+      const id = an.splatId;
+      authoredSplatIds ??= new Set();
+      if (!SplatProvenance.validId(id) || id.startsWith('rest:') || authoredSplatIds.has(id))
+        throw new RangeError('Authored splats need unique IDs outside the rest: namespace');
+      authoredSplatIds.add(id);
+      authoredSplats ??= [];
+      authoredSplats[n] = id;
+    }
     reserveRow();
     if (attrN) {
       if (!attr || attr.length < cap * 4) {
@@ -1112,8 +1143,8 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
       CurveSplat.writeClips(curveClips, n - 1, center, clips);
     }
   }
-  function finish(meta) {
-    const pending = globalThis.INK_DECAL_NEXT;
+  function finish(meta, {consumePendingPaint=true} = {}) {
+    const pending = consumePendingPaint && globalThis.INK_DECAL_NEXT;
     if (pending) globalThis.INK_DECAL_NEXT = null;
     const paint = meta?.paint ?? pending, px = 1 / (meta?.detail || 12);
     const legacy = Array.isArray(paint) ? paint : paint?.decals ?? [];
@@ -1137,6 +1168,7 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
       {
         data: data.subarray(0, n * 16),
         count: n,
+        ...(authoredSplats && { splatIds: Object.freeze(Array.from({ length:n },(_,i) => authoredSplats[i] ?? null)) }),
         ...(hasCurveSplats && { curveSplats: true }),
         ...(curveStations && { curveStations: curveStations.slice(0, n * CurveSplat.stationStride), curveStrands: curveStrands.slice() }),
         ...(curveRest && { curveRest:curveRest.slice(0,n*16) }),
@@ -1215,6 +1247,10 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
     if (world.atmosphereEmitters) world.atmosphereEmitters = KIT.atmosphere.emitters.compile(world.atmosphereEmitters);
     if (world.splatFields) world.splatFields = KIT.splatFields.compile(world.splatFields);
     if (world.surfaceEffects) world.surfaceEffects = KIT.splatEffects.context(world.surfaceEffects);
+    if (world.materialResponse !== undefined) {
+      const { recipe, contacts, particleImpacts } = world.materialResponse;
+      KIT.materialResponse.create(recipe, { contacts, particleImpacts }).bind(world);
+    }
     if (world.pixelStamps !== undefined) {
       const placed = PixelStamps.placements(world.pixelStamps, { scenePalette: world.pal, paletteRoles: world.paletteRoles });
       const atlases = world.spriteAtlases === false ? [] : world.spriteAtlases ?? [];
@@ -1252,6 +1288,7 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
     footprintRecorder = undefined;
     engravingRanges=undefined;
     ownerRows = materialRows = muteEmission = materialAlbedo = materialPixelStyles = opticalSplats = undefined;
+    shadingNormals = paintedEmission = inkControls = undefined;
     unnamedOwners = new WeakMap();
     unnamedMaterials = new WeakMap();
     ownerIds.clear();
@@ -1289,6 +1326,14 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
       if(typeof draw!=='function'||typeof color!=='function'&&(!Array.isArray(color)||color.length!==3||!color.every(v=>Number.isFinite(v)&&v>=0&&v<=255)))throw new TypeError('withColor needs RGB bytes or a transform and a drawing function');
       const previous=colorOverride;colorOverride=color;try{return draw();}finally{colorOverride=previous;}
     },
+    tintSplatColors(first,end,tint,base,material) {
+      for (let i=first;i<end;i++) {
+        const q=i*16+7, packed=data[q], color=[packed&255,packed>>8&255,packed>>16&255].map(n=>n/255);
+        const [r,g,b]=tint(color).map(n=>Math.round(n*255));
+        base.set(i,{ color:packed,material });
+        data[q]=r | g<<8 | b<<16;
+      }
+    },
     detailBudget,
     shadowArt,
     shadowNext,
@@ -1299,6 +1344,7 @@ function makeBuilder(seed, hex, { renderMetadata = true, initialCapacity = 1 << 
     keepReferenceSdf: keepSdf(referenceSdfs),
     describeSplats: renderMetadata ? describeSplats : undefined,
     describeAlbedo,
+    describePaintedShading,
     describePixelStyle,
     describeFootprint,
     describeEngraving,

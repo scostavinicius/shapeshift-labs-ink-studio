@@ -23,6 +23,8 @@ blocked acoustic route is silent. Set a cue's `occlusion` to false to omit
 these tests for that cue. Set `propagationDelay` to true to include delay
 from the acoustic route. [Per-source propagation and Doppler](propagation-doppler.md) also covers direct paths and moving sources.
 
+Use [Ambisonic ambience export](ambisonic-ambience.md) for a rotatable environmental bed with separate dialogue and close Foley placement stems.
+
 For offline soundtrack rendering, set `follow: true` on a cue to keep its
 one-shot tail attached to its entity or socket. Set `bus` to route the cue
 to a named post stem such as `foley`. [Adaptive story audio](adaptive-story-audio.md)
@@ -62,7 +64,7 @@ voices and play new cue IDs. One-shot cues use the acoustic mix at
 dispatch. The native listener is shared by voices on a context.
 Call `update(frame, {seek: true})` on a discontinuous seek and `dispose()`
 when the player is removed. The caller owns the context and can resume it
-from a user gesture. Cue assets stay under host control.
+from a user gesture. Cue assets stay under host control. Enable [directional sound captions](directional-captions.md#show-captions-in-the-live-player) to read captions on the audio clock.
 [Web Audio API](https://www.w3.org/TR/webaudio/)
 
 Add a [pinned binaural profile](pinned-binaural.md) to use a project-selected headphone response in preview and export. Add an [emitter radiation profile](directional-audio.md) to vary each band with the source orientation.

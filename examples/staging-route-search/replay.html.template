@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Breakwater Watch · Ink Studio</title>
+<style>
+  :root{color-scheme:dark;--bg:#101819;--panel:#171f20;--line:#344544;--text:#e9e9d6;--muted:#a7b7ae;--gold:#f2cc80;--mint:#9bddc6}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 system-ui,sans-serif}
+  main{max-width:1200px;padding:36px clamp(16px,4vw,48px) 40px;margin:auto}
+  h1,h2,p{margin:0}
+  h1{font-family:Georgia,serif;letter-spacing:-.045em;font-size:clamp(42px,7vw,78px);line-height:.99;font-weight:500}
+  h2{font-size:24px;line-height:1.15;letter-spacing:-.025em}
+  .eyebrow,.metric,#clock{font:600 11px/1.5 ui-monospace,monospace;letter-spacing:.11em;text-transform:uppercase}
+  .eyebrow{color:var(--mint);margin-bottom:11px}
+  .intro{margin-top:10px;color:var(--muted)}
+  header{display:flex;align-items:end;justify-content:space-between;gap:18px;margin-bottom:23px;flex-wrap:wrap}
+  .metric{color:var(--muted);padding-bottom:1px}
+  .metric strong{color:var(--mint);font-weight:600}
+  button{appearance:none;color:inherit;background:#202c2c;border:1px solid var(--line);font:inherit;font-weight:620;cursor:pointer;border-radius:3px}
+  button:focus-visible,input:focus-visible{outline:2px solid var(--mint);outline-offset:3px}
+  .routes{display:flex;gap:7px;flex-wrap:wrap;margin-bottom:9px}
+  .routes button{padding:8px 12px;text-align:left;font-size:13px}
+  .routes button[aria-pressed="true"]{color:#1c231e;background:var(--gold);border-color:var(--gold)}
+  .grid{display:grid;grid-template-columns:minmax(0,1.92fr) minmax(250px,1fr);gap:11px;align-items:stretch}
+  .stage,.detail{border:1px solid var(--line);border-radius:4px;background:var(--panel);overflow:hidden}
+  canvas{display:block;width:100%;height:auto;image-rendering:pixelated;background:#163635}
+  .transport{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:11px;padding:11px}
+  .transport button{padding:4px 8px;font-size:13px}
+  .transport output{color:var(--gold);min-width:80px;text-align:right}
+  input{width:100%;accent-color:var(--gold)}
+  .detail{padding:18px;display:flex;flex-direction:column;gap:11px}
+  .witness{color:var(--muted);font-size:14px;min-height:43px}
+  .steps{list-style:none;padding:0;margin:1px 0;font-size:13px}
+  .steps li{display:flex;gap:9px;padding:4px 0;border-bottom:1px solid #303f3e;color:var(--muted)}
+  .steps time{min-width:38px;color:inherit;font:600 11px/1.9 ui-monospace,monospace}
+  .steps li.now{color:var(--gold)}
+  .steps li.past{color:var(--text)}
+  .download{display:flex;gap:7px;flex-wrap:wrap;margin-top:auto;padding-top:4px}
+  .download button{padding:6px 9px;font-size:12px}
+  @media(max-width:750px){.grid{grid-template-columns:1fr}.detail{min-height:315px}}
+  @media(max-width:435px){.routes button{font-size:12px;padding:6px 7px}.transport{gap:5px}}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <p class="eyebrow">Ink Studio / Staging route search</p>
+      <h1>Breakwater Watch</h1>
+      <p class="intro">Scrub the shortest verified replay for each staging failure.</p>
+    </div>
+    <p class="metric"><strong id="found"></strong> · <span id="budget"></span></p>
+  </header>
+  <nav class="routes" id="routes" aria-label="Shortest replays"></nav>
+  <div class="grid">
+    <div class="stage">
+      <canvas id="stage" width="480" height="278" role="img" aria-label="Top-down rehearsal view"></canvas>
+      <div class="transport">
+        <button type="button" id="play">Play replay</button>
+        <input id="cursor" aria-label="Replay tick" type="range" min="0" max="5" step="1" value="0">
+        <output id="clock" for="cursor"></output>
+      </div>
+    </div>
+    <section class="detail" aria-labelledby="finding">
+      <h2 id="finding"></h2>
+      <p id="witness" class="witness"></p>
+      <ol id="steps" class="steps" aria-label="Control inputs and finding"></ol>
+      <div class="download">
+        <button type="button" id="download">Save native replay</button>
+        <button type="button" id="report">Save search report</button>
+      </div>
+    </section>
+  </div>
+</main>
+<script>
+'use strict';
+const model = __DEMO_DATA__;
+const titles = ['Reveal during dialogue','Contact behind divider','Warning out of range'];
+const actions = {'enter-deck':'Enter deck','open-shutter':'Open shutter','round-divider':'Round divider',
+  'press-latch':'Press latch','arm-warning':'Arm warning','take-ramp':'Take ramp','leave-pier':'Leave pier'};
+const byId = id => document.getElementById(id);
+const canvas = byId('stage'), context = canvas.getContext('2d'), range = byId('cursor'), play = byId('play');
+const gold = '#f6cc80', mint = '#a8e3c2', dark = '#101e1c', rust = '#f2856e', paper = '#eeeacd';
+const xy = ([x,y,z]) => [Math.round(45+(x+5)*45),Math.round(37+(z+3)*27)];
+const rect = (x,y,w,h,fill) => { context.fillStyle=fill;context.fillRect(x,y,w,h); };
+function line(from,to,color,width=1,dashes=[]) {
+  context.strokeStyle=color;context.lineWidth=width;context.setLineDash(dashes);context.beginPath();
+  context.moveTo(...from);context.lineTo(...to);context.stroke();context.setLineDash([]);
+}
+function path(points,fill) {
+  context.fillStyle=fill;context.beginPath();
+  for (const [index,p] of points.entries()) index?context.lineTo(...p):context.moveTo(...p);
+  context.closePath();context.fill();
+}
+function text(label,x,y,color=paper,fill=dark) {
+  context.font='bold 9px monospace';
+  if (fill) rect(x-3,y-9,Math.ceil(context.measureText(label).width)+6,12,fill);
+  context.fillStyle=color;context.fillText(label,x,y);
+}
+function ring(center,radius,color,fill) {
+  context.beginPath();context.ellipse(...center,radius[0],radius[1],0,0,2*Math.PI);
+  if (fill) {context.fillStyle=fill;context.fill();}
+  if (color) {context.setLineDash([4,3]);context.strokeStyle=color;context.lineWidth=1;context.stroke();context.setLineDash([]);}
+}
+function tower(x,y,on) {
+  if (on) {
+    path([[x,y-7],[x+72,y-50],[x+111,y-19]],'#b58c4266');
+    path([[x,y-7],[x+108,y-28],[x+112,y-15]],'#e1b35c70');
+  }
+  rect(x-11,y-3,23,8,'#222721');rect(x-9,y-8,18,12,'#657568');rect(x-6,y-8,4,12,'#a5a68b');
+  rect(x-8,y-14,16,7,'#252e26');rect(x-6,y-13,12,5,on?gold:'#b7774e');
+  rect(x-9,y-15,18,2,'#c5a574');rect(x-5,y-18,11,3,'#4d584e');rect(x-1,y-21,2,3,'#dfb576');
+}
+function figure([x,y],color) {
+  rect(x-7,y+3,14,5,'#132620');rect(x-4,y-4,8,9,color);rect(x-3,y-8,6,4,paper);
+  rect(x-4,y+3,3,5,'#1a2722');rect(x+1,y+3,3,5,'#1a2722');
+}
+function pier() {
+  rect(0,0,480,278,'#153b39');
+  for (let i=0;i<167;i++) {
+    const x=(i*89+33)%480,y=(i*41+11)%278;
+    rect(x,y,3+(i%11),1,i%7?'#22524a':'#326252');
+  }
+  const deck = [[74,59],[152,59],[152,89],[383,89],[383,194],[225,194],[225,222],
+    [153,251],[67,251],[67,230],[124,207],[124,153],[74,153]];
+  path(deck.map(([x,y])=>[x+4,y+5]),'#102724');path(deck,'#98674a');
+  context.save();context.clip();
+  rect(62,56,330,192,'#586052');
+  const grit = ['#697364','#525b50','#7d7b61','#484d42'];
+  for (let i=0;i<691;i++) rect((i*47+37)%394,55+(i*73)%200,1+i%5,1,grit[i%4]);
+  for (let y=61;y<254;y+=10) {
+    rect(68,y,316,1,'#35483f');rect(68,y+1,316,1,'#8d8c6d');
+    for (let x=79+(y%27)*3;x<384;x+=59) {rect(x,y+1,1,9,'#424e43');rect(x+2,y+3,1,1,'#c7ad75');}
+  }
+  context.restore();
+  for (let i=0;i<deck.length;i++) line(deck[i],deck[(i+1)%deck.length],'#b39b76',1);
+  for (const [x,y] of [[77,61],[148,61],[77,148],[381,92],[381,192],[226,194],[224,219],[153,248],[69,248],[69,230]]) {
+    rect(x-2,y-2,5,6,'#302c22');rect(x-1,y-3,4,3,'#c09a6d');
+  }
+  rect(405,241,2,20,'#adba9c');rect(405,259,46,2,'#adba9c');
+  text('QUAY',407,254,'#adba9c',null);
+}
+let selected = 0, index = 0, timer;
+const active = () => model.routes[selected];
+function draw() {
+  const {check,frames} = active(), frame = frames[index];
+  const {watcher,keeper,camera,latch,beacon,bell} = frame;
+  const [dx,dy] = xy(model.divider.position), [hx,,hz] = model.divider.half;
+  pier();
+  if (selected===2&&frame.armed) {
+    const cue = check.evidence;
+    ring(xy(cue.emitter),[45*cue.maxDistance,27*cue.maxDistance],'#c7d197','#adbf661b');
+    line(xy(cue.emitter),xy(watcher),frame.tick===cue.due?rust:mint,1,[3,3]);
+  }
+  for (let i=1;i<=index;i++) {
+    const a = xy(frames[i-1].watcher), b = xy(frames[i].watcher);
+    line(a,b,'#e4bc77',1,[3,3]);
+    rect(a[0]-1,a[1]-1,3,3,'#e4bc77');
+  }
+  const left=dx-Math.round(hx*45),top=dy-Math.round(hz*27),width=Math.round(hx*90),height=Math.round(hz*54);
+  rect(left+2,top+4,width,height,'#28372b');rect(left,top,width,height,'#b58d62');
+  rect(left+1,top+1,width-2,height-2,'#645849');rect(left+2,top+1,3,height-2,'#c7a475');
+  for (let y=top+5;y<top+height;y+=6) rect(left+6,y,width-7,1,'#4a4238');
+  const [cx,cy] = xy(camera), [lx,ly] = xy(latch), [bx,by] = xy(bell), [kx,ky] = xy(keeper);
+  rect(cx-4,cy-3,8,6,'#97ada1');path([[cx+3,cy],[cx+9,cy-4],[cx+9,cy+4]],'#97ada1');
+  rect(lx-4,ly-5,9,12,'#202d25');rect(lx-3,ly-4,6,8,'#e4be70');rect(lx-2,ly-2,7,2,'#796948');
+  rect(bx-5,by-4,10,6,frame.armed?gold:'#b09866');rect(bx-6,by+2,12,2,'#392f20');
+  tower(...xy(beacon),frame.revealed);
+  if (selected===1&&frame.touched) {
+    const {blocker,point} = check.evidence, hit = xy(blocker.position);
+    line([cx+8,cy],hit,mint,2);line(hit,xy(point),rust,2,[3,3]);
+    rect(hit[0]-2,hit[1]-2,5,5,rust);text('BLOCKED',hit[0]-22,hit[1]-11,rust);
+  }
+  figure([kx,ky],mint);figure(xy(watcher),gold);
+  if (frame.speaking&&selected===0) text('KEEPER: HOLD THE BEAM',kx-33,ky-14,mint);
+  if (selected===0&&frame.revealed) {
+    const [x,y] = xy(beacon);text('SHUTTER OPEN',x-28,y-28,gold);
+  }
+  if (selected===1) {text('CAMERA',cx-16,cy-11,mint);text('LATCH',lx+10,ly+2,gold);}
+  if (selected===2&&frame.tick===check.tick) {
+    const [x,y] = xy(watcher);text('OUT OF RANGE',x+8,y+10,rust);
+  }
+  const status = frame.tick===check.tick?'FAILURE REPRODUCED':'REPLAY';
+  text(status,16,22,frame.tick===check.tick?gold:mint);
+  canvas.setAttribute('aria-label','Top-down rehearsal view at tick '+frame.tick+
+    (frame.tick===check.tick?'. '+titles[selected]:''));
+}
+function evidence(check,i) {
+  const e = check.evidence;
+  if (i===0) return 'The keeper starts speaking at tick '+e.dialogue.tick+
+    '. The shutter reveals the beacon at tick '+check.tick+' while the line is still active.';
+  if (i===1) return 'The sightline from the camera to the latch hits the divider at tick '+check.tick+'.';
+  return 'The bell queues '+e.distanceAtQueue.toFixed(2)+' units from the player. At tick '+e.due+
+    ' the player is '+e.distanceAtArrival.toFixed(2)+' units away, outside its '+e.maxDistance+'-unit range.';
+}
+function setFrame(frame) {
+  const {check,frames} = active();
+  index=frame;range.value=index;
+  byId('clock').textContent='Tick '+frames[index].tick+' / '+check.tick;
+  for (const li of byId('steps').children) {
+    const at = Number(li.dataset.tick);
+    li.className=at===frames[index].tick?'now':at<frames[index].tick?'past':'';
+  }
+  draw();
+}
+function pause() {
+  clearInterval(timer);timer=undefined;play.textContent='Play replay';
+}
+function choose(value) {
+  pause();selected=value;
+  const {check,frames} = active();
+  for (const [i,button] of [...byId('routes').children].entries()) button.setAttribute('aria-pressed',String(i===value));
+  byId('finding').textContent=titles[value];
+  byId('witness').textContent=evidence(check,value);
+  byId('steps').replaceChildren();
+  for (const {tick,label} of [
+    ...check.steps.map(step=>({tick:step.tick,label:actions[step.action]})),
+    {tick:check.tick,label:'Failure reproduced'}
+  ]) {
+    const li=document.createElement('li'), time=document.createElement('time');
+    li.dataset.tick=tick;time.textContent='T'+String(tick).padStart(2,'0');li.append(time,label);byId('steps').append(li);
+  }
+  range.max=frames.length-1;setFrame(frames.length-1);
+}
+for (const [i,title] of titles.entries()) {
+  const button = document.createElement('button');
+  button.type='button';button.textContent=title;button.addEventListener('click',()=>choose(i));byId('routes').append(button);
+}
+play.addEventListener('click',()=>{
+  if (timer) {pause();return;}
+  if (index===active().frames.length-1) setFrame(0);
+  play.textContent='Pause';
+  timer=setInterval(()=>{
+    setFrame(index+1);
+    if (index===active().frames.length-1) pause();
+  },620);
+});
+range.addEventListener('input',()=>{pause();setFrame(Number(range.value));});
+function save(name,value) {
+  const link = document.createElement('a'), url = URL.createObjectURL(new Blob([JSON.stringify(value,null,2)+'\n'],
+    {type:'application/json'}));
+  link.href=url;link.download=name;link.click();setTimeout(()=>URL.revokeObjectURL(url),1500);
+}
+byId('download').addEventListener('click',()=>save(active().check.replay,active().recording));
+byId('report').addEventListener('click',()=>save('report.json',model.report));
+byId('found').textContent=model.routes.length+' verified failures';
+byId('budget').textContent=model.report.visited+' candidate states';
+choose(0);
+</script>
+</body>
+</html>

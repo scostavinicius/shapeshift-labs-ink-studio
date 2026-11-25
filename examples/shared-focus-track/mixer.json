@@ -1,0 +1,21 @@
+{
+  "assets": {"harbor": "stems/harbor.wav", "cloth": "stems/cloth.wav", "metal": "stems/metal.wav"},
+  "mixer": {
+    "id": "harbor-latch-mix",
+    "sampleRate": 48000,
+    "map": {"tempo": 120},
+    "end": {"beat": 12},
+    "tail": "cut",
+    "peakPolicy": "error",
+    "output": "master",
+    "strips": {
+      "harbor": {"clips": [{"id": "bed", "source": "harbor"}], "fader": 0.92},
+      "cloth": {"clips": [{"id": "sleeve", "source": "cloth"}], "pan": -0.25},
+      "metal": {"clips": [{"id": "bolt", "source": "metal"}], "pan": 0.22, "sends": {"air": {"tap": "post", "level": 0.23}}},
+      "air": {"inserts": ["dock-air"]},
+      "master": {}
+    },
+    "processors": {"dock-air": {"type": "reverb", "decay": 0.43, "size": 0.68, "damping": 0.49, "wet": 1}},
+    "taps": {"harbor": {"strip": "harbor"}, "cloth": {"strip": "cloth"}, "metal": {"strip": "metal"}}
+  }
+}

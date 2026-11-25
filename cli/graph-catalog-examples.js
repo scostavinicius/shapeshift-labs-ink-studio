@@ -18,6 +18,13 @@ const sessionTone={format:'ink-studio/instrument-session',version:1,id:'bench-ba
   perspectives:{close:{asset:'tone'}},registers:[61],dynamics:[{id:'firm',velocity:.74}],articulations:['tap'],
   takes:[{id:'one',key:61,dynamic:'firm',articulation:'tap',fromSample:0,toSample:1600,releaseSample:null}]};
 const builtSessionTone={op:'audio.buildInstrumentSession',inputs:{source:sessionTone,assets:{tone:fitTone}}};
+const transientTone={...fitTone,samples:fitTone.samples.map((sample,i)=>
+  sample+.25*Math.sin(.671*i*i)*Math.exp(-i/20))};
+const alignmentTone={
+  source:{...sessionTone,perspectives:{close:{asset:'tone'},room:{asset:'room'}}},
+  assets:{tone:transientTone,room:{...fitTone,samples:[...Array(29).fill(0),...transientTone.samples.map(x=>-.65*x)]}},
+  options:{syncSamples:[0]}
+};
 const fittedTone={op:'audio.fitInstrument',inputs:{source:fitTone}};
 const playableSound={op:'music.buildPlayableSound',inputs:{source:fitTone,options:{
   variants:[{id:'body',family:'contour'},{id:'air',family:'handoff'}]}}};
@@ -175,9 +182,19 @@ const assetFixtures = {
   rasterAsset: ['png', 'swatch.png'], audioAsset: ['wav', 'tone.wav'],
   inputAsset: ['inputs', 'input.json'], jsonAsset: ['json', 'input.json']
 };
+const declareColor = { op: 'image.declare', inputs: { source: rgba,
+  descriptor: { intent: 'color', precision: 'unorm8', tiling: { u: 'wrap', v: 'clamp' }, sampling: 'linear' } } };
+const declareData = { op: 'image.declare', inputs: { source: mask, descriptor: { intent: 'data' } } };
 const dynamic = {
+  'image.declare': { inputs: declareColor.inputs },
+  'image.uniform': { inputs: { value: .375, width: 8, height: 6,
+    descriptor: { intent: 'mask', precision: 'unorm16' } } },
+  'image.convert': { nodes: { color: declareColor }, inputs: { source: link('color'),
+    descriptor: { intent: 'color', layout: 'rgba', precision: 'float32', colorSpace: 'srgb-linear' } } },
   'quantity.convert': {inputs:{value:12.5,from:{unit:'kPa'},to:{unit:'Pa'}}},
   'array.map': { inputs: { items: [1, 2, 3] }, callback: group({ item: 'number' }, 'multiply', { a: param('item'), b: 2 }) },
+  'array.mapById': { inputs: { items: [{id: 'panel', width: 2}, {id: 'trim', width: .15}] },
+    callback: group({item: 'record'}, 'data.get', {record: param('item'), key: 'width'}) },
   'array.filter': { inputs: { items: [1, 2, 3] }, callback: group({ item: 'number' }, 'lessThan', { a: 1, b: param('item') }) },
   'array.reduce': { inputs: { items: [1, 2, 3], initial: 0 },
     callback: group({ accumulator: 'number', item: 'number' }, 'add', { a: param('accumulator'), b: param('item') }) },
@@ -202,7 +219,28 @@ function worldPortsExample(port) {
   const options={pulse:{kind:'arrival'},scalar:{query:'amount',range:[0,4]},record:{query:'account'}};
   return {nodes:{frame:sample},inputs:{source:link('frame'),options:options[port]}};
 }
+const materialSource = { op: 'material.pack', inputs: {
+  maps: { baseColor: rgba, roughness: mask, 'mask.wear': mask },
+  metadata: { baseColor: { colorSpace: 'srgb', texCoord: 0 }, 'mask.wear': { texCoord: 1 } }
+} };
 const specifications = {
+  'material.inherit': { inputs: { rules: { size: { mode: 'parent', scale: [0.5, 1] } },
+    context: { parent: { id: 'sheet', settings: { size: { width: 32, height: 16 } } } } } },
+  'material.base': { inputs: { settings: { size: { width: 8, height: 6 }, seed: 4 } } },
+  'material.imageOutput': { nodes: { data: declareData },
+    inputs: { source: link('data'), settings: { size: { width: 8, height: 6 } } } },
+  'image.toHeight': { nodes: { color: declareColor }, inputs: { source: link('color'), scale: 2 } },
+  'image.resize': { nodes: { data: declareData }, inputs: { source: link('data'), width: 8, height: 6 } },
+  'image.toDisplay': { nodes: { color: declareColor }, inputs: { source: link('color') } },
+  'image.toRaster': { nodes: { color: declareColor }, inputs: { source: link('color') } },
+  'image.inspect': { nodes: { color: declareColor }, inputs: { source: link('color') } },
+  'material.image': { nodes: { color: declareColor, maps: { op: 'data.record', inputs: { baseColor: link('color') } },
+    packed: { op: 'material.pack', inputs: { maps: link('maps') } } }, inputs: { source: link('packed'), name: 'baseColor' } },
+  'material.pack': { inputs: materialSource.inputs },
+  'material.channel': { nodes: { material: materialSource }, inputs: { source: link('material'), name: 'mask.wear' } },
+  'material.replace': { nodes: { material: materialSource }, inputs: {
+    source: link('material'), maps: { roughness: slots }
+  } },
   'coord.pixelToUV': { inputs: { point: [.5, .5], width: 64, height: 48 } },
   'coord.uvToPixel': { inputs: { point: [.5, .5], width: 64, height: 48 } },
   'coord.renderGrid': { nodes: { field: { op: 'sdf.shape' },
@@ -226,6 +264,11 @@ const specifications = {
   'raster.canvas': { inputs: { color: [60, 135, 190, 255] } },
   'raster.channels': { inputs: { planes: [mask, mask, mask] } },
   'raster.math': { inputs: { op: 'add', b: 2 } },
+  'raster.mouthCels': { inputs: { face: rgba, cels: {rest:rgba}, sheet: {
+    format:'ink-studio/mouth-cels',version:1,id:'mouth',fps:12,frames:1,
+    rig:{grid:[4,4],origin:[0,0],size:[4,4],rest:'rest',poses:['rest']},
+    holds:[{id:'rest',from:0,to:1,pose:'rest',approval:'approved',phones:[]}]
+  } } },
   'raster.crop': { inputs: { options: { x: 1, y: 1, width: 2, height: 2 } } },
   'raster.resize': { inputs: { options: { width: 8, height: 6, filter: 'nearest' } } },
   'raster.nineSlice': { inputs: { options: { width: 8, height: 6, insets: [1, 1, 1, 1] } } },
@@ -628,6 +671,7 @@ const specifications = {
   'audio.analyzeInstrumentSamples': {inputs:{assets:{tone:audio}}},
   'audio.auditionInstrumentRange': {inputs:{assets:{tone:audio},options:{offsets:[0]}}},
   'audio.buildSampleInstrument': {inputs:{assets:{tone:audio},source:{zones:[{id:'tiny',takes:['tone'],low:60,high:60,root:null}]}}},
+  'audio.alignInstrumentSession': {inputs:alignmentTone},
   'audio.analyzeInstrumentSession': {inputs:builtSessionTone.inputs},
   'audio.buildInstrumentSession': {inputs:builtSessionTone.inputs},
   'audio.auditionInstrumentSession': {nodes:{built:builtSessionTone},inputs:{instrument:link('built'),assets:link('built','assets'),
@@ -752,6 +796,28 @@ const specifications = {
   'input.replay': { inputs: { source: { events: [event] } } },
   'input.actions': { inputs: { state: { 'key:space': true }, context: 'main', contexts: { main: { select: ['key:space'] } } } },
   meshPaths: { inputs: { sources: [0], targets: [1] }, output: 'curves' },
+  attributeElements: { inputs: { geometry: mesh, domain:'edge' } },
+  attributeMesh: { inputs: { mesh } },
+  attributeTable: { inputs: { domain:'curve-control', entities:[{id:'begin',point:[0,0,0]}],
+    channels:{conductance:{type:'number',values:[.6]}} } },
+  attributeLineage: { inputs: { domain:'splat', evidence:{operations:[{op:'split',id:'parent',children:[{id:'left'},{id:'right'}]}]} } },
+  attributeRemap: { inputs: { source:link('attrs'),domain:'splat',entities:[{id:'child',point:[0,0,0]}],
+    lineage:[{id:'child',from:[{id:'parent',weight:1}]}] },
+    nodes:{attrs:{op:'attributeTable',inputs:{domain:'splat',entities:[{id:'parent',point:[0,0,0]}],
+      channels:{conductance:{type:'number',values:[.6]}}}}} },
+  'proc.scatter': {inputs: {options: {grid: {id: 'fastener', origin: [.2, .2], step: .3, jitter: .15}}}, output: 'samples'},
+  'model.prefab': {inputs: {model: 'signal', revision: 1,
+    sections: {solids: [{id: 'panel', value: {kind: 'box', at: [0, 0, 0], half: [.6, .4, .1], mat: 'metal'}}]}}},
+  'model.compare': {inputs: {
+    before: {revision: 1, solids: {trim: {}}, generation: {version: 1, model: 'signal', sections: {solids: {trim: null}}}},
+    after: {revision: 2, solids: {left: {}, right: {}}, generation: {version: 1, model: 'signal',
+      sections: {solids: {left: 'trim', right: 'trim'}}}}
+  }},
+  'model.modifiers': {inputs:{
+    source:{id:'sample-panel',vertices:[{id:'a',position:[0,0,0]},{id:'b',position:[1,0,0]},
+      {id:'c',position:[0,1,0]}],faces:[{id:'face',corners:[{id:'ca',vertex:'a'},{id:'cb',vertex:'b'},{id:'cc',vertex:'c'}]}]},
+    modifiers:[{id:'copies',kind:'array',count:2,step:[1.3,0,0]}]
+  }},
   tiles: { inputs: { settings: { bounds: { min: [0, 0], max: [2, 2] } } } }
 };
 
@@ -788,9 +854,9 @@ function exampleFor(id, operation, kit) {
       { assets: { sample: { format, file: path.join(__dirname, 'graph-catalog-assets', file) } } }) };
   }
   if (Object.hasOwn(dynamic, id)) {
-    const { type, inputs, callback } = dynamic[id];
+    const { type, inputs, callback, nodes } = dynamic[id];
     return { kind: 'graph', project: project({ op: id, inputs, ...(type && { type }), ...(callback && { group: 'Callback' }) }, 'value',
-      callback && { groups: { Callback: callback } }) };
+      { nodes, ...(callback && { groups: { Callback: callback } }) }) };
   }
   if (operation.specialize) return;
   const { inputs: specified = {}, nodes: earlier, output = Object.keys(operation.outputs ?? { value: 'any' })[0] } =

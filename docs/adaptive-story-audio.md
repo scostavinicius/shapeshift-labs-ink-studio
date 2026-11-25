@@ -35,7 +35,7 @@ receipt can include a voice or group limit, reserved capacity, or an authored
 stinger hold. A played cue can also record a later `stolenAt` sample. The
 existing `receipts.json` preserves sound choices for replay. Use
 `--receipts` with that file to reproduce the chosen sounds and regenerate
-their playback receipts.
+their playback receipts. Use [directional sound captions](directional-captions.md) to turn the admitted cues into a WebVTT track.
 
 ```sh
 ink-studio beat ink:beat:switchyard/main/30.0 mix/playback.json

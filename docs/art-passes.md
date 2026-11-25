@@ -9,6 +9,7 @@ In Node, call the library's `render(world, { passes: true })` or supply an array
 | `coverage` | One float per pixel. The combined opacity of splat and edge-sprite layers, independent of the background. |
 | `depth` | One float per pixel. Camera-axis depth of the owner in scene units. Center sorting uses splat centers. Surface sorting and traced geometry can supply sampled depths. Empty pixels use infinity. |
 | `normal` | Three floats per pixel. The owning sample's normalized world-space surface normal. Samples with no surface normal use zeros. |
+| `pigment` | RGB24 plus one from the owning sample before lighting. Zero means no pigment sample. Request this channel explicitly. Its PNG uses transparent pixels for missing samples. |
 | `objectId`, `materialId` | Unsigned integers. Zero means unassigned. The `objects` and `materials` arrays give authored labels, where supplied. |
 | `target` | Index into `targets` for the dominant splat or frame look at each pixel. Scoped bindings take precedence over scene-wide grades. Zero means no recorded binding. The table identifies the asset, stage, and selector when available. |
 | `mask` | A scalar between zero and one. The pass shows sampled spatial mask weights composited with surface coverage, including transparent splats, followed by applied frame and palette masks. |
@@ -378,6 +379,11 @@ Author the profile in `finish.look.ink` or override it for a shot with
 
 ### Material ink and shot overrides
 
+Use the `shadowBandBias`, `hatchWeight`, `outlineWeight`, and
+`lightSpillWeight` passes to inspect the visible surface's painted controls.
+The pass bundle includes float values in `inkControls`. See
+[Paint lighting and ink controls](pixel-art-authoring.md#paint-lighting-and-ink-controls).
+
 In the headless renderer, assign `materials` rules by authored material ID.
 Each material can specify its own silhouette, crease, boundary, shadow edge,
 and hatch. These rules share the same native art grid across splats, indexed
@@ -485,6 +491,10 @@ node cli/ink-studio.js render examples/emissive-finishes.js --w 322 --h 152 --px
 
 Set `look.splatOrder = 'surface'` or pass `--splat-order surface` to sort overlapping fragments by an estimated intersection with each splat's surface plane. `center` uses the ordinary global order. The queue has a configurable `fragmentBudget` and replays the original order if the budget is exceeded. The result sets `orderFallback` in that case.
 
+Use `--splat-order selective` for [bounded local transparency](surface-order.md#selective-transparency)
+with opaque-depth rejection and tile receipts. The same mode works in the
+WebGPU Gaussian renderer.
+
 Use the [live WebGL surface-order pass](surface-order.md) to repair a visible crossing at the art grid. It keeps separate limits for fragment layers and submitted work.
 
 Run `node scripts/experiment-splat-sampling.js <output-directory>` to reproduce the independent footprint and ordering experiments. The four-tap footprint experiment increased short-sequence flicker in the tested scenes. The surface-order test with crossed planar splats corrected all 576 misordered opaque overlap pixels in that fixture.
@@ -505,6 +515,23 @@ Use [artist-authored cards and impostors](impostor-atlases.md) to place the resu
 In Node, use `spriteAtlas(world, { width, height, directions, times, fps, pivot, view, maps, pose })`. Supply a `pose(world, time)` callback for scenes that need to advance a stateful timeline or pose a rig. A separate effect history is kept for each direction.
 
 For keyed fragmentation and reassembly with stable ownership, see [world-space reveal and reconstruction](world-reconstruction.md).
+
+## Pixel source bindings
+
+Use `pixel-art capture` and `pixel-art inspect --binding` to resolve scene
+pixels to mesh, SDF, and splat sources. For raw renderer output, request
+`sourceSurface` for geometric source coordinates and `sourceSplat` for
+contributions. Each request includes its related planes and lookup table.
+The `passes` command writes those planes losslessly under `sourceBindings`
+in `passes.json`. [Resolve a pixel to its scene source](pixel-art-authoring.md#resolve-a-pixel-to-its-scene-source).
+
+The `sourceSplatFrontRank` plane uses one-based ranks into the four
+coverage-ranked lanes. Zero means no surviving frontmost splat. Rank five
+uses the supplemental `sourceSplatFront` table slot and the three
+`sourceSplatFrontMetrics` values in alpha, depth, visible coverage order.
+The supplemental planes are written when at least one pixel needs them.
+Older captures can supply an observed frontmost hit when their contributor
+list is complete.
 
 ## Shared opaque surfaces
 

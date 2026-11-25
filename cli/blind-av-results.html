@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Blind audiovisual review · Ink Studio</title>
+<style>
+  :root{color-scheme:dark;--bg:#141818;--panel:#202624;--line:#414b42;--text:#f2efe2;--muted:#aeb8a9;--accent:#d8e890;--blue:#9acdca}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.52 system-ui,sans-serif}
+  main{max-width:1080px;margin:auto;padding:34px clamp(16px,5vw,48px) 44px}
+  h1,h2,h3,p{margin:0}
+  h1{font:500 clamp(40px,7vw,75px)/1 Georgia,serif;letter-spacing:-.05em;margin:7px 0 9px}
+  h2{font-size:24px;margin:24px 0 7px;letter-spacing:-.025em}
+  h3{font-size:16px;letter-spacing:-.01em}
+  .overline,caption{font:650 11px/1.6 ui-monospace,monospace;letter-spacing:.13em;text-transform:uppercase;color:var(--accent)}
+  .muted{color:var(--muted)}
+  .cohorts,.samples{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:9px;margin-top:10px}
+  article{background:var(--panel);border:1px solid var(--line);border-radius:5px;padding:14px}
+  article>h3{margin-bottom:2px}
+  article>p{margin:1px 0 13px}
+  dl{margin:0} dl div{display:grid;grid-template-columns:1fr auto;gap:10px;border-top:1px solid var(--line);padding:9px 0 6px}
+  dt{color:var(--muted)} dd{margin:0;font-weight:700;font-variant-numeric:tabular-nums}
+  .rating{color:var(--blue);font-size:12px}
+  .matrix{overflow:auto;margin-top:9px;border:1px solid var(--line);border-radius:5px}
+  table{width:100%;border-collapse:collapse;text-align:left}
+  th,td{padding:9px 12px;border-bottom:1px solid var(--line)}
+  tr:last-child td,tr:last-child th{border-bottom:0}
+  thead th{background:var(--panel);border-bottom:1px solid var(--line)!important;font-weight:650}
+  td{color:var(--muted);font-variant-numeric:tabular-nums}
+  details{margin-top:12px;color:var(--muted)}
+  summary{cursor:pointer;color:var(--text)} details p{margin:5px 0 0}
+  .samples button{background:var(--accent);border:1px solid var(--accent);border-radius:4px;padding:9px 12px;color:#1a2417;cursor:pointer;font:700 14px system-ui,sans-serif}
+  button:focus-visible,summary:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  [hidden]{display:none!important}
+  @media(max-width:650px){.cohorts{grid-template-columns:1fr}.samples{grid-template-columns:1fr}.samples button{text-align:left}article{padding:10px 12px}}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="overline">Blind audiovisual review</p>
+    <h1 id="title"></h1>
+    <p id="count" class="muted"></p>
+  </header>
+  <section id="demo" hidden>
+    <h2>Audition the three excerpts</h2>
+    <p class="muted">Each button opens the reviewer’s own page. In a real review each person receives one page.</p>
+    <div class="samples" id="samples"></div>
+  </section>
+  <section>
+    <h2 id="outcome">Responses by version</h2>
+    <p class="muted">Action and cause show correct answers over responses. Impact shows the median of rated responses.</p>
+    <div id="cohorts" class="cohorts"></div>
+  </section>
+  <section>
+    <h2>Combined compared with each single medium</h2>
+    <div class="matrix">
+      <table aria-label="Differences from the combined version">
+        <thead><tr><th scope="col">Compared with</th><th scope="col">Action</th><th scope="col">Cause</th><th scope="col">Impact</th></tr></thead>
+        <tbody id="differences"></tbody>
+      </table>
+    </div>
+  </section>
+  <details id="responses"><summary>Response distributions and scoring key</summary></details>
+</main>
+<script>
+'use strict';
+const model = /* MODEL */ {}, {report} = model;
+const labels = {picture:'Picture only',sound:'Sound only',combined:'Picture and sound'};
+const byId = id => document.getElementById(id);
+function element(tag,label) {
+  const element = document.createElement(tag);
+  if (label!==undefined) element.textContent = label;
+  return element;
+}
+byId('title').textContent = report.title;
+byId('count').textContent = (model.samples?'Illustrative ballots · ':'')+report.received+' / '+report.assigned+' responses received';
+if (model.samples) {
+  byId('demo').hidden = false;
+  byId('outcome').textContent = 'Illustrative responses by version';
+  for (const {mode,html} of model.samples) {
+    const button = element('button',labels[mode]);
+    button.type = 'button';
+    button.addEventListener('click',()=>{
+      const url = URL.createObjectURL(new Blob([html],{type:'text/html'}));
+      window.open(url,'_blank','noopener');
+      setTimeout(()=>URL.revokeObjectURL(url),60000);
+    });
+    byId('samples').append(button);
+  }
+}
+for (const row of report.cohorts) {
+  const card = element('article'), detail = element('p',row.received+' / '+row.assigned+' received · '+row.replayed+' replayed');
+  detail.className = 'muted';
+  card.append(element('h3',labels[row.mode]),detail);
+  const list = element('dl');
+  for (const aspect of ['action','cause','impact']) {
+    const item = element('div'), measure = row[aspect];
+    const value = aspect==='impact'?(measure.median===null?'—':measure.median+' / 5')
+      :(row.received?measure.correct+' / '+row.received:'—');
+    item.append(element('dt',aspect[0].toUpperCase()+aspect.slice(1)),element('dd',value));
+    list.append(item);
+  }
+  card.append(list);
+  if (row.impact.unrated) {
+    const note = element('span',row.impact.unrated+' couldn’t judge impact');
+    note.className = 'rating';
+    card.append(note);
+  }
+  byId('cohorts').append(card);
+}
+function delta(value,multiplier,suffix) {
+  if (value===null) return '—';
+  const number = Number((multiplier*value).toFixed(1));
+  return (number>0?'+':'')+number+suffix;
+}
+for (const row of report.differences) {
+  const line = element('tr'), label = element('th',labels[row.against]);
+  label.scope = 'row';
+  line.append(label,element('td',delta(row.action,100,' pp')),element('td',delta(row.cause,100,' pp')),
+    element('td',delta(row.impact,1,' pts')));
+  byId('differences').append(line);
+}
+for (const aspect of ['action','cause','impact']) {
+  const question = report.questions[aspect], list = element('div');
+  if (aspect==='impact') {
+    list.append(element('p',question.prompt+' '+question.low+' (1) to '+question.high+' (5).'));
+  } else {
+    const answer = question.options.find(option=>option.id===question.correct).label;
+    list.append(element('p',question.prompt+' Correct response: '+answer+'.'));
+  }
+  for (const row of report.cohorts) {
+    const result = row[aspect];
+    const counts = aspect==='impact'
+      ? [...result.ratings.map(({value,count})=>value+' ('+count+')'),'Couldn’t judge ('+result.unrated+')']
+      : result.choices.map(({label,count})=>label+' ('+count+')');
+    list.append(element('p',labels[row.mode]+' · '+counts.join(' · ')));
+  }
+  byId('responses').append(list);
+}
+</script>
+</body>
+</html>

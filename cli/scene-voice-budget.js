@@ -1,7 +1,8 @@
 /* Allocate spatial voices at arrivals, departures, and recorded gain changes. */
-const {select,selectWithTextures}=require('../src/world-voice-budget.js');
+const {select,selectWithTextures,prioritize}=require('../src/world-voice-budget.js');
+const {at}=require('../src/joint-priority.js');
 
-function planWorldVoices(voices,resolve,{end,sampleRate,policy,crowd}){
+function planWorldVoices(voices,resolve,{end,sampleRate,policy,crowd,priorities=[]}){
   const changes=[], fade=Math.round(policy.stealFade*sampleRate);
   for(const track of voices){
     const {budget,first,points}=track;
@@ -25,18 +26,23 @@ function planWorldVoices(voices,resolve,{end,sampleRate,policy,crowd}){
       }
     }
   }
+  for(const window of priorities){
+    if(window.from<end)changes.push({sample:window.from});
+    if(window.to<end)changes.push({sample:window.to});
+  }
   changes.sort((a,b)=>a.sample-b.sample);
   const live=new Map(), counters={admitted:0,dropped:0,stolen:0,virtual:0,resumed:0,peakVoices:0};
-  let kept=new Map(), retiring=[], omitted=0, peakDirectVoices=0, peakTextureVoices=0;
+  let kept=new Map(), retiring=[], omitted=0, peakDirectVoices=0, peakTextureVoices=0, window;
   const decisions=[];
   function note(row,sample,action,reason,sector){
     counters[action]=(counters[action]??0)+1;
-    const {audit}=row.track;
+    const {audit}=row.track, promoted=window?.sound.cues.includes(row.cue), directed=window&&{
+      priorityWindow:window.id,...(promoted&&{promoted:true})};
     if(audit){
-      if(!audit.voiceBudget)audit.voiceBudget={action,sample,...(reason&&{reason}),...(sector!==undefined&&{sector})};
+      if(!audit.voiceBudget)audit.voiceBudget={action,sample,...(reason&&{reason}),...(sector!==undefined&&{sector}),...directed};
       else if(action==='stolen')audit.voiceBudget.stolenAt=sample;
     }
-    const item={sample,action,id:row.id,cue:row.cue,priority:row.priority,protected:row.protected,
+    const item={sample,action,id:row.id,cue:row.cue,priority:promoted?100:row.priority,protected:promoted||row.protected,...directed,
       ...(row.group!==undefined&&{group:row.group}),...(sector!==undefined&&{sector}),...(reason&&{reason}),
       ...(audit?.source?.beatId&&{beatId:audit.source.beatId})};
     if(decisions.length<1024)decisions.push(item);
@@ -48,11 +54,14 @@ function planWorldVoices(voices,resolve,{end,sampleRate,policy,crowd}){
       const {add,remove,row,gain}=changes[i++];
       if(add)live.set(add.id,add);
       else if(remove)live.delete(remove.id);
-      else row.gain=gain;
+      else if(row)row.gain=gain;
     }
     const candidates=[...live.values()].filter(row=>row.gain>0);
     for(const row of candidates)row.incumbent=kept.has(row.id);
-    const ranked=crowd?selectWithTextures(candidates,policy,crowd.active(sample)):select(candidates,policy);
+    window=at(priorities,sample);
+    const scoped=prioritize(candidates,policy,window?.sound);
+    const ranked=crowd?selectWithTextures(scoped.candidates,scoped.policy,crowd.active(sample)):
+      select(scoped.candidates,scoped.policy);
     const {selected,rejected,seats=0,overflow}=ranked;
     if(crowd&&!seats)crowd.cut(sample);
     const next=new Map([...selected].map(id=>[id,live.get(id)]));
@@ -97,7 +106,9 @@ function planWorldVoices(voices,resolve,{end,sampleRate,policy,crowd}){
     }
     kept=next;
   }
-  return {...policy,...counters,decisions,omitted,...(crowd&&{peakDirectVoices,peakTextureVoices,
+  const windows=priorities.filter(window=>window.from<end).map(({id,from,to,sound})=>
+    ({id,fromSample:from,toSample:Math.min(to,end),backgroundVoices:sound.backgroundVoices,cues:sound.cues}));
+  return {...policy,...counters,decisions,omitted,...(windows.length&&{priorityWindows:windows}),...(crowd&&{peakDirectVoices,peakTextureVoices,
     aggregationStreams:crowd.streams(),aggregated:crowd.count()})};
 }
 

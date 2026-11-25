@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Excerpt review · Ink Studio</title>
+<style>
+  :root{color-scheme:dark;--bg:#141818;--panel:#202624;--line:#414b42;--text:#f2efe2;--muted:#aeb8a9;--accent:#d8e890}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:16px/1.52 system-ui,sans-serif}
+  main{width:min(720px,calc(100% - 34px));margin:0 auto;padding:34px 0 44px}
+  h1,h2,p{margin:0} h1{font:500 clamp(38px,7vw,68px)/.98 Georgia,serif;letter-spacing:-.04em}
+  header{margin-bottom:18px} header p{color:var(--muted);margin-top:10px}
+  .stage{background:#090c0b;aspect-ratio:16/9;display:grid;place-items:center;border:1px solid var(--line);border-radius:6px 6px 0 0;overflow:hidden}
+  .stage video{width:100%;height:100%;object-fit:contain;image-rendering:pixelated}
+  .stage audio{display:none}
+  .stage span{font:600 12px ui-monospace,monospace;letter-spacing:.14em;text-transform:uppercase;color:var(--muted)}
+  .transport{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:13px;padding:11px;background:var(--panel);border:1px solid var(--line);border-top:0;border-radius:0 0 6px 6px}
+  button{cursor:pointer;border:1px solid var(--accent);background:var(--accent);color:#192518;font:700 14px system-ui,sans-serif;border-radius:4px;padding:8px 12px}
+  button:disabled{opacity:.55;cursor:default}
+  button:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:3px}
+  progress{width:100%;height:7px;accent-color:var(--accent)}
+  output{font:12px/1.4 ui-monospace,monospace;color:var(--muted);white-space:nowrap}
+  #status{color:var(--muted);margin:10px 0 18px;font-size:14px}
+  h2{font-size:24px;margin-bottom:12px}
+  fieldset{border:1px solid var(--line);border-radius:5px;margin:0 0 13px;padding:10px 12px 12px;min-width:0}
+  legend{font-weight:700;padding:0 5px}
+  label{display:flex;align-items:baseline;gap:7px;padding:4px 2px;cursor:pointer}
+  label:has(input:checked){color:var(--accent)}
+  input{margin:0;accent-color:var(--accent)}
+  .scale{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;margin:8px 0}
+  .scale label{display:grid;place-items:center;background:var(--panel);border:1px solid var(--line);padding:7px;border-radius:3px}
+  .scale label:has(input:checked){border-color:var(--accent)}
+  .ends{display:flex;justify-content:space-between;gap:12px;font-size:13px;color:var(--muted)}
+  #saved{font-size:14px;color:var(--accent);margin-top:9px}
+  [hidden]{display:none!important}
+  @media(max-width:470px){main{padding-top:23px}.transport{gap:7px}button{padding-inline:9px}output{font-size:11px}}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Excerpt review</h1>
+    <p>Play the excerpt through once, then tell us what you picked up.</p>
+  </header>
+  <div class="stage" id="stage"></div>
+  <div class="transport">
+    <button id="play" type="button" aria-controls="excerpt">Play excerpt</button>
+    <progress id="progress" aria-label="Playback progress" value="0" max="1"></progress>
+    <output id="clock" aria-hidden="true"></output>
+  </div>
+  <p id="status" role="status">Set your volume before playing. You can replay the excerpt if you need to.</p>
+  <form id="ballot" hidden>
+    <h2>Your response</h2>
+    <div id="questions"></div>
+    <button id="save" type="submit">Download response</button>
+    <p id="saved" role="status"></p>
+  </form>
+</main>
+<script>
+'use strict';
+const model = /* MODEL */ {};
+const byId = id => document.getElementById(id);
+const player = document.createElement(model.kind);
+const play = byId('play'), status = byId('status'), form = byId('ballot');
+const progress = byId('progress'), clock = byId('clock');
+const binary = atob(model.excerpt), bytes = new Uint8Array(binary.length);
+for (let i=0;i<binary.length;i++) bytes[i]=binary.charCodeAt(i);
+player.src = URL.createObjectURL(new Blob([bytes],{type:model.kind+'/mp4'}));
+player.id = 'excerpt';
+player.setAttribute('aria-label','Review excerpt');
+player.preload = 'auto';
+player.playsInline = true;
+if (model.kind==='audio') {
+  const message = document.createElement('span');
+  message.textContent = 'Excerpt ready';
+  byId('stage').append(message);
+}
+byId('stage').append(player);
+let completions = 0;
+function position() {
+  const seconds = Math.min(model.seconds,player.currentTime);
+  progress.value = seconds/model.seconds;
+  clock.textContent = seconds.toFixed(1)+' / '+model.seconds.toFixed(1)+' s';
+}
+position();
+player.addEventListener('timeupdate',position);
+player.addEventListener('loadedmetadata',position);
+player.addEventListener('play',()=>{play.textContent='Pause';});
+player.addEventListener('pause',()=>{if (!player.ended) play.textContent=completions?'Play again':'Resume';});
+player.addEventListener('ended',()=>{
+  completions++;
+  progress.value = 1;
+  play.textContent = 'Play again';
+  status.textContent = 'Playback complete. Answer the three questions below.';
+  form.hidden = false;
+});
+player.addEventListener('error',()=>{
+  play.disabled = true;
+  status.textContent = 'The excerpt could not be loaded. Try opening the review in a browser that plays MP4.';
+});
+play.addEventListener('click',async()=>{
+  if (!player.paused) { player.pause(); return; }
+  if (player.ended) player.currentTime = 0;
+  try { await player.play(); }
+  catch { status.textContent = 'Playback could not start. Try Play excerpt again.'; }
+});
+function element(tag,label) {
+  const element = document.createElement(tag);
+  if (label!==undefined) element.textContent = label;
+  return element;
+}
+function option(name,value,label) {
+  const row = element('label'), input = element('input');
+  input.type = 'radio';
+  input.name = name;
+  input.value = value;
+  input.required = true;
+  row.append(input,element('span',label));
+  return row;
+}
+for (const [aspect,question] of Object.entries(model.questions)) {
+  const set = element('fieldset');
+  set.append(element('legend',question.prompt));
+  if (aspect==='impact') {
+    const ends = element('div'), scale = element('div');
+    ends.className = 'ends';
+    ends.append(element('span',question.low),element('span',question.high));
+    scale.className = 'scale';
+    for (let value=1;value<=5;value++) scale.append(option(aspect,value,String(value)));
+    set.append(ends,scale,option(aspect,'unrated','I couldn’t judge'));
+  } else {
+    for (const {code,label} of question.options) set.append(option(aspect,code,label));
+  }
+  byId('questions').append(set);
+}
+form.addEventListener('submit',event=>{
+  event.preventDefault();
+  if (!completions) return;
+  const data = new FormData(form);
+  const ballot = {format:model.format,version:model.version,session:model.session,seat:model.seat,completions,
+    answers:{action:Number(data.get('action')),cause:Number(data.get('cause')),
+      impact:data.get('impact')==='unrated'?null:Number(data.get('impact'))}};
+  const link = element('a'), url = URL.createObjectURL(new Blob([JSON.stringify(ballot,null,2)+'\n'],
+    {type:'application/json'}));
+  link.href = url;
+  link.download = 'response-'+model.seat+'.json';
+  link.click();
+  setTimeout(()=>URL.revokeObjectURL(url),1500);
+  byId('saved').textContent = 'Response downloaded. Send the JSON file to the person running the review.';
+});
+</script>
+</body>
+</html>

@@ -1,6 +1,7 @@
 const { slab } = require('../src/scene-optics.js');
 const { surfacePoint } = require('./scene-optics.js');
 const TargetSelectors = require('../src/target-selectors.js');
+const SdfPose = require('./sdf-pose.js');
 const OpticalMaterials = require('../src/optical-materials.js');
 
 const dot = (a,b) => a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
@@ -12,29 +13,64 @@ function normalAt(field, [x,y,z], step) {
   return length > 1e-10 && Number.isFinite(length) ? n.map(v=>v/length) : null;
 }
 
-function bind(world, data, settings) {
+function ownerLabel(owner) {
+  return { object:owner.renderOwner,entity:owner.renderOwner,...owner.renderTarget };
+}
+
+function isolatedField(source,allow,coverage,overrideRows) {
+  if (!allow && !coverage && !overrideRows) return source;
+  const excluded=new Set();
+  if (coverage || overrideRows) {
+    for (const [owner,ranges] of source.rows)
+      if (ranges.some(([start,end])=>coverage?.subarray(start,end).some(value=>value<1) ||
+          overrideRows?.some(mask=>mask.subarray(start,end).some(Boolean)))) excluded.add(owner);
+    // A cut can affect several members of a joined field.
+    if (source.negative?.some(owner=>excluded.has(owner))) return null;
+  }
+  if (!allow && !excluded.size) return source;
+  if (!source.bind) return null;
+  const body = owner=>!excluded.has(owner) && (!allow || allow(ownerLabel(owner)));
+  if (![...source.rows.keys()].some(body)) return null;
+  const geometry = source.bind(body,()=>true);
+  if (!geometry) return null;
+  const cuts = new Set(source.negative);
+  const rows = new Map([...source.rows].filter(([owner])=>body(owner) || cuts.has(owner)));
+  return { ...source,...geometry,rows,bind:(select,cut)=>source.bind(owner=>select(owner)&&body(owner),cut) };
+}
+
+function bind(world, data, settings,allow,sourceBinding,coverage,overrideRows) {
   const labels = TargetSelectors.index(world), rows = [];
   const normals = world.renderMetadata?.normals;
-  const boned = new Set(world.anim?.boned ?? []), owned = world.anim?.geometryOwned;
-  const { nearest } = require('../index.js').load().KIT.procedural.attributes;
+  const boned = new Set(world.anim?.boned ?? []), owned = world.anim?.geometryOwned, rig = world.anim?.rig;
+  const { attributes:{nearest},sdfBrushSurfaces } = require('../index.js').load().KIT.procedural;
   const sources = [];
-  for (const [sourceIndex,source] of (world.renderSdfs ?? []).entries()) {
-    if (!(source.rows instanceof Map) || typeof source.distance !== 'function' || typeof source.locate !== 'function') continue;
-    const parts = new Map();
+  function opaque(i, rest, posed) {
+    const q=i*16, flags=Math.round(rest[q+11]);
+    return rest[q+3]>=1 && !(flags & (posed && (flags&15)===12 ? opaqueFlags&~15 : opaqueFlags)) &&
+      !world.opticalSplats?.[i*OpticalMaterials.STRIDE+3];
+  }
+  function addSource(source, geometry, ownerSet, motion, key, sourceIndex, ownerIndices) {
+    const parts = new Map(), rigPart = SdfPose.rigPart(key);
     let selected = false, partIndex=0;
     for (const [owner,ranges] of source.rows) {
-      const part = { records:[], points:[], key:JSON.stringify(['sdf',sourceIndex,partIndex++]) };
+      if (ownerSet && !ownerSet.has(owner)) continue;
+      const part = { records:[], points:[], key:JSON.stringify(['sdf',sourceIndex,key,partIndex++]) };
       for (const [start,end,points] of ranges) for (let i=start;i<Math.min(end,world.count);i++) {
         const q = i*16, offset = (i-start)*3;
-        if (data[q] !== points[offset] || data[q+1] !== points[offset+1] || data[q+2] !== points[offset+2]) continue;
-        if (owned?.[i] || data[q+3]<1 || Math.round(data[q+11]) & opaqueFlags || boned.has(i) || world.anim?.rig?.bid?.[i] ||
-            world.opticalSplats?.[i*OpticalMaterials.STRIDE+3]) continue;
+        if (owned?.[i] || !opaque(i,data,false) || rig?.bid?.[i] && !rigPart) continue;
+        if (!motion && (boned.has(i) || data[q]!==points[offset] || data[q+1]!==points[offset+1] ||
+            data[q+2]!==points[offset+2])) continue;
+        if (motion && (!(rigPart ? rig.bid[i]===rigPart && !rig.free[i] : boned.has(i)) ||
+            motion.point(points[offset],points[offset+1],points[offset+2])
+            .some((value,axis)=>Math.abs(data[q+axis]-value)>1e-4))) continue;
         const target = {object:owner.renderOwner,entity:owner.renderOwner,material:owner.mat.materialId,
           surface:owner.mat.surfaceId ?? owner.mat.surface?.id,
           ...(owner.tag && {tags:[owner.tag]}),...owner.renderTarget,...labels.row(i)};
+        const base = owner.sdfPaintBase?.get(i);
+        if (base?.material!==undefined) target.material=base.material;
         const reach = 3*Math.sqrt(Math.max(0,data[q+4]+data[q+8]+data[q+10]));
-        const row = {i,part,target,reach,point:Array.from(data.subarray(q,q+3)),
-          normal:normals && normals.subarray(i*3,i*3+3)};
+        const row = {i,part,target,reach,baseColor:base?.color,point:Array.from(data.subarray(q,q+3)),
+          normal:normals && (motion ? motion.normal(...normals.subarray(i*3,i*3+3)) : normals.subarray(i*3,i*3+3))};
         part.records.push(row);
         part.points.push(row.point);
         if (settings.candidates(target)) {
@@ -44,7 +80,21 @@ function bind(world, data, settings) {
       }
       if (part.records.length) parts.set(owner,part);
     }
-    if (selected) sources.push({...source,parts});
+    if (selected) sources.push({...geometry,parts,motion,sourceIndex,ownerIndices,appearanceKeys:sourceBinding&&new Map(),sdfBrushSurfaces});
+  }
+  for (const [sourceIndex,original] of (world.renderSdfs ?? []).entries()) {
+    if (!(original.rows instanceof Map) || typeof original.distance !== 'function' || typeof original.locate !== 'function') continue;
+    const source = isolatedField(original,allow,coverage,overrideRows);
+    if (!source) continue;
+    const ownerIndices = sourceBinding && new Map([...original.rows.keys()].map((owner,i)=>[owner,i]));
+    if (settings.posed && (world.anim?.bones || rig) && source.bind) {
+      for (const [key,group] of SdfPose.groups(world,source,(i,rest)=>opaque(i,rest,true),
+        (body,cut)=>[source.bind(body,cut)].filter(Boolean))) {
+        const motion=SdfPose.transform(key,world.anim?.bones,rig);
+        if (motion!==false) for (const geometry of group.fields)
+          addSource(source,SdfPose.field(geometry,motion),group.owners,motion,key,sourceIndex,ownerIndices);
+      }
+    } else addSource(source,source,null,null,'',sourceIndex,ownerIndices);
   }
   for (const source of sources) for (const part of source.parts.values())
     part.nearest = nearest({points:part.points,entities:part.records,read:i=>part.records[i]});
@@ -52,7 +102,8 @@ function bind(world, data, settings) {
 }
 
 const facing = (row,normal) => !row.normal || dot(row.normal,row.normal)<1e-8 || dot(row.normal,normal)>.25;
-function trace(source, ray, near, far, settings, clip, visible, x, y) {
+const neutralInk = [0,0,0,0];
+function trace(source, ray, near, far, settings, clip, visible, x, y, sourceBinding, captureRestNormal) {
   const {origin,direction,axial} = ray, {min,max} = source.bounds, {epsilon,steps} = settings;
   const range = [near/axial,far/axial];
   for (let k=0;k<3;k++) if (!slab(range,origin[k],direction[k],min[k],max[k])) return null;
@@ -68,22 +119,68 @@ function trace(source, ray, near, far, settings, clip, visible, x, y) {
     }
     let normal;
     if ((!clip || clip(point)) && (!source.accepts || source.accepts(...point))) {
-      let row;
+      let row, fieldOwner, materialOwner;
       if (source.surfaceAt) {
         normal=normalAt(field,point,epsilon);
         if (normal) row=source.surfaceAt(point,normal);
       } else {
         const {body,owner} = source.locate(...point);
+        fieldOwner = body ?? owner;
+        materialOwner = owner;
         const part = source.parts.get(owner) ?? source.parts.get(body);
         if (part && (normal=normalAt(field,point,epsilon)))
           row=part.nearest.sample(point,i=>facing(part.records[i],normal))?.values;
       }
-      if (row && (row.i<0 || !visible || visible(row.i,x,y)) && settings.allows(row.target,point))
-        return {z:along*axial,position:point,normal,row};
+      if (row && (row.i<0 || !visible || visible(row.i,x,y)) && settings.allows(row.target,point)) {
+        const rest = source.motion?.rest(...point) ?? point;
+        const state = fieldOwner?.mat.surfaceState, program = fieldOwner?.mat.sdfPaint;
+        const generated=materialOwner?.mat.sdfNewSurface;
+        const localNormal = (generated || program || state?.hasOpacity || state?.hasNormal || state?.hasInkControls) &&
+          (source.motion?.restNormal(...normal) ?? normal);
+        const length = localNormal && Math.hypot(...localNormal);
+        const normalAtRest = length && localNormal.map(n=>n/length);
+        const paint = normalAtRest && state?.locate(rest,normalAtRest);
+        const materialPaint = normalAtRest && program?.locate(rest,normalAtRest);
+        const surface=normalAtRest && generated?.locate(rest,normalAtRest);
+        const appearance=surface ? source.sdfBrushSurfaces.appearance(surface,materialPaint) : materialPaint;
+        const opacity = paint?.values?.opacity;
+        if (opacity && opacity.value < 1 && opacity.coverage > 0) return null;
+        const shadingNormal = paint?.paintedNormal && (source.motion?.normal(...paint.paintedNormal) ?? paint.paintedNormal);
+        const materialId = (generated || program || row.baseColor!==undefined) && (appearance?.material ?? row.target.material);
+        return {z:along*axial,position:point,normal,row,objectPosition:rest,...(shadingNormal&&{shadingNormal}),
+          ...(materialId && {materialId}),...(appearance?.tint && {materialTint:appearance.tint}),...(surface && {uv:surface.uv}),
+          ...(state?.hasInkControls && {inkControls:paint?.inkControls ?? neutralInk}),
+          ...(sourceBinding && { source:{ ...sdfSource(source,fieldOwner,row,rest,materialPaint,surface?.details),...(captureRestNormal && {restNormal:source.motion?.restNormal(...normal) ?? normal}) } })};
+      }
     }
     along+=6*epsilon/Math.max(.12,normal ? Math.abs(dot(normal,direction)) : 1);
   }
   return null;
+}
+
+function fieldAddress(source,owner,object) {
+  if (!owner) return [object];
+  const index = source.ownerIndices.get(owner);
+  return index === undefined ? null : [source.sourceIndex,index];
+}
+
+function sdfSource(source,owner,row,rest,paint,generatedSurface) {
+  const target = owner ? ownerLabel(owner) : row.target;
+  const field = fieldAddress(source,owner,target.object);
+  const identity = { kind:'sdf',object:target.object,entity:target.entity,part:target.part,field };
+  let key = owner ?? row.part;
+  if (paint) {
+    const masks = Object.fromEntries(Object.entries(paint.masks ?? {}).filter(([,value])=>value!==null));
+    if (paint.material || Object.keys(masks).length)
+      identity.paint = { ...(paint.material && {material:paint.material}),masks };
+  }
+  if (generatedSurface) identity.generatedSurface=generatedSurface;
+  if (identity.paint || generatedSurface) {
+    const index=JSON.stringify([field,identity.paint,generatedSurface]);
+    if (!source.appearanceKeys.has(index)) source.appearanceKeys.set(index,{});
+    key=source.appearanceKeys.get(index);
+  }
+  return { key,identity,coordinate:owner?.sourceLocal?.(rest) ?? rest };
 }
 
 function editableSource(field) {
@@ -98,11 +195,31 @@ function editableSource(field) {
   }};
 }
 
-function rasterize(world, data, settings, {w,h,rayAt,near,clip,visible,editable=[]}) {
-  const {sources,rows} = bind(world,data,settings);
+function rasterize(world, data, settings, {w,h,rayAt,near,clip,visible,sourceBinding,captureRestNormal=false,allow,editable=[],trackSdf,coverage,overrideRows}) {
+  const {sources,rows} = bind(world,data,settings,allow,sourceBinding || trackSdf,coverage,overrideRows);
   for (const field of editable) {
+    if (allow && !allow({object:field.objectId})) continue;
     if (field.materials.some(material=>settings.candidates({object:field.objectId,entity:field.objectId,material})))
       sources.push(editableSource(field.trace));
+  }
+  if (trackSdf) for (const source of sources) {
+    function register(object,owner) {
+      const field = fieldAddress(source,owner,object);
+      if (!field) return;
+      trackSdf(field,rest=>{
+        const point = source.motion?.point(...rest) ?? rest;
+        if (!(Math.abs(source.distance(...point)) <= settings.epsilon*2) ||
+            source.accepts && !source.accepts(...point)) return null;
+        if (owner) {
+          const { body,owner:materialOwner } = source.locate(...point);
+          if ((body ?? materialOwner) !== owner) return null;
+        }
+        return point;
+      });
+    }
+    if (source.parts) {
+      for (const owner of source.parts.keys()) register(ownerLabel(owner).object,owner);
+    } else register(source.objectId);
   }
   if (!sources.length) return null;
   const hits = new Array(w*h), samples=[];
@@ -110,11 +227,11 @@ function rasterize(world, data, settings, {w,h,rayAt,near,clip,visible,editable=
     const ray=rayAt(x+.5,y+.5);
     let closest;
     for (const source of sources) {
-      const hit=trace(source,ray,near,closest?.z ?? 400,settings,clip,visible,x,y);
+      const hit=trace(source,ray,near,closest?.z ?? 400,settings,clip,visible,x,y,sourceBinding,captureRestNormal);
       if (hit && (!closest || closest.z>hit.z)) closest=hit;
     }
     if (!closest) continue;
-    const sample={...closest,p,alpha:1,sdf:true,objectPosition:closest.position,
+    const sample={...closest,p,alpha:1,sdf:true,
       ...(closest.row.i<0 && {surface:true,color:closest.row.color,objectId:closest.row.target.object,
         materialId:closest.row.target.material})};
     samples.push(sample);

@@ -94,7 +94,7 @@
         (tone.velocity*(note.velocity-.65)+24*(brightness-.5))/12;
       const amount=tone.envAmount/12, gain=norm*note.velocity**.82;
       const highGuard=(maximum+widthSpeed)>.42*rate;
-      return {duration:gate+amp.release,signal(t) {
+      return {duration:gate+amp.release,extendGate(next){gate=next;return gate+amp.release;},signal(t) {
         const turn=phase(note,t);
         const current=highGuard ? frequency+(glide ? (start-frequency)*Math.max(0,1-t/glide) : 0)+
           vibratoHz*Math.sin(t*tau*5.2) : 0;

@@ -33,7 +33,7 @@ function readFormat(bytes,start,size) {
   return { kind, bits, align, sampleRate, channels };
 }
 
-function decode(source, { metadata = false } = {}) {
+function decode(source, { metadata = false, preserveFloatRange = false } = {}) {
   if (!(source instanceof Uint8Array)) throw new TypeError('WAV decoding needs bytes');
   const bytes = Buffer.from(source.buffer, source.byteOffset, source.byteLength);
   if (bytes.length < 12 || bytes.length > maxBytes || bytes.toString('ascii', 0, 4) !== 'RIFF' ||
@@ -69,16 +69,16 @@ function decode(source, { metadata = false } = {}) {
   const samples = new Float64Array(count), signedScale = 2 ** (bits - 1);
   let i = 0;
   for (const [start, length] of chunks) for (let at = start; at < start + length; at += stride) {
-    samples[i++] = readSample(bytes,at,kind,bits,stride,signedScale);
+    samples[i++] = readSample(bytes,at,kind,bits,stride,signedScale,preserveFloatRange);
   }
   return { sampleRate, channels, samples, ...(bwf && { bwf }) };
 }
 
-function readSample(bytes,at,kind,bits,stride,signedScale) {
+function readSample(bytes,at,kind,bits,stride,signedScale,preserveFloatRange = false) {
   const n = kind === 3 ? bits === 32 ? bytes.readFloatLE(at) : bytes.readDoubleLE(at) :
     bits === 8 ? (bytes[at] - 128) / 128 : bytes.readIntLE(at, stride) / signedScale;
   if (!Number.isFinite(n)) throw new RangeError('WAV contains a nonfinite PCM sample');
-  return Math.max(-1, Math.min(1, n));
+  return kind===3&&preserveFloatRange?n:Math.max(-1, Math.min(1, n));
 }
 
 const encodings = Object.freeze({ pcm8: [1, 8], pcm16: [1, 16], pcm24: [1, 24], pcm32: [1, 32],

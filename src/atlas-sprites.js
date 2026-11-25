@@ -3,6 +3,7 @@ const AtlasSprites = (() => {
   const drawing=typeof FrameComposite==='undefined'?require('./frame-composite.js'):FrameComposite;
   const cels=typeof SpriteCels==='undefined'?require('./sprite-cels.js'):SpriteCels;
   const shells=typeof ShadowShell==='undefined'?require('./shadow-shell.js'):ShadowShell;
+  const reprojection=typeof AtlasViewReprojection==='undefined'?require('./atlas-view-reprojection.js'):AtlasViewReprojection;
   const cutouts=typeof SpriteCutoutMipmaps==='undefined'?require('./sprite-cutout-mipmaps.js'):SpriteCutoutMipmaps;
   const assetBrand=Symbol.for('ink-studio.sprite-atlas'), placedBrand=Symbol.for('ink-studio.atlas-placement');
   const dot=(a,b)=>a[0]*b[0]+a[1]*b[1]+a[2]*b[2];
@@ -134,12 +135,14 @@ const AtlasSprites = (() => {
     const { metadata:m,images }=source??{};
     const { width,height,scenery:painted,frames=painted===undefined?undefined:[{rect:{x:0,y:0,width,height}}],
       encodings={},normalSpace=typeof encodings.normal==='string'?'asset':'view',
-      emissionMode=typeof encodings.emission==='string'?'baked':'add', depthFormat='rgb24',outputPalette }=m??{};
+      emissionMode=typeof encodings.emission==='string'?'baked':'add', depthFormat='rgb24',outputPalette,splatFitRevision }=m??{};
     if (!integer(width,1,8192)||!integer(height,1,8192)||!Array.isArray(frames)||!frames.length||frames.length>32768)
       throw new RangeError('Sprite atlas needs valid dimensions and view frames');
     if (!['view','asset'].includes(normalSpace)||!['baked','add'].includes(emissionMode)||!['rgb24','gray'].includes(depthFormat))
       throw new RangeError('Invalid sprite atlas map encoding');
-    const cutoutMipmaps=cutouts.prepare(m.cutoutMipmaps);
+    if (splatFitRevision !== undefined && (typeof splatFitRevision !== 'string' || !/^[a-f0-9]{64}$/.test(splatFitRevision)))
+      throw new TypeError('Invalid sprite atlas splat fit revision');
+    const cutoutMipmaps=cutouts.prepare(m.cutoutMipmaps), viewBlend=reprojection.mode(m.viewBlend);
     if (cutoutMipmaps && painted !== undefined) throw new TypeError('Cutout mipmaps need a card or impostor atlas');
     if (outputPalette!==undefined && (!Array.isArray(outputPalette) || !outputPalette.length || outputPalette.length>64 ||
         !Array.from(outputPalette).every(color=>integer(color,0,0xffffff))))
@@ -172,7 +175,7 @@ const AtlasSprites = (() => {
       .5*range[0]+.5*range[1] : 0;
     const groups=new Map(), timing=[], fps=m.fps??12;
     for (const entry of frames) {
-      const {frame=0,direction,yaw=0,pitch=m.pitch??0,rect,unitsPerPixel=m.unitsPerPixel??1,
+      const {frame=0,direction,yaw=0,pitch=m.pitch??0,rect,handoff,anchors,unitsPerPixel=m.unitsPerPixel??1,
         depthOrigin=m.depthOrigin??legacyOrigin}=entry??{};
       const {x,y,width:w,height:h}=rect??{};
       if (!integer(frame,0,32767)||!integer(x,0,width-1)||!integer(y,0,height-1)||
@@ -180,11 +183,17 @@ const AtlasSprites = (() => {
         throw new RangeError('Sprite atlas view rectangle or frame is out of range');
       if (cutoutMipmaps && w*h > cutouts.pixelLimit)
         throw new RangeError('Cutout mipmaps support up to 262144 pixels per view');
+      if (handoff!==undefined&&!['blend','exact'].includes(handoff))
+        throw new TypeError('Sprite view handoff must be blend or exact');
+      if (anchors!==undefined&&(Object.getPrototypeOf(anchors??{})!==Object.prototype||!anchors||
+          Object.values(anchors).some(at=>!Array.isArray(at)||at.length!==2||!Array.from(at).every(Number.isFinite))))
+        throw new TypeError('Sprite view anchors need finite XY positions');
       const pivot=entry.pivot??{x:w*.5,y:h*.5};
       const view={
         rect:{x,y,width:w,height:h}, pivot:{x:finite(pivot.x,'Sprite pivot X'),y:finite(pivot.y,'Sprite pivot Y')},
         unitsPerPixel:positive(unitsPerPixel,'Sprite units per pixel'), depthOrigin:finite(depthOrigin,'Sprite depth origin'),
-        frame, yaw:finite(yaw,'Sprite yaw'), pitch:finite(pitch,'Sprite pitch'), direction
+        frame, yaw:finite(yaw,'Sprite yaw'), pitch:finite(pitch,'Sprite pitch'), direction,
+        ...(handoff!==undefined&&{handoff}),...(anchors&&{anchors:structuredClone(anchors)})
       };
       view.basis=basis(view.yaw,view.pitch);
       if (!groups.has(frame)) groups.set(frame,[]);
@@ -232,6 +241,28 @@ const AtlasSprites = (() => {
         views.reduce((best,view)=>dot(view.basis.normal,direction)>dot(best.basis.normal,direction)?view:best);
       return edits?.held.get(view)??view;
     }
+    function authoredView(frame,index) {
+      const view = groups.get(frame)?.[index];
+      if (!view) throw new RangeError('Unknown authored view of sprite pose '+frame);
+      return edits?.held.get(view) ?? view;
+    }
+    function readDepth(bytes,at,view) {
+      const sample = depthFormat === 'gray' ? bytes[at]/255 :
+        (bytes[at]*65536+bytes[at+1]*256+bytes[at+2])/0xffffff;
+      return depthLo+depthSpan*sample-view.depthOrigin;
+    }
+
+    function bakedPoint(view,x,y) {
+      if (scenery || !maps.depth || edits?.edited.has(view) ||
+          !integer(x,0,view.rect.width-1) || !integer(y,0,view.rect.height-1)) return null;
+      const { rect,pivot,basis,unitsPerPixel } = view;
+      const at = ((rect.y+y)*width+rect.x+x)*4;
+      if (!maps.color[at+3] || !maps.depth[at+3]) return null;
+      const u = (x+.5-pivot.x)*unitsPerPixel, v = (pivot.y-y-.5)*unitsPerPixel;
+      const depth = readDepth(maps.depth,at,view);
+      return basis.right.map((n,i)=>n*u+basis.up[i]*v-basis.normal[i]*depth);
+    }
+
     function sample(view,x,y,channels,out,band,packet) {
       const rect = view.rect, inside = x >= 0 && y >= 0 && x < rect.width && y < rect.height;
       const transition = packet && edits?.transition?.read(packet,x,y);
@@ -254,8 +285,7 @@ const AtlasSprites = (() => {
       if (channels.depth) {
         if (scenery) out.depth=scenery.depths[scenery.bandAt(index)];
         else if (depth?.[d+3] && (art?.depth || keepBase && (!edit || bakedAlpha || patch.depth)))
-          out.depth=depthLo+depthSpan*(depthFormat==='gray'?depth[d]/255:
-            (depth[d]*65536+depth[d+1]*256+depth[d+2])/0xffffff)-view.depthOrigin;
+          out.depth=readDepth(depth,d,view);
         else if (!keepBase) out.depth=transition.extensionDepth??0;
         else if (!bakedAlpha && edit) out.depth=edit.extensionDepth??0;
       }
@@ -300,7 +330,7 @@ const AtlasSprites = (() => {
     }
     const editedDepth=edits&&Array.from(edits.edited.values()).some(edit=>edit.maps.depth||edit.extensionDepth!==undefined);
     const transition=edits?.transition;
-    return Object.freeze({[assetBrand]:true,select,sample,effect,...(edits?.fringe&&{fringe:edits.fringe}),
+    return Object.freeze({[assetBrand]:true,select,authoredView,sample,effect,bakedPoint,...(edits?.fringe&&{fringe:edits.fringe}),
       ...(bump&&{bumpHeight:(x,y)=>integer(x,0,width-1)&&integer(y,0,height-1) ? bump.heights[y*width+x] : 0}),
       ...(cutoutMipmaps&&{cutoutMipmaps,cutoutLevel:cutouts.level,cutoutSample:cutouts.sample,
         cutoutImage(view,level=0) {
@@ -310,7 +340,11 @@ const AtlasSprites = (() => {
       ...(transition&&{transition:transition.frame}),
       ...(transition?.silhouetteIds.length&&{silhouettes:transition.silhouetteIds,
         silhouette:(view,time,id)=>transition.silhouetteIds.includes(id) ? transition.frame(view,time,id) : null}),
-      playback,
+      playback, viewBlend, ...(splatFitRevision && {splatFitRevision}),
+      ...(maps.depth && !scenery && { reproject(primary,direction,options) {
+        const views=groups.get(primary.frame).map(view=>edits?.held.get(view)??view);
+        return reprojection.resolve(this,primary,views,direction,{...options,basis});
+      } }),
       snapshot:()=>({metadata:structuredClone(metadata),images:structuredClone(sourceMaps)}),
       width,height,normalSpace,emissionMode,swatches,largestView:frames.reduce((max,{rect})=>Math.max(max,rect.width*rect.height),0),hasDepth:Boolean(maps.depth||scenery||editedDepth||edits?.transition?.hasDepth),sceneryPlanes:scenery?.planes});
   }
@@ -318,7 +352,7 @@ const AtlasSprites = (() => {
   function place(value) {
     if (value?.[placedBrand]) return value;
     const { atlas,at,mode,yaw=0,scale=1,opacity=1,frame,playback,depth=true,lighting=true,emission=true,
-      nativePixels=false,pixelOffset,visibleAt,objectId,materialId,budgetLayer,budgetId,budgetPriority=0,clock='animation',shadowShell,
+      nativePixels=false,pixelOffset,visibleAt,objectId,materialId,partId,budgetLayer,budgetId,budgetPriority=0,clock='animation',shadowShell,
       castsShadow=shadowShell!==undefined&&shadowShell!==false }=value??{};
     if ((budgetLayer !== undefined && (typeof budgetLayer !== 'string' || !budgetLayer.trim())) ||
         (budgetId !== undefined && (typeof budgetId !== 'string' || !budgetId.trim())) || !Number.isFinite(budgetPriority))
@@ -338,10 +372,11 @@ const AtlasSprites = (() => {
     if (shadowShell!==undefined&&shadowShell!==false&&!castsShadow)
       throw new RangeError('A scenery shadow shell needs a shadow-casting placement');
     const shell=castsShadow&&shells.prepare(shadowShell,asset.width,asset.height);
-    if (objectId!==undefined || materialId!==undefined) {
+    if (objectId!==undefined || materialId!==undefined || partId!==undefined) {
       const selectors = typeof TargetSelectors === 'undefined' ? require('./target-selectors.js') : TargetSelectors;
       if (objectId!==undefined) selectors.prepare({object:objectId});
       if (materialId!==undefined) selectors.prepare({material:materialId});
+      if (partId!==undefined) selectors.prepare({object:objectId,part:partId});
     }
     const anchor=typeof at==='function'?at:Object.freeze(vector(at,'Sprite atlas anchor'));
     return Object.freeze({[placedBrand]:true, atlas:asset, at:anchor, mode:placementMode,
@@ -352,7 +387,7 @@ const AtlasSprites = (() => {
       ...(budgetPriority!==0&&{budgetPriority}),
       ...(castsShadow&&{castsShadow}),...(shell&&{shadowShell:shell}),
       ...(visibleAt&&{visibleAt}),...(playback!==undefined&&{frameAt:asset.playback(playback)}),
-      ...(objectId!==undefined&&{objectId}),...(materialId!==undefined&&{materialId}) });
+      ...(objectId!==undefined&&{objectId}),...(materialId!==undefined&&{materialId}),...(partId!==undefined&&{partId}) });
   }
   function placements(authored,override) {
     const source=override===true?authored:override??authored;
@@ -361,6 +396,13 @@ const AtlasSprites = (() => {
     return source.map(place);
   }
 
-  return Object.freeze({compile,place,placements,basis,nativeOrigin,dot,vector});
+  function reproject(placement, primary, direction, { blend, distance=Infinity, pixelsPerTexel, time } = {}) {
+    const {atlas,depth,scale}=placement, selected=blend??atlas.viewBlend;
+    if (selected!=='depth-reprojected' || !depth) return null;
+    return atlas.reproject?.(primary,direction,{distance:distance/scale,pixelsPerTexel,time}) ?? null;
+  }
+
+  return Object.freeze({compile,place,placements,basis,nativeOrigin,dot,vector,reproject,
+    viewBlend:reprojection.mode, reprojectionPixelLimit:reprojection.pixelLimit, sampleReprojected:reprojection.sample});
 })();
 if (typeof module !== 'undefined') module.exports = AtlasSprites;

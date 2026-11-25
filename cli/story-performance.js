@@ -52,7 +52,7 @@ function captions(lines, T) {
     const start = T.roundDown(T.mul(T.read(row.timecode), thousand));
     const end = -T.roundDown(T.mul(T.read(row.endTimecode), negative));
     const body = row.text.split(/\r\n?|\n/).map(line => line.trim()).filter(Boolean).join('\n');
-    return row.id + '\n' + timestamp(start) + ' --> ' + timestamp(end) + '\n' + escape(row.speaker + ': ' + body) + '\n\n';
+    return row.id + '\n' + timestamp(start) + ' --> ' + timestamp(end) + '\n' + escape(row.speaker === undefined ? body : row.speaker + ': ' + body) + '\n\n';
   }).join('');
 }
 

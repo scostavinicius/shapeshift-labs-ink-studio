@@ -19,6 +19,15 @@
     check(table(rooms,1,8)&&table(doorways,0,16)&&finite(wet,0,1)&&finite(smoothing,0,1),
       'Invalid room response rooms, doorways, wet gain or smoothing');
     const assets=new Set(), regions=new Map();
+    function layers(probe){
+      const {impulse}=probe;
+      return typeof impulse==='string'?[[impulse,1]]:[[impulse.early,impulse.earlyGain??1],[impulse.tail,impulse.tailGain??1]];
+    }
+    function validImpulse(value){
+      return assetName(value)||fields(value,['early','tail','earlyGain','tailGain'])&&
+        assetName(value.early)&&assetName(value.tail)&&value.early!==value.tail&&
+        finite(value.earlyGain??1,0,1)&&finite(value.tailGain??1,0,1);
+    }
     for(const name of Object.keys(rooms).sort()){
       const room=rooms[name];
       check(fields(room,['min','max','probes'])&&box(room)&&Array.isArray(room.probes)&&
@@ -26,12 +35,12 @@
       'Invalid or overlapping room response room '+name);
       const positions=new Set();
       for(const probe of room.probes){
-        check(fields(probe,['at','impulse'])&&point(probe.at)&&contains(room,probe.at)&&assetName(probe.impulse),
+        check(fields(probe,['at','impulse'])&&point(probe.at)&&contains(room,probe.at)&&validImpulse(probe.impulse),
           'Invalid room response probe in '+name);
         const key=probe.at.join(',');
         check(!positions.has(key),'Coincident room response probes in '+name);
         positions.add(key);
-        assets.add(probe.impulse);
+        for(const [asset] of layers(probe))assets.add(asset);
       }
       regions.set(name,room);
     }
@@ -55,17 +64,19 @@
     const definition=freeze({assets:[...assets].sort(),smoothing});
     function sample(position){
       const weights=new Map();
-      const add=(asset,gain)=>weights.set(asset,(weights.get(asset)??0)+gain);
+      const add=(probe,gain)=>{
+        for(const [asset,level] of layers(probe))if(level)weights.set(asset,(weights.get(asset)??0)+gain*level);
+      };
       function feed(room,level){
         if(!level)return;
         const distances=room.probes.map(({at})=>at.reduce((sum,n,i)=>sum+(n-position[i])**2,0));
         const nearest=Math.min(...distances);
         if(nearest===0){
-          add(room.probes[distances.indexOf(0)].impulse,level);
+          add(room.probes[distances.indexOf(0)],level);
           return;
         }
         const inverse=distances.map(d=>nearest/d), sum=inverse.reduce((a,b)=>a+b,0);
-        room.probes.forEach(({impulse},i)=>add(impulse,level*inverse[i]/sum));
+        room.probes.forEach((probe,i)=>add(probe,level*inverse[i]/sum));
       }
       let room=null, doorway=null;
       if(position){

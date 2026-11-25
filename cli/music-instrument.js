@@ -5,7 +5,7 @@ const {resolveSampleAssets}=require('./music-sample-assets.js');
 const {readAudioSource}=require('./sound-source.js');
 
 module.exports=function instrumentCommand([mode,file,config],opt,kit) {
-  if (['analyze-session','build-session','audition-session','audition-session-takes'].includes(mode))
+  if (['align-session','analyze-session','build-session','audition-session','audition-session-takes'].includes(mode))
     return recordingSession(mode,file,config,opt,kit);
   if (['discover','keep-discovery'].includes(mode)) return discovery(mode,file,config,opt,kit);
   if (['workshop','audition-workshop','keep-workshop'].includes(mode)) {
@@ -92,8 +92,9 @@ function recordingSession(mode,file,config,opt,kit) {
     relative(ref) : Object.fromEntries(Object.entries(ref).map(([key,value])=>
       [key,['wav','edit','print'].includes(key) ? relative(value) : value]))]));
   let output;
-  if (mode==='analyze-session' || mode==='build-session') {
-    const result=mode==='analyze-session' ? A.analyze(recipe.session,assets):A.build(recipe.session,assets,settings);
+  if (mode==='align-session' || mode==='analyze-session' || mode==='build-session') {
+    const result=mode==='align-session' ? A.align(recipe.session,assets,settings) :
+      mode==='analyze-session' ? A.analyze(recipe.session,assets) : A.build(recipe.session,assets,settings);
     const plan=path.join(dir,'session.json');
     json(plan,{session:result.session ?? result.value,assets:relocated(),
       ...(recipe.library!==undefined && {library:relative(recipe.library)})});

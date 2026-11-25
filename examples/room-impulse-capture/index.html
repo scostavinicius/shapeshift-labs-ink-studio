@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Room impulse capture · Ink Studio</title>
+<style>
+  :root{color-scheme:dark;--ink:#e9ede3;--dim:#adbeba;--base:#11191a;--panel:#1a2526;--rule:#425858;--early:#86e3c4;--tail:#ffbc81}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--base);color:var(--ink);font:16px/1.5 system-ui,sans-serif}
+  main{max-width:1000px;margin:auto;padding:clamp(18px,5vw,55px) clamp(16px,4vw,38px)}
+  h1{font:normal clamp(41px,7vw,72px)/1.03 Georgia,serif;letter-spacing:-.045em;margin:0 0 12px}
+  h2{font:normal 1.48rem/1.2 Georgia,serif;margin:0 0 12px}
+  p{color:var(--dim);margin:0}
+  section{padding:clamp(15px,3vw,26px);background:var(--panel);border:1px solid var(--rule);border-radius:12px;margin-top:20px}
+  .toolbar,.buttons,.metrics{display:flex;gap:9px;flex-wrap:wrap;align-items:center}
+  .toolbar label{display:flex;align-items:center;gap:8px}
+  button,select,input[type=number]{background:#111b1c;border:1px solid var(--rule);border-radius:5px;color:var(--ink);padding:7px 10px;font:inherit}
+  button{cursor:pointer} button:disabled{opacity:.45;cursor:default} button.primary{background:var(--early);border-color:var(--early);color:#102422;font-weight:650}
+  button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--tail);outline-offset:2px}
+  #capture-status,#edit-status{min-height:1.5em;margin-top:8px}
+  .fields{display:grid;grid-template-columns:repeat(auto-fit,minmax(175px,1fr));gap:12px 18px;margin:12px 0}
+  .fields label{display:flex;flex-direction:column;gap:4px}.fields input{width:100%}
+  .metrics{margin:13px 0;gap:8px 24px;font-size:.9rem}
+  .metrics p{display:flex;flex-direction:column}
+  .metrics strong{font-size:1.22rem;color:var(--ink);font-variant-numeric:tabular-nums}
+  canvas{width:100%;height:128px;display:block;background:#111b1c;border-radius:5px}
+  .legend{display:flex;flex-wrap:wrap;gap:6px 16px;margin:8px 0 12px;color:var(--dim);font-size:.85rem}
+  .early{color:var(--early)} .tail{color:var(--tail)}
+  .mix{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin:0 0 16px}
+  .mix label{display:grid;grid-template-columns:1fr max-content;align-items:center}
+  .mix input{width:100%;grid-column:1 / -1;accent-color:var(--early)} .mix .tail input{accent-color:var(--tail)}
+  aside{margin-top:12px}
+  details{margin-top:12px;color:var(--dim)} summary{cursor:pointer;color:var(--ink)}
+  .hint{font-size:.9rem;margin-top:8px}.error{color:#ffb4a5}
+  [hidden]{display:none !important}
+</style>
+<main>
+  <header>
+    <h1>Room impulse capture</h1>
+    <p>Recover a room response from a sweep, remove interface delay, and mix the early reflections and tail independently.</p>
+  </header>
+  <section aria-labelledby="capture-title">
+    <h2 id="capture-title">Capture</h2>
+    <div class="toolbar">
+      <button id="example">Load simulated stairwell</button>
+      <label>Inputs <select id="layout">
+        <option value="dual">Mic left · loopback right</option>
+        <option value="reference">Loopback only</option>
+        <option value="mono">Room mic · mono</option>
+        <option value="stereo">Room mics · stereo</option>
+      </select></label>
+      <button id="record">Play sweep and record</button>
+      <button id="cancel" hidden>Cancel capture</button>
+    </div>
+    <p class="hint" id="input-hint"></p>
+    <p id="capture-status" role="status"></p>
+    <details>
+      <summary>Open a saved room asset</summary>
+      <div class="fields">
+        <label>Room edit JSON <input type="file" accept=".json" id="edit-file"></label>
+        <label>Response WAV <input type="file" accept=".wav,audio/wav" id="response-file"></label>
+      </div>
+      <button id="open-asset">Open asset</button>
+    </details>
+  </section>
+  <section id="room-editor" aria-labelledby="edit-title" hidden>
+    <h2 id="edit-title">Room response</h2>
+    <div class="metrics">
+      <p>Interface delay removed <strong id="latency"></strong></p>
+      <p>Acoustic arrival retained <strong id="arrival"></strong></p>
+      <p>Recording <strong id="recording-kind"></strong></p>
+    </div>
+    <canvas id="wave" role="img" aria-label="Early reflections and tail by time after interface latency correction"></canvas>
+    <div class="legend"><span class="early">Early reflections</span><span class="tail">Tail</span><span>First 240 ms after correction</span></div>
+    <div class="fields">
+      <label>Direct arrival (ms) <input id="direct" type="number" min="0" step=".01"></label>
+      <label>Direct sound cut (ms) <input id="direct-cut" type="number" min="0" max="30" step=".1"></label>
+      <label>Time to tail (ms) <input id="split" type="number" min="5" max="500" step="1"></label>
+      <label>Crossfade (ms) <input id="crossfade" type="number" min="0" max="100" step="1"></label>
+      <label>Response end (ms) <input id="length" type="number" min="5" step=".01"></label>
+      <label>End fade (ms) <input id="end-fade" type="number" min="0" max="1000" step="1"></label>
+    </div>
+    <div class="mix">
+      <label class="early">Early level <output id="early-value">100%</output><input id="early" aria-label="Early reflection level" type="range" min="0" max="100" value="100"></label>
+      <label class="tail">Tail level <output id="tail-value">100%</output><input id="tail" aria-label="Reverb tail level" type="range" min="0" max="100" value="100"></label>
+    </div>
+    <div class="buttons" aria-label="Audition">
+      <button id="wet" class="primary">Play through room</button>
+      <button id="dry">Play dry strike</button>
+      <button id="sweep">Hear sweep</button>
+    </div>
+    <p id="edit-status" role="status"></p>
+    <details>
+      <summary>Save editable asset and layers</summary>
+      <p class="hint">Keep the room edit JSON beside the response WAV. The two layer WAVs can also be used directly in an Ink room probe.</p>
+      <div class="buttons">
+        <button data-save="edit">Room edit JSON</button>
+        <button data-save="response">Response WAV</button>
+        <button data-save="early">Early WAV</button>
+        <button data-save="tail">Tail WAV</button>
+      </div>
+    </details>
+  </section>
+</main>
+<script type="module" src="./studio.mjs"></script>
+</html>

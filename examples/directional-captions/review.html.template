@@ -1,0 +1,224 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pump House · Directional sound captions</title>
+<style>
+  :root{color-scheme:dark;--bg:#101721;--panel:#19232e;--border:#3b4a57;--text:#f4ecd8;--muted:#aab8c4;--gold:#ffc077;--teal:#9fddd7}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.5 system-ui,sans-serif}
+  main{max-width:1150px;margin:auto;padding:36px clamp(16px,5vw,52px) 32px}
+  h1,h2,p{margin:0}
+  h1{font:500 clamp(46px,8vw,77px)/.99 Georgia,serif;letter-spacing:-.045em}
+  h2{font-size:20px;line-height:1.13;margin:0 0 8px}
+  header{margin-bottom:21px}
+  header p:last-child{margin-top:9px;color:var(--muted)}
+  .eyebrow,#clock{font:650 11px/1.5 ui-monospace,monospace;letter-spacing:.12em;text-transform:uppercase}
+  .eyebrow{color:var(--teal);margin-bottom:9px}
+  .grid{display:grid;grid-template-columns:minmax(0,1.86fr) minmax(250px,1fr);gap:10px;align-items:stretch}
+  .screen,.details{border:1px solid var(--border);border-radius:4px;overflow:hidden;background:var(--panel)}
+  .map{position:relative;background:#172836}
+  canvas{display:block;width:100%;height:auto;image-rendering:pixelated}
+  #captions{position:absolute;bottom:18px;left:10px;right:10px;text-align:center;display:grid;justify-items:center;gap:3px;pointer-events:none}
+  #captions span{background:#101724f2;color:#fff3d5;padding:4px 9px;border:1px solid #52616a;border-radius:2px;font-weight:650;font-size:clamp(11px,1.7vw,17px)}
+  .transport{display:grid;grid-template-columns:auto 1fr auto;align-items:center;gap:8px;padding:10px}
+  .transport input{width:100%;accent-color:var(--gold);min-width:0}
+  #clock{white-space:nowrap;color:var(--gold)}
+  button{padding:6px 9px;border-radius:3px;border:1px solid var(--border);background:#263745;color:var(--text);font:650 13px system-ui,sans-serif;cursor:pointer}
+  button:focus-visible,input:focus-visible{outline:2px solid var(--gold);outline-offset:3px}
+  #play{color:#202622;background:var(--gold);border-color:var(--gold);min-width:61px}
+  .details{padding:14px;display:flex;flex-direction:column}
+  .markers{display:grid;gap:5px}
+  .markers button{display:grid;grid-template-columns:auto 1fr;align-items:baseline;gap:8px;width:100%;text-align:left;line-height:1.35}
+  .markers button.selected{border-color:var(--gold);color:var(--gold)}
+  time{font:600 11px ui-monospace,monospace;color:var(--teal);white-space:nowrap}
+  #evidence{margin:10px 0 7px;color:var(--muted);min-height:45px;font-size:13px}
+  footer{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:10px;margin-top:11px;color:var(--muted);font-size:13px}
+  footer div{display:flex;gap:6px;flex-wrap:wrap}
+  @media(max-width:740px){.grid{grid-template-columns:1fr}.details{min-height:270px}}
+  @media(max-width:420px){#captions{bottom:8px}.transport{gap:5px}}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">Ink Studio / Directional captions</p>
+    <h1>Pump House</h1>
+    <p>Play the soundtrack or jump to a sound. Captions follow the actual playback.</p>
+  </header>
+  <div class="grid">
+    <section class="screen" aria-label="Soundstage">
+      <div class="map">
+        <canvas id="stage" width="496" height="270" role="img" aria-label="Pump house map. The listener faces the top of the map in the left room."></canvas>
+        <div id="captions" aria-live="polite"></div>
+      </div>
+      <div class="transport">
+        <button id="play" type="button">Play</button>
+        <input id="cursor" aria-label="Soundtrack position" type="range" min="0" value="0" step=".01">
+        <output id="clock" for="cursor"></output>
+      </div>
+      <audio id="audio" preload="auto"></audio>
+    </section>
+    <section class="details" aria-labelledby="markers-title">
+      <h2 id="markers-title">Jump to a sound</h2>
+      <div id="markers" class="markers"></div>
+      <p id="evidence"></p>
+    </section>
+  </div>
+  <footer>
+    <label><input type="checkbox" id="enabled" checked> Show sound captions</label>
+    <div><button id="vtt" type="button">Save WebVTT</button><button id="ledger" type="button">Save caption evidence</button></div>
+  </footer>
+</main>
+<script>
+'use strict';
+const model = /* MODEL */ {}, {track,receipts} = model;
+const byId = id=>document.getElementById(id);
+const canvas=byId('stage'), ctx=canvas.getContext('2d'), audio=byId('audio'), slider=byId('cursor');
+const drawRect = (x,y,w,h,color)=>{ctx.fillStyle=color;ctx.fillRect(x,y,w,h);};
+const xy = point=>[Math.round(217+point[0]*40), Math.round(118+point[2]*27)];
+const mint='#9fddd7', amber='#ffc077', soft='#718b9a';
+const local = sample=>(sample-track.firstSample)/track.sampleRate;
+const secs = value=>value.toFixed(2)+' s';
+const total = local(track.endSample);
+const labels = {steps:'Bootstep burst',duct:'Overhead duct',bell:'Bell through hatch',cart:'Cart enters range'};
+const notes = {
+  steps:'Three admitted footsteps share one caption.',
+  duct:'The duct is above the listener.',
+  bell:'The open hatch is where the bell sound enters the hall.',
+  cart:'The cue dispatches before the cart is in range. The caption starts when the cart becomes audible.'
+};
+const unavailable = receipts.filter(row=>row.outcome==='muted'||row.outcome==='dropped');
+const blocked = unavailable.find(row=>row.reason==='blocked');
+const dropped = unavailable.find(row=>row.outcome==='dropped');
+const markers = track.captions.map(row=>({target:local(row.startSample),label:labels[row.rule],note:notes[row.rule]}));
+markers.push({target:local(blocked.requestedSample),label:'Bell behind sealed hatch',note:'The route was blocked and the bell contributed no caption.'});
+markers.push({target:local(dropped.requestedSample),label:'Dropped spanner cue',note:'The spanner exceeded its voice group limit. Only the admitted bell is captioned.'});
+markers.sort((a,b)=>a.target-b.target);
+let animation, lastCaption='';
+for (const [index,marker] of markers.entries()) {
+  const button=document.createElement('button'), time=document.createElement('time');
+  button.type='button';time.textContent=secs(marker.target);
+  button.append(time,marker.label);byId('markers').append(button);
+  button.addEventListener('click',()=>{
+    audio.currentTime=Math.min(total,marker.target+.035);
+    activate(index);sync();
+  });
+}
+function activate(index) {
+  for (const [i,button] of [...byId('markers').children].entries()) button.classList.toggle('selected',i===index);
+  byId('evidence').textContent=markers[index]?.note??'The muted bell and dropped spanner have no caption.';
+}
+activate(-1);
+function line(x,y,toX,toY,color,width=1,dash=[]) {
+  ctx.strokeStyle=color;ctx.lineWidth=width;ctx.setLineDash(dash);
+  ctx.beginPath();ctx.moveTo(x,y);ctx.lineTo(toX,toY);ctx.stroke();ctx.setLineDash([]);
+}
+function text(label,x,y,color=soft) {
+  ctx.font='bold 10px monospace';ctx.fillStyle=color;ctx.fillText(label,x,y);
+}
+function machine(x,y) {
+  drawRect(x-23,y-10,48,33,'#172434');drawRect(x-24,y-13,48,31,'#606a67');
+  drawRect(x-22,y-11,44,25,'#425763');drawRect(x-21,y-11,4,23,'#839083');
+  drawRect(x-14,y-7,25,10,'#142632');drawRect(x-12,y-5,20,6,'#546d68');
+  for(let i=0;i<4;i++)drawRect(x-11+i*5,y-4,2,3,i<2?'#d2a36f':'#283d3e');
+  for(let i=0;i<4;i++)drawRect(x+15,y-7+i*5,5,2,'#8e8c72');
+  drawRect(x-19,y+14,8,8,'#334e52');drawRect(x+10,y+14,8,8,'#334e52');
+}
+function backdrop(closed) {
+  drawRect(0,0,496,270,'#162734');
+  drawRect(21,19,445,214,'#0f1d28');drawRect(22,16,445,213,'#435b68');
+  drawRect(26,21,436,202,'#243845');drawRect(225,22,235,200,'#2c404b');
+  for(let i=0;i<590;i++) {
+    const x=28+(i*43+11)%429,y=21+(i*71+7)%200;
+    drawRect(x,y,1+i%5,1,['#314956','#395361','#233744'][i%3]);
+  }
+  for(let y=32;y<222;y+=18) {line(26,y,460,y,'#20323e');line(26,y+1,461,y+1,'#39545f');}
+  for(let x=31;x<461;x+=28) {drawRect(x,20,2,2,'#8c9490');drawRect(x,220,2,2,'#829192');}
+  drawRect(210,21,16,201,'#142936');drawRect(211,21,11,201,'#617783');
+  drawRect(213,21,2,201,'#a1aaa0');drawRect(224,21,3,201,'#101b29');
+  if (!closed) {
+    drawRect(210,90,17,44,'#344c54');line(211,91,226,91,mint);line(211,133,226,133,mint);
+    for(let y=95;y<132;y+=5)drawRect(214,y,8,1,'#547179');
+  } else {
+    drawRect(211,92,12,40,'#77564a');
+    for(let y=96;y<130;y+=4)drawRect(212,y,10,1,'#af7950');
+  }
+  text('ACCESS HALL',38,40,'#b5c2bc');text('PUMPS',246,40,'#b5c2bc');
+  text(closed?'HATCH SEALED':'HATCH OPEN',234,105,closed?amber:mint);
+  for(const y of [69,172]) {
+    drawRect(251,y,119,4,'#6f6c5c');drawRect(251,y,119,1,'#b18b62');
+    for(let i=0;i<4;i++)drawRect(255+i*25,y-1,4,6,'#899699');
+  }
+  machine(350,75);machine(381,163);
+  drawRect(49,69,93,5,'#627781');drawRect(47,70,90,1,'#949e97');
+  drawRect(75,67,4,8,'#9a9678');drawRect(132,67,4,8,'#9a9678');
+  const [x,y]=xy([-2,1,0]);
+  drawRect(x-8,y-5,16,15,'#182d38');drawRect(x-4,y-4,8,12,mint);drawRect(x-3,y-8,6,4,'#e6e8cc');
+  line(x,y-10,x,y-22,mint);line(x,y-22,x-4,y-17,mint);line(x,y-22,x+4,y-17,mint);
+  text('LISTENER',x-24,y+25,mint);
+}
+function draw(sample) {
+  const closed=sample>=Math.round(4.6*track.sampleRate);
+  backdrop(closed);
+  const flashes=receipts.filter(row=>row.caption&&sample>=row.caption.sample&&sample-row.caption.sample<track.sampleRate*.68);
+  for (const row of flashes) {
+    const point=row.spatialSource?.actualPosition, age=(sample-row.caption.sample)/track.sampleRate;
+    if(!point)continue;
+    const [x,y]=xy(point), d=8+age*28;
+    ctx.strokeStyle=amber;ctx.lineWidth=1;ctx.globalAlpha=Math.max(0,1-age/.68);
+    ctx.beginPath();ctx.arc(x,y,d,0,Math.PI*2);ctx.stroke();ctx.globalAlpha=1;
+    drawRect(x-2,y-2,5,5,amber);
+    if(row.caption.opening) {
+      line(x,y,217,113,amber,1,[3,3]);line(217,113,...xy([-2,1,0]),amber,1,[3,3]);
+    }
+    if(row.caption.direction==='above')text('OVERHEAD',x+14,y-9,amber);
+  }
+}
+function sync() {
+  const time=Math.min(total,audio.currentTime);
+  const sample=track.firstSample+Math.round(time*track.sampleRate);
+  slider.value=time;
+  byId('clock').textContent=secs(time)+' / '+secs(total);
+  const active=byId('enabled').checked?track.captions.filter(row=>row.startSample<=sample&&row.endSample>sample):[];
+  const signature=active.map(row=>row.id).join(',');
+  if(signature!==lastCaption) {
+    lastCaption=signature;
+    byId('captions').replaceChildren(...active.slice().sort((a,b)=>b.priority-a.priority).map(row=>{
+      const span=document.createElement('span');span.textContent=row.text;return span;
+    }));
+  }
+  draw(sample);
+}
+function frame() {
+  sync();
+  animation=audio.paused?undefined:requestAnimationFrame(frame);
+}
+const bytes=atob(model.audio);
+audio.src=URL.createObjectURL(new Blob([Uint8Array.from(bytes,char=>char.charCodeAt(0))],{type:'audio/wav'}));
+slider.max=total;
+slider.addEventListener('input',()=>{audio.currentTime=Number(slider.value);activate(-1);sync();});
+byId('enabled').addEventListener('change',sync);
+byId('play').addEventListener('click',async()=>{
+  if(!audio.paused){audio.pause();return;}
+  if(audio.ended)audio.currentTime=0;
+  try{await audio.play();}
+  catch{byId('evidence').textContent='Playback could not start. Try Play again.';}
+});
+audio.addEventListener('playing',()=>{
+  byId('play').textContent='Pause';
+  if(animation===undefined) frame();
+});
+audio.addEventListener('pause',()=>{byId('play').textContent='Play';sync();});
+audio.addEventListener('seeked',sync);
+function save(name,body,type) {
+  const url=URL.createObjectURL(new Blob([body],{type})), a=document.createElement('a');
+  a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+byId('vtt').addEventListener('click',()=>save('captions.vtt',model.wave,'text/vtt'));
+byId('ledger').addEventListener('click',()=>save('captions.json',JSON.stringify(track,null,2)+'\n','application/json'));
+sync();
+</script>
+</body>
+</html>

@@ -45,7 +45,7 @@ function blocks(occluder, from, to, time) {
   return distance > 1e-6 && occluder(...from, delta.map(n => n / distance), distance, time);
 }
 
-function frame(world, override, { time, wind, windAt, localWind, weather, lamps, localLighting, impacts, exposure }) {
+function frame(world, override, { time, wind, windAt, localWind, weather, lamps, localLighting, impacts, exposure, keep }) {
   if (!world.precipitationRanges?.length) return null;
   const config = settings(world.precipitation, override);
   // Tag the authored rows even in the disabled view so they disappear together.
@@ -103,6 +103,7 @@ function frame(world, override, { time, wind, windAt, localWind, weather, lamps,
     for (const { first, end, profile } of world.precipitationRanges) {
       if (profile && !weather) continue;
       for (let row = first; row < end; row++) {
+        if (keep && !keep[row]) continue;
         const q = row * 16, data = world.data;
         if (Math.round(data[q + 11]) % 16 !== 2 || !data[q + 3]) continue;
         const x = data[q], y = data[q + 1], z = data[q + 2];

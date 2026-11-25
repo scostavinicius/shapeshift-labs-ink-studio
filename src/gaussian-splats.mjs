@@ -298,7 +298,7 @@ export async function decodeGaussianSplat(input, options) {
   throw new Error('Unsupported Gaussian asset. Expected PLY or a file with a valid SPZ signature.');
 }
 
-function shBasis(direction, degree) {
+export function shBasis(direction, degree) {
   if (!direction) return null;
   if (direction.length !== 3 || !Array.from(direction).every(finite) || !Math.hypot(...direction))
     throw new TypeError('Gaussian viewDirection must be a nonzero XYZ vector');
@@ -320,31 +320,94 @@ function shBasis(direction, degree) {
   return basis;
 }
 
-function colorChannel(dc, sh, index, channel, basis) {
+// Five Gauss–Legendre latitudes and nine equally spaced longitudes
+// integrate products of the real basis through degree four.
+const harmonicSamples = new Map();
+export function gaussianHarmonicRotation(axes, degree) {
+  const terms = (degree+1)**2 - 1;
+  if (!terms || axes.every((axis,i)=>axis.every((v,j)=>Math.abs(v-(i===j ? 1 : 0))<1e-9))) return null;
+  if (!harmonicSamples.has(degree)) {
+    const samples = [], step = 2*Math.PI/9;
+    for (const [z,weight] of [[-.906179845938664,.236926885056189],[-.538469310105683,.478628670499366],
+      [0,.568888888888889],[.538469310105683,.478628670499366],[.906179845938664,.236926885056189]]) {
+      const r = Math.sqrt(1-z*z);
+      for (let k=0;k<9;k++) {
+        const ray=[r*Math.cos(k*step),r*Math.sin(k*step),z];
+        samples.push({ray,projected:shBasis(ray,degree).map(value=>value*weight*step)});
+      }
+    }
+    harmonicSamples.set(degree,samples);
+  }
+  const result = Array.from({length:terms},()=>new Float64Array(terms));
+  for (const {ray,projected} of harmonicSamples.get(degree)) {
+    const local = axes.map(axis=>axis[0]*ray[0]+axis[1]*ray[1]+axis[2]*ray[2]);
+    const basis = shBasis(local,degree);
+    for (let l=1;l<=degree;l++) {
+      const first=l*l-1, end=(l+1)**2-1;
+      for (let i=first;i<end;i++) for (let j=first;j<end;j++) result[i][j]+=projected[i]*basis[j];
+    }
+  }
+  return result;
+}
+
+export const srgbDisplay = value => value <= .0031308 ? value * 12.92 : 1.055 * value ** (1/2.4) - .055;
+
+function colorChannel(dc, sh, index, channel, basis, linear) {
   let value = 0.5 + SH0 * dc[index * 3 + channel];
   if (basis) for (let j = 0; j < basis.length; j++)
     value += basis[j] * sh[(index * basis.length + j) * 3 + channel];
-  return Math.round(clamp(value, 0, 1) * 255);
+  value = clamp(value, 0, 1);
+  return Math.round((linear ? srgbDisplay(value) : value) * 255);
 }
 
-export function gaussianSplatColors(world, index, { eye, back, ortho }) {
-  const { count, degree, dc, sh, up } = world.gaussianHarmonics ?? {};
+const orthographicBasis=new WeakMap();
+function viewBasis(world,index,{eye,back,ortho},degree,up) {
+  if (ortho) {
+    const previous=orthographicBasis.get(back);
+    if (previous?.degree===degree && previous.up===up && previous.direction.every((n,i)=>n===back[i]))
+      return previous.basis;
+  }
+  const at=index*16;
+  const ray=ortho ? back.map(value=>-value) : eye.map((value,k)=>world.data[at+k]-value);
+  const direction=up==='z' ? [ray[0],-ray[2],ray[1]] : ray;
+  const basis=Math.hypot(...direction) ? shBasis(direction,degree) : null;
+  if (ortho) orthographicBasis.set(back,{degree,up,direction:Array.from(back),basis});
+  return basis;
+}
+
+export function gaussianSplatColors(world, index, view) {
+  const { count, degree, dc, sh, up, linear } = world.gaussianHarmonics ?? {};
   if (!Number.isInteger(index) || index < 0 || index >= count || !dc)
     throw new RangeError('Inspecting Gaussian color needs a live imported splat index');
-  const at = index * 16;
-  const ray = ortho ? back.map(value => -value) : eye.map((value, axis) => world.data[at + axis] - value);
-  const direction = up === 'z' ? [ray[0], -ray[2], ray[1]] : ray;
-  const basis = Math.hypot(...direction) ? shBasis(direction, degree) : null;
+  const basis=viewBasis(world,index,view,degree,up);
   return {
-    base: [0, 1, 2].map(channel => colorChannel(dc, sh, index, channel)),
-    rgb: [0, 1, 2].map(channel => colorChannel(dc, sh, index, channel, basis))
+    base: [0, 1, 2].map(channel => colorChannel(dc, sh, index, channel, null, linear?.[index])),
+    rgb: [0, 1, 2].map(channel => colorChannel(dc, sh, index, channel, basis, linear?.[index]))
   };
+}
+
+const srgbLinear=n=>n<=.04045 ? n/12.92 : ((n+.055)/1.055)**2.4;
+
+export function gaussianAppearanceDelta(world,index,view) {
+  const {count,degree,dc,sh,up,linear,available}=world.gaussianHarmonics;
+  if (!degree || index>=count || available && !available[index]) return;
+  const basis=viewBasis(world,index,view,degree,up);
+  if (!basis) return;
+  const response=[0,0,0];
+  for (let c=0;c<3;c++) {
+    const base=.5+SH0*dc[index*3+c];
+    let observed=base;
+    for (let j=0;j<basis.length;j++) observed+=basis[j]*sh[(index*basis.length+j)*3+c];
+    const a=clamp(base,0,1), b=clamp(observed,0,1);
+    response[c]=linear?.[index] ? b-a : srgbLinear(b)-srgbLinear(a);
+  }
+  return response.some(Boolean) ? response : undefined;
 }
 
 const defaultPalette = [0x0c1217, 0x334552, 0x6f8590, 0xbccdd0, 0xf4f8f5];
 
 export function gaussianSplatWorld(cloud, {
-  size = 6, up = 'y', viewDirection, colorMode = 'baked', palette = defaultPalette
+  size = 6, up = 'y', viewDirection, colorMode = 'baked', palette = defaultPalette, objectId
 } = {}) {
   const { count, positions, scales, rotations, opacity, dc, sh, degree } = cloud;
   checkCount(count, pointLimit);
@@ -358,6 +421,8 @@ export function gaussianSplatWorld(cloud, {
   if (!(Array.isArray(palette) || ArrayBuffer.isView(palette)) || !palette.length || palette.length > 64 ||
       !Array.from(palette).every(color => Number.isInteger(color) && color >= 0 && color <= 0xffffff))
     throw new TypeError('Gaussian palette needs one to 64 packed RGB swatches');
+  if (objectId!==undefined && (typeof objectId!=='string' || !objectId.trim() || objectId.length>256))
+    throw new TypeError('Gaussian object ID needs a nonempty name');
   const pal = Array.from(palette);
   const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
   let maxScale = 0;
@@ -416,9 +481,11 @@ export function gaussianSplatWorld(cloud, {
       colorChannel(dc, sh, i, 1, basis) << 8 | colorChannel(dc, sh, i, 2, basis) << 16;
   }
   return {
-    count, data, seed: 1, detail: 14, radius: size, moving: new Int32Array(), back: new Int32Array(),
+    count, data, gaussianCloud: true, seed: 1, detail: 14, radius: size, moving: new Int32Array(), back: new Int32Array(),
     bg: [pal[0] >> 16, pal[0] >> 8 & 255, pal[0] & 255], pal,
-    ...(colorMode !== 'baked' && { gaussianHarmonics: { count, degree, dc, sh, normals, up, colorMode } }),
+    ...(objectId!==undefined && {renderMetadata:{objectIds:new Uint32Array(count).fill(1),objects:[null,objectId]}}),
+    ...(colorMode !== 'baked' && { gaussianHarmonics: { count, degree, dc, sh, normals, up, colorMode },
+      gaussianAppearanceDelta, gaussianHarmonicRotation }),
     palName: 'Imported Gaussian', dither: 0, fog: { c: 0, start: 1, max: 0 }, outline: { c: 0, edge: 0 },
     cam: { target: [0, 0, 0], yaw: 0, pitch: 0, dist: size * 2.15, sway: 0 }
   };

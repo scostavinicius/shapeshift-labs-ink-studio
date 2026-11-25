@@ -38,6 +38,8 @@ The player and renderer smooth the input gains before convolution. `smoothing` i
 
 Positioned voices, including their geometry-driven early taps, feed the room return. Unpositioned tracks and cues bypass it. The browser routes the return to `destinations.effects` when provided, otherwise to its default destination. Exports use the `spatial` stem, or the `effects` premix when scene post is enabled. Use `frame.roomResponse.sends` to inspect target gains or `render(sequence, {trace: true})` to inspect their sample stamps in `report.storyAudio.roomResponse`. The standalone planner is `KIT.world.roomResponse.compile(settings).sample(position)`.
 
+A probe can also use separate early reflection and late tail assets with independent levels. The [room capture guide](room-impulse-capture.md) covers measurement, editing, and the two-layer probe format.
+
 A setup supports eight unique impulse assets, eight rooms with up to eight probes each, and sixteen doorways. Each mono or stereo impulse is bounded by eight seconds and 262,144 frames at the rendering rate. Use the same asset rate as the render or browser context when matching impulse levels between preview and export.
 
 Generate the Service Passage comparison and its editable scene with `node examples/room-response/demo.cjs <output-directory>`.

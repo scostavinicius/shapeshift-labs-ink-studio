@@ -2,6 +2,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const PNG = require('./png.js');
 const { render, FOV } = require('./render.js');
+const SplatFit = require('./splat-fit-asset.js');
 const ArtEffects = require('../src/art-effects.js');
 const AtlasSprites = require('../src/atlas-sprites.js');
 const CutoutMipmaps = require('../src/sprite-cutout-mipmaps.js');
@@ -38,7 +39,7 @@ function assessmentView(world,view) {
 
 const assessmentPasses=['protected','emission','splatId','objectId','materialId'];
 const tileView=(view,angle,pivot,w,h,t) => ({
-  spriteReconstruction:false,...view,t,w,h,px:1,yaw:angle.yaw,pitch:angle.pitch,ortho:true,target:pivot,transparent:true
+  ...view,spriteReconstruction:false,t,w,h,px:1,yaw:angle.yaw,pitch:angle.pitch,ortho:true,target:pivot,transparent:true
 });
 
 function assessAtlas(world,view,angle,pivot,width,height,time,protect) {
@@ -51,7 +52,7 @@ function spriteAtlas(world, options = {}) {
   const {
     width = 96, height = 96, directions = 8, times: takeTimes = [0], fps = 12, columns = directions,
     pivot = world.cam.target, yaw = world.cam.yaw, maps = [], pose, view: authoredView = {}, depthRange, sourceTimes, pitches,
-    cutoutMipmaps, normalSpace = 'asset', clips, curveSurface = false
+    cutoutMipmaps, normalSpace = 'asset', clips, curveSurface = false, viewBlend:authoredBlend
   } = options;
   if (clips !== undefined && (options.times !== undefined || sourceTimes !== undefined || world.anim?.stateful))
     throw new RangeError('Sprite clip plans need a seekable scene and provide their own timing');
@@ -69,7 +70,11 @@ function spriteAtlas(world, options = {}) {
       (pose !== undefined && typeof pose !== 'function'))
     throw new RangeError('Invalid sprite atlas dimensions, timing, directions, pivot or maps');
   const view = {protectedPixels:false,...authoredView};
-  const requested = [...new Set(maps)];
+  const splatFitRevision = SplatFit.sourceRevision(world,view.splatFit ?? world.look?.splatFit);
+  const requested = [...new Set(maps)], viewBlend=AtlasSprites.viewBlend(authoredBlend);
+  const depthReprojection=viewBlend==='depth-reprojected';
+  if (depthReprojection && (!requested.includes('depth') || width*height>AtlasSprites.reprojectionPixelLimit))
+    throw new RangeError('Depth-reprojected impostors need a depth map and up to 262144 pixels per view');
   const cutout = CutoutMipmaps.prepare(cutoutMipmaps);
   if (cutout && width*height > CutoutMipmaps.pixelLimit)
     throw new RangeError('Cutout mipmaps support up to 262144 pixels per view');
@@ -79,7 +84,7 @@ function spriteAtlas(world, options = {}) {
   if (options.adaptive && world.anim?.stateful) throw new RangeError('Adaptive views need a seekable scene');
   const adaptive=ViewPlan.prepare(options.adaptive,{directions,width,height,times,pitches:elevations});
   const anchor = plan || adaptive ? pivot.slice() : pivot;
-  const fixedView = adaptive ? assessmentView(world,view) : (plan || curveSurface) ? {...view,...orbitView(world,view)} : view;
+  const fixedView = adaptive || depthReprojection ? assessmentView(world,view) : (plan || curveSurface) ? {...view,...orbitView(world,view)} : view;
   const poseContext = (plan || adaptive) && !pose && world.anim && { kit:require('..').load() };
   const sourceAt=f=>plan?.samples[f].sourceTime ?? sourceTimes?.[f] ?? times[f];
   function setPose(f) {
@@ -104,7 +109,7 @@ function spriteAtlas(world, options = {}) {
       protect:adaptive.protect,weights:ViewError.weights,rings };
   }
   const views=angles.length;
-  const framing = (plan || curveSurface || adaptive || view.lockCamera) && angles.map(angle =>
+  const framing = (plan || curveSurface || adaptive || depthReprojection || view.lockCamera) && angles.map(angle =>
     CameraLens.frame(world,tileView(fixedView,angle,anchor,width,height,0),width,height));
   const count = times.length * views, cols = Math.min(count, columns);
   const rows = Math.ceil(count / cols), w = width * cols, h = height * rows;
@@ -214,9 +219,9 @@ function spriteAtlas(world, options = {}) {
   }
   const metadata = { width: w, height: h, tileWidth: width, tileHeight: height,
     directions:adaptive ? Math.max(...adaptiveViews.rings.map(ring=>ring.yaws.length)) : directions,
-    ...(adaptiveViews && {adaptiveViews}),fps, ...(pitches && { pitches:pitches.slice() }),
+    ...(adaptiveViews && {adaptiveViews}), ...(splatFitRevision && {splatFitRevision}), fps, ...(pitches && { pitches:pitches.slice() }),
     pivot: anchor.slice(), frames: entries, normalSpace, emissionMode:'baked', ...(plan && { clips: plan.tracks }),
-    ...(cutout && { cutoutMipmaps: cutout }),
+    ...(cutout && { cutoutMipmaps: cutout }), ...(viewBlend && {viewBlend}),
     encodings: {
       color: 'straight RGBA',
       ...(images.silhouette && { silhouette: 'binary RGBA coverage at alpha >= 128' }),

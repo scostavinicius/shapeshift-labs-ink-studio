@@ -19,6 +19,7 @@ For CLI diorama builds, add `--asset-cache DIR` to reuse candidate points, mesh 
 ## Scene tree and selection
 
 - `tree()` returns the scene hierarchy with blend groups, rig parts, solids, and nested operands. Solids assigned to a rig part appear under that part, with any blend group still recorded on the solid.
+- A part's map key and a solid's `id` identify the object. An optional `label` supplies a display name. Unnamed nested operands under a named solid use addresses such as `operand:gate/modifiers/vent/shape`, based on the solid and modifier IDs. Existing `slot:` addresses also resolve for the current source order.
 - `node(key)` looks up a tree entry. Solid entries include their authored properties. Named solids keep stable keys and unnamed solids use their source paths. An unnamed solid receives a temporary render tag for picking.
 - `pick(ray, options)` resolves a world-space ray to a visible editable solid and returns its tree key and contributing hit. A miss returns `null`. A compound shape picks as a whole, and its operands can be selected through the tree. Pass a posed world from `build()` as `options.world` when picking an animated preview.
 - `select(keys, { mode })` selects solids by tree key. `selectRay(ray, { mode, ...options })` selects the picked solid. Modes are `replace`, `add`, `toggle`, and `remove`. Read the current keys with `selection()`.
@@ -59,8 +60,51 @@ Use `setSurfaceState(state, keys)` to edit a solid's rest-chart marks or pass `n
 
 Pass the result of `build()` to `createSceneEditor` to reopen its source at the time of the bake. Retain `serialize()` output for durable storage alongside any exported splat or image data. Opening a scene with mesh operands uses the same asset lookup as opening its source JSON. Active modifiers on a separate analytic shape send its edited surface through the general mesh export path.
 
+## Native mesh topology
+
+A diorama can retain polygon meshes under `topologyMeshes`. Use
+`editor.meshTopology(object, part)` for the source and
+`editor.editMeshTopology(object, patch, options)` to update it in the
+same journal as solid and pixel edits. The edit returns correspondence,
+displaced bindings and invalidated material bakes.
+[Mesh topology transactions](mesh-topology.md#edit-topology-in-a-scene-transaction)
+
+Use `planTilesetStroke(request, options)` to preview a run of painted
+faces and `applyTilesetStroke(request, options)` to draw or erase the
+run in one journal entry. [Tile stroke requests and CLI](mesh-uv.md#draw-and-erase-a-run-of-painted-faces)
+
+Use `planTilesetRectangle(request, options)` to inspect occupied cells and
+`applyTilesetRectangle(request, options)` to fill or erase them in one
+journal entry. [Rectangle requests and CLI](mesh-uv.md#fill-or-erase-a-rectangle-of-faces)
+
+Use `planTilesetBrushRun(request, options)` and
+`applyTilesetBrushRun(request, options)` to repeat a multi-tile pick
+with a chosen overlap and artwork anchor in one undo entry.
+[Brush run requests and CLI](mesh-uv.md#repeat-a-multi-tile-brush-with-overlap-and-alignment)
+
+Use `eyedropTilesetFace(request)` to inspect a painted face and recover
+a reusable stamp without opening an edit transaction.
+[Face eyedrop workflow](mesh-uv.md#eyedrop-a-painted-mesh-face)
+
+Use `planTilesetReskin(request)` and `applyTilesetReskin(request)`
+to replace a face's tileset or crop with a reviewed pigment UV change.
+[Face reskin modes](mesh-uv.md#reskin-a-face-in-place)
+
+Use `planTilesetGrow(request, options)` and
+`growTilesetFace(request, options)` to attach and fold a painted quad
+along a retained boundary edge. [Edge grow workflow](mesh-uv.md#grow-a-tile-from-a-mesh-edge)
+
+Use `planTilesetBlock(request)` and `applyTilesetBlock(request)` to
+place, extend, or cut a tiled volume in one edit.
+[Tiled block workflow](mesh-uv.md#add-and-subtract-tiled-blocks)
+
+Use `planTilesetPrimitive(request)` and `applyTilesetPrimitive(request)`
+to stamp and revise painted primitives. The source retains dimensions
+and segment counts with its mesh. [Textured primitive workflow](mesh-uv.md#stamp-and-revise-textured-primitives)
+
 ## Brushes and local rebuilds
 
+Use `paintShadowBand(stroke, { pbrMaterial })` to append a stroke to a [named PBR diffuse ramp](pbr-materials.md#paint-a-pbr-shadow-band).
 Use `paintShadowBand(stroke, { layer, keys })` to paint the lighting
 threshold of a selected solid's diffuse material. The stroke uses rest
 XYZ points and joins the editor's undo history.
@@ -93,9 +137,22 @@ Brush regions use a static diorama and a separate sampled surface for the locall
 
 Set `prefabLibrary` to a shared JSON file, relative to the diorama. The file maps prefab IDs to definitions. A definition has a positive integer `revision` and a `solids` map. It can also declare `parts`, `groups`, `motion`, and `effects` as named maps. Their values use the ordinary diorama records. Use the names as stable identities when the library changes. Mesh paths in the CLI library resolve relative to the library file. A scene can also declare inline definitions under `prefabs`.
 
+A definition can declare `usesTilesets` as an array of registered sheet IDs.
+An instance requires those sheets in its scene. Tileset revision previews
+also report requirements from unused definitions, including definitions in
+the shared library. See [tileset revisions](mesh-uv.md#manage-tileset-revisions).
+
 The scene's `instances` map stores each placement. An instance names its `prefab`, an optional `transform`, and an optional ordered array of `overrides`. A transform places the complete assembly, including its joints and effect positions. Overrides use the existing `set`, `merge`, `remove`, and `test` edits and address named records in the definition. Override a solid's material or transform, a motion track, or an effect field by its local path. Other fields inherit the shared definition. An override that refers to a retired record raises a validation error.
 
 In Node, pass the shared map as `env.prefabs`. `setPrefabInstance(id, record)` creates or replaces an instance and accepts `null` to remove it. Instances appear in the scene tree and can be picked by ray. Use `refreshPrefabs(prefabs, { assets })` to load a replacement library without rewriting the scene. The editor validates local overrides before accepting the new library. The CLI reads the shared library each time it loads a diorama.
+
+For [generated prefab members](procedural.md#stable-identities-for-generated-parts),
+use `planPrefabRefresh(prefabs, { assets })` to preview the changes. The
+report lists each affected instance, its member identities, and the local
+override paths that are preserved or need review. A split lists the local
+IDs of its successors. Resolve an override on a retired member by updating
+the instance's edit list for the target library. A failed refresh leaves the
+editor on its current library and exposes the report on the thrown error.
 
 See [shared parameter bindings](parameter-bindings.md) for named controls, expressions, fields, and signals in editor builds.
 See the [unified scene timeline](scene-timeline.md) for animating those builds and inspecting their markers and audio cues.
@@ -114,3 +171,16 @@ for available keys and runtime collision queries.
 Standalone edits commit immediately. Use `begin(label)` to group repeated transform or material edits into one gesture. `preview()` validates the draft, `commit()` records it as one undo step, and `cancel()` restores the prior scene. If preview or commit fails validation, the transaction rolls back.
 
 Use `undo()`, `redo()`, `history()`, and `revision()` to track saved edits. `onChange(listener)` reports committed edits and history changes with the current snapshot. Selection belongs to the editing session.
+
+Pass a scene editor to [`createPixelEditor`](pixel-art-authoring.md#undo-pixel-and-scene-edits-together)
+to group native scene operations with pixel edits in the same transaction.
+
+## Retained mesh modifier stacks
+
+Use `setMeshModifiers(object, list)` and
+`updateMeshModifier(object, id, patch)` on an editable mesh. The mesh
+tree keeps each stage at `mesh-modifier:<object>/<id>` while reordering or
+bypassing it. `build()` draws the evaluated mesh and `snapshot()` stores
+the editable cage and ordered stack. Use `planApplyMeshModifiers` to
+review changed bindings and bakes before `applyMeshModifiers` writes
+the selected prefix to topology. See [mesh modifier stacks](mesh-topology.md#run-a-non-destructive-mesh-modifier-stack).

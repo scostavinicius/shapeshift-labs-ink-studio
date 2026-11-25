@@ -62,11 +62,11 @@ const ArtDirection = (() => {
       cadence: Object.freeze(cadence), sceneCadence: Object.hasOwn(authoredCadence, 'scene'), windResponse });
   }
 
-  function gradeContrast(r,g,b,amount,pivot,out) {
-    const offset = (.30*r+.55*g+.15*b-pivot)*amount;
-    out[0] = amount ? clamp(r+offset) : r;
-    out[1] = amount ? clamp(g+offset) : g;
-    out[2] = amount ? clamp(b+offset) : b;
+  function gradeContrast(r,g,b,amount,pivot,out,bias=0) {
+    const offset = (.30*r+.55*g+.15*b-pivot)*amount+bias;
+    out[0] = amount || bias ? clamp(r+offset) : r;
+    out[1] = amount || bias ? clamp(g+offset) : g;
+    out[2] = amount || bias ? clamp(b+offset) : b;
     return out;
   }
 

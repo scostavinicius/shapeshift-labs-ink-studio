@@ -119,9 +119,23 @@
     };
   }
 
+  function cageSource(sculpt, { palette } = {}) {
+    const { field, maskNames = [], palette: authored } = sculpt.modelSource();
+    const colors = palette ?? authored?.map(([r, g, b]) => r * 65536 + g * 256 + b) ?? PAL_HEX;
+    if (!field) throw new RangeError('A cage needs an unbaked signed sculpt surface');
+    function surface(point, normal) {
+      const { material } = field.surfaceAt(...point);
+      return bakeMaterial(colors, sculpt.materialAt(material, point, normal), point, normal);
+    }
+    return { sdf:field.sdf, partAt(point) {
+      const { tag, owner, target } = field.surfaceAt(...point, true);
+      return tag ?? target?.part ?? owner;
+    }, sampleSurface:surface, maskNames };
+  }
+
   function fromSculpt(sculpt, { palette = PAL_HEX, bounds, resolution = 0.08, targetTriangles = 16000,
       guides = [], topology, simplifyTopology = false, fur = {}, ...options } = {}) {
-    const { field, parts, noise } = sculpt.modelSource();
+    const { field, parts, noise,maskNames=[],paintedOpacity } = sculpt.modelSource();
     if (!(targetTriangles === Infinity || Number.isInteger(targetTriangles) && targetTriangles >= 4))
       throw new Error('Target triangles must be an integer of at least four');
     if (!Array.isArray(guides) || guides.some(g => !Array.isArray(g.center) || g.center.length !== 3 ||
@@ -166,7 +180,7 @@
       const p = midpoint(face), [a, b, c] = face.map(i => points[i]);
       const n = V.norm(V.cross(V.sub(b, a), V.sub(c, a)));
       const value = sample(field.surfaceAt(...p).material, p, n);
-      const key = JSON.stringify([value.name, value.color, value.roughness, value.metallic, value.emission, value.masks]);
+      const key = JSON.stringify([value.name, value.color, value.roughness, value.metallic, value.emission, value.masks,value.opacity]);
       if (!shades.has(key)) {
         shades.set(key, materials.length);
         const { normal, ...material } = value;
@@ -184,7 +198,8 @@
       return sample((valid ? field.surfaceAt(...p) : value).material || value.material, p, valid ? n : fallback);
     }
     // An explicit topology can carry its own seams through the high-to-low bake.
-    return { ...mesh, bakeUVs: !!mesh.uvs, materials, faceMaterials, partTags, tagAt, sampleSurface, attachments };
+    return { ...mesh, bakeUVs: !!mesh.uvs, materials, faceMaterials, partTags, tagAt, sampleSurface, attachments,
+      ...(maskNames.length&&{maskNames}),...(paintedOpacity&&{paintedOpacity}) };
   }
 
   function mapModelMeshes(mesh, transform) {
@@ -209,6 +224,39 @@
       ...(mesh.cornerNormals ? { cornerNormals: mesh.cornerNormals } : {}),
       ...options
     };
+  }
+
+  function fromTopology(source, { name, materials, ...settings } = {}) {
+    const topology = K.meshTopology, doc = topology.create(source);
+    const derived = topology.triangulate(doc), slots = new Map(derived.materials.map((id, i) => [id, i]));
+    const ids = new Map(doc.vertices.map((row, i) => [row.id, i]));
+    const corners = new Map(doc.faces.flatMap(row => row.corners.map(corner => [corner.id, corner])));
+    const byFace = new Map(doc.faces.map(row => [row.id, row]));
+    const authored = new Map((materials ?? []).map(row => [row.id, row]));
+    const points = doc.vertices.map(row => row.position);
+    const faces = derived.triangleSources.map(row => row.corners.map(id => ids.get(corners.get(id).vertex)));
+    const uvs = derived.triangleSources.map(row => row.corners.map(id => corners.get(id).uv));
+    const uvSets=derived.uvSets && Object.fromEntries(Object.keys(derived.uvSets).map(set=>
+      [set,derived.triangleSources.map(row=>row.corners.map(id=>MaterialUV.uv(corners.get(id),+set)))]));
+    const uvCutsBySet=uvSets && Object.fromEntries(Object.keys(uvSets).map(set=>[set,topology.inspect(doc).edges
+      .filter(edge=>MaterialUV.seam(edge,+set) || new Set(edge.uses.map(use=>byFace.get(use.face).material)).size>1)
+      .map(row=>row.vertices.map(id=>ids.get(id)))]));
+    const uvCuts = topology.inspect(doc).edges.filter(row => row.uvSeam ||
+      new Set(row.uses.map(use => byFace.get(use.face).material)).size > 1).map(row => row.vertices.map(id => ids.get(id)));
+    if (!faces.length) throw new RangeError('Topology export needs at least one face');
+    const cornerNormals = derived.normals && faces.map((face, i) => {
+      const [a, b, c] = face.map(id => points[id]), fallback = V.norm(V.cross(V.sub(b, a), V.sub(c, a)));
+      return [0, 1, 2].map(j => {
+        const at = derived.indices[i * 3 + j] * 3, normal = derived.normals.slice(at, at + 3);
+        return V.len(normal) ? normal : fallback;
+      });
+    });
+    return { ...settings, name: name ?? doc.id, points, faces, uvs, uvCuts, ...(uvSets && {uvSets,uvCutsBySet}),
+      ...(doc.uvBindings && {uvBindings:doc.uvBindings}), bakeUVs: true,
+      vertexIds: doc.vertices.map(row => row.id), faceIds: derived.triangleSources.map(row => row.face),
+      faceMaterials: derived.triangleSources.map(row => slots.get(byFace.get(row.face).material)),
+      materials: derived.materials.map(id => ({ name: id, ...authored.get(id) })),
+      ...(cornerNormals && { cornerNormals }) };
   }
 
   function sampleClips(clips, sample) {
@@ -378,5 +426,5 @@
     return { meshes, joints, animations };
   }
 
-  K.model = { fromSdf, fromSculpt, fromMesh, fromPuppet, fromCreature, sampleClips, mapModelMeshes };
+  K.model = { fromSdf, fromSculpt, cageSource, fromMesh, fromTopology, fromPuppet, fromCreature, sampleClips, mapModelMeshes };
 })(KIT);

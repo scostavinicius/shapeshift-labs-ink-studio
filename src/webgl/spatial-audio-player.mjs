@@ -5,9 +5,11 @@ import {createCrowdAudio} from './crowd-audio.mjs';
 import * as sharedBudget from '../world-voice-budget.js';
 import * as sharedRadiation from '../spatial-radiation.js';
 import * as sharedPulse from '../contact-pulse.js';
+import * as sharedCaptions from '../directional-captions.js';
 const voiceBudget=sharedBudget.default??globalThis[Symbol.for('ink-studio.world-voice-budget')];
 const radiation=sharedRadiation.default??globalThis[Symbol.for('ink-studio.spatial-radiation')];
 const contactPulse=sharedPulse.default??globalThis[Symbol.for('ink-studio.contact-pulse')];
+const captionRules=sharedCaptions.default??globalThis[Symbol.for('ink-studio.directional-captions')];
 const clamp=(value,min,max)=>Math.min(max,Math.max(min,value));
 const finite=(value,min,max)=>Number.isFinite(value)&&value>=min&&value<=max;
 const buses=['dialogue','foley','effects','ambience','music'];
@@ -16,7 +18,7 @@ const bandLevels=value=>bands.every(band=>finite(value?.[band],0,16384));
 const position=value=>Array.isArray(value)&&value.length===3&&value.every(Number.isFinite);
 
 export function createSpatialAudioPlayer(context, {
-  resolveAsset, destination=context?.destination, destinations={}, panning='HRTF', maxVoices, smoothing=.025
+  resolveAsset, destination=context?.destination, destinations={}, panning='HRTF', maxVoices, smoothing=.025, captions
 }={}) {
   if(typeof context?.createBufferSource!=='function'||!context.listener||!destination||
     typeof resolveAsset!=='function'||!['HRTF','equalpower'].includes(panning)||
@@ -28,8 +30,11 @@ export function createSpatialAudioPlayer(context, {
     throw new TypeError('Spatial audio bus destinations must be AudioNodes on the player context');
   const outputs=new Map(Object.entries(destinations)), output=voice=>outputs.get(voice.bus)??destination;
   const voices=new Map(), seen=new Set(), assets=new Map(), retiring=new Set(), tails=new Set();
+  const captionTrack=captions===undefined?null:captionRules.live(captions,context.sampleRate);
   const room=createRoomResponse(context,outputs.get('effects')??destination,asset);
-  const crowd=createCrowdAudio(context,{panning,asset:sourceAsset,output:bus=>outputs.get(bus)??destination,room});
+  const crowd=createCrowdAudio(context,{panning,asset:sourceAsset,output:bus=>outputs.get(bus)??destination,room,
+    captionOffers:captionTrack?.offers,
+    onGrains:captionTrack&&((marks,ear)=>marks.forEach(mark=>captionTrack.confirm(mark,ear)))});
   const monoAssets=new WeakMap(), pulseAssets=new Map();
   const fallback=voiceBudget.compile({maxVoices:maxVoices??32,reservedVoices:0});
   let disposed=false, previousTime=-Infinity, policy=fallback, configured=false, listener, profile, profileKey, binaural;
@@ -142,6 +147,8 @@ export function createSpatialAudioPlayer(context, {
   }
   function stop(row,fade=false){
     if(voices.get(row.voice.id)===row)voices.delete(row.voice.id);
+    captionTrack?.advance(captionTrack.stamp(context.currentTime),listener);
+    captionTrack?.cancel(row);
     if(!row.source)return;
     const now=context.currentTime, tail=fade&&context.state==='running'&&row.started<=now?
       (configured?policy.stealFade:smoothing*3):0;
@@ -169,6 +176,7 @@ export function createSpatialAudioPlayer(context, {
     room.reset();
     listener=undefined;
     seen.clear();
+    captionTrack?.reset();
     inspection=Object.freeze({selected:[],rejected:[]});
     previousTime=-Infinity;
   }
@@ -287,6 +295,14 @@ export function createSpatialAudioPlayer(context, {
         if(remaining===undefined)source.start(started,offset);
         else source.start(started,offset,remaining*live.rate);
       }
+      if(captionTrack&&live.mode==='cue'){
+        const first=row.branches.filter(part=>part.voice.gain>0).reduce((a,b)=>!a||b.started<a.started?b:a,null);
+        if(first){
+          const {cue,selection,sourceEvent,acousticOpening,apparentSource,position}=first.voice;
+          captionTrack.queue(row,{sample:captionTrack.stamp(first.started),cue,family:selection?.family,
+            eventId:sourceEvent,opening:acousticOpening,at:apparentSource??position});
+        }
+      }
     }).catch(error=>{
       if(voices.get(voice.id)!==row)return;
       voices.delete(voice.id);
@@ -358,6 +374,7 @@ export function createSpatialAudioPlayer(context, {
       if(changed)profileKey=undefined;
       binaural=nextBinaural;
       profile=nextProfile;
+      captionTrack?.advance(captionTrack.stamp(context.currentTime),listener);
       listener=frame.listener;
       const hadRoom=Boolean(room.input), roomReady=room.update(frame.roomResponse);
       if(!hadRoom&&room.input)for(const row of [...voices.values(),...retiring])
@@ -377,16 +394,23 @@ export function createSpatialAudioPlayer(context, {
       const candidates=[...desired.values()].map(voice=>({...voice,incumbent:voices.has(voice.id),
         gain:configured?Math.max(voice.gain,voice.contact?.targetGain??0):voice.gain}));
       const stable=configured||candidates.some(voice=>voice.priority!==undefined||voice.protected!==undefined);
-      const ranked=policy.aggregation&&listener?voiceBudget.selectWithTextures(candidates,policy,crowd.active(),stable):
-        voiceBudget.select(candidates,policy,stable);
+      const priority=frame.jointPriority;
+      const scoped=voiceBudget.prioritize(candidates,policy,priority&&voiceBudget.compilePriority(priority.sound));
+      const ranked=scoped.policy.aggregation&&listener?
+        voiceBudget.selectWithTextures(scoped.candidates,scoped.policy,crowd.active(),stable):
+        voiceBudget.select(scoped.candidates,scoped.policy,stable);
+      const promoted=new Set(priority?.sound.cues);
       const selected=new Map([...ranked.selected].map(id=>[id,desired.get(id)]));
       const info=(id,decision)=>{
         const {cue,priority=0,protected:critical=false,group}=desired.get(id);
-        return Object.freeze({id,cue,priority,protected:critical,...(group!==undefined&&{group}),...decision});
+        const focused=promoted.has(cue);
+        return Object.freeze({id,cue,priority:focused?100:priority,protected:focused||critical,
+          ...(focused&&{promoted:true}),...(group!==undefined&&{group}),...decision});
       };
-      inspection=Object.freeze({time:frame.time,limit:policy.maxVoices,reservedVoices:policy.reservedVoices,
+      inspection=Object.freeze({time:frame.time,limit:policy.maxVoices,reservedVoices:scoped.policy.reservedVoices,
+        ...(priority&&{priorityWindow:priority.id}),
         selected:Object.freeze([...selected.keys()].map(id=>info(id,{}))),
-        ...(policy.aggregation&&{aggregation:Object.freeze({slots:ranked.seats??0,count:ranked.overflow?.size??0})}),
+        ...(scoped.policy.aggregation&&{aggregation:Object.freeze({slots:ranked.seats??0,count:ranked.overflow?.size??0})}),
         rejected:Object.freeze([...ranked.rejected].map(([id,reason])=>info(id,{reason,
           action:ranked.overflow?.has(id)?'aggregated':voices.has(id)?'displaced':desired.get(id).mode==='cue'?'dropped':'virtual'})))});
       while(retiring.size>policy.maxVoices)stop(retiring.values().next().value);
@@ -394,7 +418,7 @@ export function createSpatialAudioPlayer(context, {
       const preparations=[roomReady,binaural?.ready].filter(Boolean);
       const positionedReady=preparations.length?Promise.all(preparations):undefined;
       const pending=positionedReady?[positionedReady]:[], at=context.currentTime;
-      const texture=crowd.update({seats:ranked.seats,config:policy.aggregation,listener,binaural,time:frame.time,
+      const texture=crowd.update({seats:ranked.seats,config:scoped.policy.aggregation,listener,binaural,time:frame.time,
         ready:positionedReady,voices:ranked.overflow?[...ranked.overflow].map(id=>desired.get(id)):[]});
       if(texture)pending.push(texture);
       for(const [id,voice] of selected){
@@ -425,6 +449,7 @@ export function createSpatialAudioPlayer(context, {
     },
     reset,
     inspectVoices:()=>inspection,
+    ...(captionTrack&&{readCaptions:()=>captionTrack.read(captionTrack.stamp(context.currentTime),listener)}),
     dispose(){if(!disposed){disposed=true;reset();binaural=profile=profileKey=undefined;assets.clear();pulseAssets.clear();}}
   });
 }

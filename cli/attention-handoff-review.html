@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Attention handoff review · Ink Studio</title>
+<style>
+  :root{color-scheme:dark;--bg:#11191d;--panel:#1a262b;--line:#34474b;--text:#f0eadc;--muted:#a9b8b8;--gold:#ffd59b;--water:#a3dfce;--sound:#ffba96}
+  *{box-sizing:border-box}
+  body{margin:0;min-height:100vh;background:radial-gradient(ellipse at 53% -38%,#385a56,var(--bg) 73%);
+    color:var(--text);font:14px/1.42 system-ui,sans-serif}
+  main{max-width:1140px;margin:0 auto;padding:26px 28px 34px}
+  header{display:flex;align-items:end;justify-content:space-between;gap:16px;margin-bottom:14px}
+  h1{margin:4px 0 8px;font:500 clamp(39px,6vw,56px)/.97 Georgia,serif;letter-spacing:-.042em}
+  h2{margin:0;font-size:14px}
+  p{margin:0;color:var(--muted)}
+  .mono,output,time{font:600 11px/1.4 ui-monospace,monospace;font-variant-numeric:tabular-nums}
+  .eyebrow{color:var(--gold);letter-spacing:.135em;text-transform:uppercase}
+  .workspace{display:grid;grid-template-columns:1.8fr 1fr;gap:12px}
+  .viewer,.settings,.timing{background:var(--panel);border:1px solid var(--line);border-radius:10px;overflow:hidden}
+  .stage{position:relative;aspect-ratio:16/9;overflow:hidden;background:#0c171e}
+  canvas{position:absolute;inset:0;width:100%;height:100%;object-fit:contain;image-rendering:pixelated;pointer-events:none}
+  button{color:var(--text);background:#203136;border:1px solid var(--line);border-radius:6px;padding:6px 8px;font:inherit;cursor:pointer}
+  button:hover{background:#314449}
+  button:disabled{opacity:.52;cursor:default}
+  button:focus-visible,input:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
+  .primary{background:#efcf9c;border-color:#efcf9c;color:#2b2822;padding:8px 10px;white-space:nowrap}
+  .primary:hover{background:#ffdfa9}
+  .transport{display:flex;gap:7px;align-items:center;padding:8px;border-top:1px solid var(--line)}
+  .transport input[type=range]{width:100%;min-width:0}
+  .transport output{white-space:nowrap;color:var(--muted)}
+  input{accent-color:var(--gold)}
+  .settings{padding:14px;display:flex;flex-direction:column;gap:10px}
+  .options{display:grid;gap:6px;max-height:300px;overflow:auto}
+  .options button{display:flex;justify-content:space-between;align-items:center;gap:10px;text-align:left;padding:9px 10px;background:#17272b}
+  .options button[aria-pressed=true]{border-color:#b5915c;background:#393327}
+  .options strong{display:block;font-size:14px}
+  .options span{color:var(--gold);font:600 13px ui-monospace,monospace;white-space:nowrap}
+  .choices{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+  .choices label{display:flex;align-items:center;gap:4px;font-size:12px}
+  #detail{font-size:12px;min-height:2.4em}
+  .timing{margin-top:12px;padding:12px 14px}
+  .timing header{margin:0 0 8px}
+  .axis,.lane{display:grid;grid-template-columns:132px 1fr 66px;gap:10px;align-items:center}
+  .axis{font-size:10px;color:var(--muted)}
+  .axis span:nth-child(2){display:flex;justify-content:space-between}
+  .lane{height:28px;font-size:12px}
+  .lane label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rail{position:relative;height:1px;background:#607276}
+  .rail::after{content:"";position:absolute;left:var(--at,0%);top:-5px;background:var(--mark);width:10px;height:10px;
+    border-radius:2px;transform:translateX(-50%) rotate(45deg);box-shadow:0 0 0 1px #253339}
+  .lane time{text-align:right}
+  .picture{--mark:var(--water)}.audio{--mark:var(--sound)}
+  @media(max-width:790px){main{padding:15px 13px 25px}.workspace{grid-template-columns:1fr}.options{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}}
+  @media(max-width:470px){header{align-items:start;flex-wrap:wrap}.axis,.lane{grid-template-columns:87px 1fr 56px;gap:6px}}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div>
+      <div class="eyebrow mono">Ink Studio / Attention handoffs</div>
+      <h1 id="title">Attention handoff</h1>
+      <p id="headline"></p>
+    </div>
+    <button class="primary" id="save">Download selected nudge</button>
+  </header>
+  <div class="workspace">
+    <div class="viewer">
+      <div class="stage"><canvas id="preview" aria-label="Fixed take picture"></canvas></div>
+      <div class="transport">
+        <button id="play" disabled>Play</button>
+        <input type="range" id="seek" min="0" value="0" step="0.001" aria-label="Audition playhead" disabled>
+        <output id="time">0.000 s</output>
+        <button id="mute" aria-pressed="false" disabled>Mute</button>
+      </div>
+    </div>
+    <section class="settings" aria-label="Timing variants">
+      <h2>Place sound against picture</h2>
+      <div id="options" class="options" role="group" aria-label="Choose sound timing"></div>
+      <p id="detail" aria-live="polite"></p>
+      <div class="choices">
+        <button id="beat" disabled>Play around reveal</button>
+        <label><input type="checkbox" id="loop" checked disabled> Loop excerpt</label>
+      </div>
+      <p class="mono" id="loading" role="status">Loading picture and audio…</p>
+    </section>
+  </div>
+  <section class="timing" aria-label="Picture and sound markers">
+    <header><h2>Timing in this excerpt</h2><p class="mono" id="range"></p></header>
+    <div class="axis"><span></span><span><time>0.000 s</time><time id="end"></time></span></div>
+    <div class="lane picture"><label id="visual-label"></label><div class="rail" id="visual-rail"></div><time id="visual-time"></time></div>
+    <div class="lane audio"><label>Sound cue</label><div class="rail" id="audio-rail"></div><time id="audio-time"></time></div>
+  </section>
+</main>
+<script>
+  const report=/* REPORT */ {};
+  const png=/* PICTURE */ [];
+  const wav=/* AUDIO */ [];
+  const get=id=>document.getElementById(id), variants=report.variants, fps=report.fps.numerator/report.fps.denominator;
+  const {sampleRate,window:span,reveal}=report, duration=(span.endSample-span.firstSample)/sampleRate;
+  const play=get('play'), seek=get('seek'), loop=get('loop'), mute=get('mute'), beat=get('beat');
+  const canvas=get('preview'), draw=canvas.getContext('2d');
+  [canvas.width,canvas.height]=report.picture.size;
+  const ms=value=>(value>0?'+':'')+Number(value.toFixed(3))+' ms';
+  const seconds=value=>value.toFixed(3)+' s';
+  const encode=data=>Uint8Array.from(atob(data),s=>s.charCodeAt(0));
+  const print=report.id.split(/[-_]+/).filter(Boolean).map(word=>word[0].toUpperCase()+word.slice(1)).join(' ');
+  get('title').textContent=print;
+  document.title=print+' · Attention handoff review';
+  get('headline').textContent='Compare '+variants.length+' timings against the same picture and mix.';
+  get('range').textContent='Take frames '+span.from+'–'+(span.to-1);
+  get('visual-label').textContent=reveal.label;
+  get('end').textContent=seconds(duration);
+  seek.max=duration;
+  let picked=Math.max(0,variants.findIndex(row=>row.offsetMs===0)), currentFrame=-1, buffers;
+  let running=false, muted=false, armed=false, base=0, epoch=0, source=null, retiring=null;
+  const ctx=new AudioContext(), master=ctx.createGain();
+  master.connect(ctx.destination);
+  const images=png.map(value=>{
+    const image=new Image();
+    image.src='data:image/png;base64,'+value;
+    return image;
+  });
+  const buttons=variants.map((row,index)=>{
+    const button=document.createElement('button'), name=document.createElement('strong'), offset=document.createElement('span');
+    name.textContent=row.label;
+    offset.textContent=ms(row.offsetMs);
+    button.append(name,offset);
+    button.addEventListener('click',()=>choose(index));
+    get('options').append(button);
+    return button;
+  });
+  function marker(name,t){
+    get(name+'-time').textContent=seconds(t);
+    get(name+'-rail').style.setProperty('--at',(t/duration*100)+'%');
+  }
+  function choice(){
+    const row=variants[picked], direction=row.offsetMs<0?'Sound leads':row.offsetMs>0?'Picture leads':'Together';
+    const before=row.clipped.head?' · head cropped':'', after=row.clipped.tail?' · tail cropped':'';
+    get('detail').textContent=direction+' at '+ms(row.offsetMs)+before+after;
+    buttons.forEach((button,i)=>button.setAttribute('aria-pressed',String(i===picked)));
+    marker('audio',row.localSample/sampleRate);
+  }
+  function phase(time=ctx.currentTime){
+    const t=base+(running?Math.max(0,time-epoch):0);
+    return running&&loop.checked?t%duration:Math.min(duration,t);
+  }
+  function show(t){
+    get('time').value=seconds(t);
+    seek.value=t;
+    play.textContent=running?'Pause':t>=duration?'Replay':'Play';
+    const frame=Math.min(images.length-1,Math.floor(t*fps+1e-7));
+    if(frame!==currentFrame&&images[frame].naturalWidth){
+      draw.clearRect(0,0,canvas.width,canvas.height);
+      draw.drawImage(images[frame],0,0);
+      currentFrame=frame;
+    }
+  }
+  function stop(track,at=ctx.currentTime){
+    if(track){try{track.node.stop(at)}catch{}}
+  }
+  function makeVoice(at,offset,fade){
+    const send=ctx.createGain(), node=ctx.createBufferSource();
+    node.buffer=buffers[picked];
+    node.loop=loop.checked;
+    node.loopEnd=Math.min(duration,node.buffer.duration);
+    send.gain.setValueAtTime(fade?0:1,at);
+    if(fade)send.gain.linearRampToValueAtTime(1,at+.015);
+    node.connect(send);
+    send.connect(master);
+    node.onended=()=>send.disconnect();
+    node.start(at,Math.min(offset,Math.max(0,node.buffer.duration-1/node.buffer.sampleRate)));
+    return {node,gain:send.gain};
+  }
+  function replace(at,offset){
+    stop(retiring);
+    retiring=source;
+    if(retiring){
+      const gain=retiring.gain;
+      if(gain.cancelAndHoldAtTime)gain.cancelAndHoldAtTime(at);
+      else {gain.cancelScheduledValues(at);gain.setValueAtTime(gain.value,at);}
+      gain.linearRampToValueAtTime(0,at+.015);
+      stop(retiring,at+.016);
+    }
+    source=makeVoice(at,offset,Boolean(retiring));
+  }
+  function pause(){
+    base=phase();
+    running=false;
+    stop(source);stop(retiring);
+    source=retiring=null;
+    show(base);
+  }
+  function tick(){
+    if(!running)return;
+    const t=phase();
+    if(t>=duration){pause();return;}
+    show(t);
+    requestAnimationFrame(tick);
+  }
+  async function start(t){
+    if(!buffers||armed)return;
+    armed=true;
+    try{
+      await ctx.resume();
+      if(running){
+        jump(t);
+        return;
+      }
+      base=t>=duration?0:t;
+      epoch=ctx.currentTime+.015;
+      running=true;
+      replace(epoch,base);
+      tick();
+    }catch{
+      get('loading').textContent='Audio playback could not start.';
+    }finally{armed=false;}
+  }
+  function jump(t){
+    base=t;
+    if(running){
+      if(t>=duration)t=base=0;
+      epoch=ctx.currentTime+.012;
+      replace(epoch,t);
+    }
+    show(t);
+  }
+  function choose(index){
+    if(index===picked)return;
+    picked=index;
+    if(running){
+      const at=ctx.currentTime+.008, offset=phase(at);
+      if(offset<duration)replace(at,offset);
+    }
+    choice();
+  }
+  play.addEventListener('click',()=>running?pause():start(base));
+  seek.addEventListener('input',()=>jump(Number(seek.value)));
+  mute.addEventListener('click',()=>{
+    muted=!muted;
+    master.gain.setTargetAtTime(muted?0:1,ctx.currentTime,.008);
+    mute.textContent=muted?'Unmute':'Mute';
+    mute.setAttribute('aria-pressed',String(muted));
+  });
+  loop.addEventListener('click',()=>{
+    // Reading with the previous loop state keeps the same visible playhead.
+    const raw=base+(running?Math.max(0,ctx.currentTime-epoch):0);
+    if(running)jump(loop.checked?Math.min(raw,duration):raw%duration);
+  });
+  beat.addEventListener('click',()=>{
+    const t=Math.max(0,Math.min(reveal.localSample,...variants.map(row=>row.localSample))/sampleRate-.28);
+    start(t);
+  });
+  get('save').addEventListener('click',()=>{
+    const row=variants[picked], a=document.createElement('a');
+    const url=URL.createObjectURL(new Blob([JSON.stringify([row.edit],null,2)+'\n'],{type:'application/json'}));
+    a.href=url;a.download=row.edits;a.click();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+  });
+  marker('visual',reveal.localFrame/fps);
+  choice();
+  Promise.all([Promise.all(images.map(image=>image.decode())),
+    Promise.all(wav.map(value=>ctx.decodeAudioData(encode(value).buffer)))]).then(([,decoded])=>{
+    buffers=decoded;
+    for(const element of [play,seek,loop,mute,beat])element.disabled=false;
+    get('loading').textContent='';
+    show(0);
+  }).catch(()=>{get('loading').textContent='This browser could not decode the preview media.';});
+</script>
+</body>
+</html>

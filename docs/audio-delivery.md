@@ -111,6 +111,8 @@ true peak. The check preserves the delivered levels. With `--strict`,
 a failed check returns exit status 1 and keeps the package and report
 for review. [ITU-R BS.1770-5](https://www.itu.int/rec/R-REC-BS.1770-5-202311-I) · [EBU R 128](https://tech.ebu.ch/docs/r/r128.pdf)
 
+After encoding a compressed delivery, use [compressed-audio round-trip approval](audio-round-trip.md) to check playable length, transient placement, true peak and loop seams.
+
 [Inner Gate](../examples/music-production/delivery-workshop.cjs)
 builds a native take with dialogue, score, Foley, effects, and ambience.
 It delivers a nonlinear master, verifies the PCM stem sum, and prints

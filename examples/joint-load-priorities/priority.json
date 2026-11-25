@@ -1,0 +1,12 @@
+{
+  "id": "last-ferry",
+  "windows": [
+    {
+      "id": "bell-strike",
+      "from": 1.55,
+      "to": 2.3,
+      "picture": {"subjects": [{"object": "bell"}], "particleRetain": 0.22},
+      "sound": {"cues": ["bell"], "backgroundVoices": 1, "groups": {"rain": 0, "crowd": 1}}
+    }
+  ]
+}

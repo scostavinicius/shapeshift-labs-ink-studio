@@ -1,0 +1,24 @@
+{
+  "id": "harbor-latch",
+  "map": {"tempo": 120},
+  "subjects": {
+    "hand": {
+      "picture": {"select": {"object": "glove"}, "contrast": 2, "pivot": 0.29},
+      "mix": {"harbor": -5.5, "cloth": 4}
+    },
+    "latch": {
+      "picture": {"select": {"object": "latch"}, "contrast": 2.1, "pivot": 0.53},
+      "mix": {"harbor": -12, "cloth": -8, "metal": 5}
+    },
+    "harbor": {
+      "picture": {"select": {"object": "beacon"}, "contrast": 1.6, "pivot": 0.26},
+      "mix": {"harbor": 0, "metal": -2}
+    }
+  },
+  "cues": [
+    {"beat": 1, "subject": "hand", "fade": 0.75},
+    {"beat": 4.25, "subject": "latch", "fade": 0.75},
+    {"beat": 7, "subject": "harbor", "fade": 1.25},
+    {"beat": 11, "subject": null, "fade": 0.75}
+  ]
+}

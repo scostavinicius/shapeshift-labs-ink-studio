@@ -1,12 +1,28 @@
 /* Map quantized adaptive-score intents onto playable production windows. */
 (function (P) {
-  const A=P.musicProduction, I=P.musicInstruments, T=P.takeTime, F=P.musicPhraseRoutes;
+  const A=P.musicProduction, I=P.musicInstruments, T=P.takeTime, F=P.musicPhraseRoutes, R=P.musicMotifRecall;
   const {record,fields,finite,integer,id,check,clamp,db}=I;
   const sample=(time,rate)=>T.index(T.roundDown(T.mul(T.read(time),[BigInt(rate),1n])));
   const numeric=(value,lo,hi,label)=>{
     check(finite(value,lo,hi),'Invalid transition '+label);
     return value;
   };
+  function compileCadences(value,segments,phrases) {
+    check(Array.isArray(value) && integer(value.length,1,8),'Choose one to eight authored cadence variants');
+    const ids=new Set();
+    return Array.from(value,row=>{
+      check(fields(row,['id','segment','when']) && id(row.id) && !ids.has(row.id) && id(row.segment) &&
+        Object.hasOwn(segments,row.segment) && fields(row.when ?? {},['phase','minDwell','phrase']),
+      'Cadences need unique IDs, known segments and optional phrase conditions');
+      const {phase=[0,1],minDwell=0,phrase}=row.when ?? {};
+      check(Array.isArray(phase) && phase.length===2 && finite(phase[0],0,1) && finite(phase[1],0,1) &&
+        phase[1]>phase[0] && finite(minDwell,0,3600) && (phrase===undefined || phrases.includes(phrase)),
+      'Invalid cadence phrase, phase or dwell condition');
+      ids.add(row.id);
+      const {start,end}=segments[row.segment];
+      return {id:row.id,segment:row.segment,duration:end-start,phase:phase.slice(),minDwell,phrase};
+    });
+  }
   function prepare(sources,spec,assets,host,bank,liveResources,offlineStreams) {
     const live=liveResources!==undefined;
     check(record(sources) && Object.keys(sources).length<=32 && Object.keys(sources).every(id) &&
@@ -39,13 +55,17 @@
     check(known(spec.entry),'Transition entry must name a segment');
     const thematic=spec.thematic;
     let memory;
+    let recalls=new Map();
     const routes=new Map();
     if (thematic!==undefined) {
-      check(fields(thematic,['maps','routes']) && record(thematic.maps) && record(thematic.routes ?? {}) &&
+      check(fields(thematic,['maps','routes','recalls']) && record(thematic.maps) && record(thematic.routes ?? {}) &&
+        record(thematic.recalls ?? {}) && Object.keys(thematic.recalls ?? {}).length<=64 &&
         Object.keys(thematic.maps).length<=32 && Object.keys(thematic.routes ?? {}).length<=64,'Invalid thematic timeline');
       for (const name of Object.keys(thematic.maps)) load(name);
-      memory=P.musicThemes.createHistory(thematic.maps,end,compiled,live);
+      const themes=new Set(Object.values(thematic.recalls ?? {}).map(row=>row?.theme));
+      memory=P.musicThemes.createHistory(thematic.maps,end,compiled,live,themes);
       const vocabulary=memory.at(0);
+      recalls=R.compile(thematic.recalls ?? {},vocabulary,known);
       for (const [segment,choices] of Object.entries(thematic.routes ?? {})) {
         check(known(segment) && Array.isArray(choices) && choices.length>=1 && choices.length<=8,'Invalid thematic route');
         const base=compiled[segments[segment].source];
@@ -64,6 +84,14 @@
       }
     }
     const phrasing=live || spec.phrasing!==undefined ? F.create(spec.phrasing===undefined ? {} : spec.phrasing,segments,load,end,live) : null;
+    for(const [segment,recall] of recalls){
+      const names=[segments[segment].source,...(routes.get(segment)??[]).map(row=>row.source),
+        ...(spec.phrasing?.routes?.[segment]??[]).map(row=>row.source)];
+      check(names.every(name=>Object.hasOwn(compiled[name].tracks,recall.part)&&
+        !compiled[name].tracks[recall.part].pad&&
+        (recall.preserve==='rhythm'||compiled[name].arrangement.parts[recall.part].role!=='percussion')),
+      'Every destination phrase needs the motif recall part, with a pitched track for intervals');
+    }
     const edges=spec.transitions ?? [], stingers=spec.stingers ?? {};
     check(Array.isArray(edges) && edges.length<=128 && record(stingers) && Object.keys(stingers).length<=128 &&
       Object.entries(stingers).every(([key,value])=>id(key) && known(value)),'Invalid transition or stinger table');
@@ -74,7 +102,7 @@
     'Stinger rules need a mapped resource and a section in which to withhold it');
     const rules=new Map();
     for (const edge of edges) {
-      check(fields(edge,['from','to','exit','entry','tail','fadeIn','bridge','pickup','commonTone','switchPoints']) && known(edge.from) &&
+      check(fields(edge,['from','to','exit','entry','tail','fadeIn','bridge','pickup','commonTone','switchPoints','harmonicBridge','cadences']) && known(edge.from) &&
         known(edge.to) && (edge.bridge===undefined || known(edge.bridge)),'Invalid music transition edge');
       const key=edge.from+'>'+edge.to;
       check(!rules.has(key),'Duplicate music transition edge');
@@ -108,16 +136,34 @@
         const clip=segments[tone.segment];
         numeric(tone.pickup ?? 0,0,Math.min(4,clip.end-clip.start-.001),'common tone pickup');
       }
+      let cadences,harmonicBridge;
+      if (edge.cadences!==undefined) {
+        check(live,'Render branch cadences with music live replay');
+        check(edge.from!==edge.to && edge.exit!==undefined && edge.exit!==null && edge.bridge===undefined &&
+          edge.harmonicBridge===undefined,'Cadences need a distinct edge with an exit marker and no other bridge');
+        const phrases=[edge.from,...(spec.phrasing?.routes?.[edge.from] ?? []).map(row=>row.id)];
+        cadences=compileCadences(edge.cadences,segments,phrases);
+      }
+      if (edge.harmonicBridge!==undefined) {
+        check(live,'Render a harmonic bridge with music live replay');
+        check(!edge.bridge && !tone && edge.from!==edge.to,'Use a harmonic bridge on a distinct edge without an authored pickup');
+        harmonicBridge=P.musicHarmonicBridge.compile(edge.harmonicBridge);
+        const variants=[to.source,...(routes.get(edge.to) ?? []).map(row=>row.source),
+          ...(spec.phrasing?.routes?.[edge.to] ?? []).map(row=>row.source)];
+        check(variants.every(source=>Object.hasOwn(compiled[source].tracks,harmonicBridge.track) &&
+          compiled[source].arrangement.parts[harmonicBridge.track].role!=='percussion'),
+        'Every destination phrase needs the harmonic bridge pitched track');
+      }
       rules.set(key,{exit,entry,tail,fadeIn,bridge:edge.bridge,pickup,commonTone:tone,
-        ...(live && {waitForExit:edge.exit!==undefined})});
+        ...(cadences && {cadences}),...(harmonicBridge && {harmonicBridge}),...(live && {waitForExit:edge.exit!==undefined})});
     }
     if (id(spec.performers?.roomSource)) load(spec.performers.roomSource);
-    return {compiled,segments,end,known,memory,routes,phrasing,stingers,holds,rules};
+    return {compiled,segments,end,known,memory,routes,recalls,phrasing,stingers,holds,rules};
   }
 
   function schedule(sources,spec,intents=[],assets={},host,bank=new Map(),evidence) {
     check(Array.isArray(intents) && intents.length<=(evidence ? 8192 : 2048),'Invalid production timeline');
-    const {compiled,segments,end,known,memory,routes,phrasing,stingers,holds,rules}=
+    const {compiled,segments,end,known,memory,routes,recalls,phrasing,stingers,holds,rules}=
       prepare(sources,spec,assets,host,bank,undefined,evidence?.streams);
     const decisions=[];
     const eligible=intents.filter(intent=>intent?.kind==='music-transition' || intent?.kind==='music-cue');
@@ -126,13 +172,19 @@
       .sort((a,b)=>a.time-b.time || (a.serial ?? 0)-(b.serial ?? 0));
     const placements=[], markers=[], cueDecisions=[];
     const landing=new Map(events.filter(event=>event.kind==='music-transition').map(event=>[event.time,event.to]));
-    function place(name,at,from,to,{tail=0,fadeIn=0,layers={},kind='segment',source=segments[name].source,phrase}={}) {
+    function place(name,at,from,to,{tail=0,fadeIn=0,layers={},kind='segment',source=segments[name].source,phrase,recall}={}) {
       if (to<=from+1e-8 || at>=end) return;
       check(placements.length<4096,'Music timeline exceeds its placement budget');
       const levels=Object.fromEntries(Object.entries({...segments[name].layers,...layers})
         .filter(([part])=>Object.hasOwn(compiled[source].tracks,part)));
       const placement={segment:name,source,at,from,to,tail,
         fadeIn,layers:levels,gain:segments[name].gain,kind,...(phrase && {phrase})};
+      if(recall&&!recall.used){
+        recall.used=true;
+        const result=R.realize(recall.config,recall.version,compiled[source],from,to,levels);
+        placement.recall=result.report;
+        if(result.notes.length)Object.defineProperty(placement,'recallNotes',{value:result.notes});
+      }
       placements.push(placement);
       memory?.add(placement);
       phrasing?.remember(placement);
@@ -146,7 +198,8 @@
       const selected=phrasing?.choose(name,time,source,via,incomingRule,reason) ?? {source};
       if (choices) decisions.push({segment:name,time,source,matched:match?.when ?? null,history:state,
         ...(selected.source!==source && {overriddenBy:selected.phrase,playedSource:selected.source})});
-      return selected;
+      const config=reason==='entry'&&recalls.get(name);
+      return config?{...selected,recall:{config,version:memory.versions.select(config),used:false}}:selected;
     }
     function playRegion(name,selection,offset,at,stop,fadeIn,layers,rule) {
       const segment=segments[name], first=placements.length, span=stop-at;
@@ -219,7 +272,9 @@
     }
     playRegion(name,selection,offset,start,end,fadeIn,layers);
     placements.sort((a,b)=>a.at-b.at);
-    const themes=memory && {final:memory.at(end),decisions,appearances:memory.completed()};
+    const themes=memory && {final:memory.at(end),decisions,appearances:memory.completed(),
+      ...(memory.versions&&{versions:memory.versions.inspect(),
+        recalls:placements.filter(row=>row.recall).map(({segment,at,recall})=>({segment,at,...recall}))})};
     const performerSpec=spec.performers===undefined ? null : P.musicPersistentPerformers.prepare(
       spec.performers,{sources,compiled,segments,placements,entry:spec.entry});
     return {compiled,segments,placements,markers,cueDecisions,duration:end,themes,performerSpec,
@@ -266,7 +321,7 @@
     for (const clip of timeline.placements) {
       const first=sample(clip.at,sampleRate), span=sample(clip.to,sampleRate)-sample(clip.from,sampleRate);
       if (first>=last || first+span+Math.ceil(clip.tail*sampleRate)<=begin) continue;
-      const additions=world?.additions.get(clip);
+      const additions=R.additions(clip,world?.additions.get(clip));
       const separate=clip.kind==='segment' && timeline.performerSpec?.uses.get(clip.source);
       const key=JSON.stringify([clip.source,clip.from,clip.to,clip.tail,clip.layers,separate ? [...separate] : null]);
       let tracks=additions ? undefined : cache.get(key) ?? shared?.find(sampleRate,key);

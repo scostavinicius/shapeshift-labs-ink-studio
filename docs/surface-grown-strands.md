@@ -38,7 +38,12 @@ and then call `grown.pose(world, { time })`. Keep the mesh's indexed topology an
 UVs for the life of its attachments. A temporarily collapsed triangle hides its
 roots, and restoring the triangle reactivates them in the same native rows.
 
-For linear skinning with Ink's twelve-value bone matrices, prepare a mesh
+To bend the host and its retained curves, paint, and residual splats from one
+control lattice, see [shared deformation cages](hybrid-deformation-cages.md).
+
+[Edit retained mesh skin weights](mesh-topology.md#edit-and-pose-mesh-skin-weights)
+and pose the surface before refreshing its attached strands. For direct linear
+skinning with Ink's twelve-value bone matrices, prepare a mesh
 binding with one bone index or one to four `[bone, weight]` pairs per vertex.
 Register the mesh and curves in Ink's native bone update.
 
@@ -58,6 +63,10 @@ sample or use `intact(uv)` to hide a root or stitch after damage. You can
 also pass `intact(uv, context)` on the host as a UV mask. For Ink cloth,
 `cloth.bindGrowth(growth, appearance)` samples the current cloth pose and
 uses the cloth's tear mask.
+
+For roots that must survive a topology edit, use
+[transferred mesh attachments](mesh-topology.md#transfer-skin-weights-and-attachments-after-editing)
+as a mesh host. Each root names an attachment ID instead of a UV.
 
 ## Grow from an editable SDF
 

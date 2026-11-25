@@ -1,7 +1,7 @@
 /* Shared radix-two FFT for audio analysis and cellular convolution. */
 const InkFFT = (() => {
   function axis(length) {
-    if (!Number.isSafeInteger(length) || length < 1 || length > 262144 || (length & (length - 1)))
+    if (!Number.isSafeInteger(length) || length < 1 || length > 1048576 || (length & (length - 1)))
       throw new RangeError('FFT length must be a power of two within the transform budget');
     const reverse = new Uint32Array(length), cos = new Float64Array(length / 2), sin = cos.slice();
     for (let i = 1; i < length; i++) reverse[i] = (reverse[i >> 1] >> 1) | ((i & 1) * (length >> 1));
@@ -34,4 +34,4 @@ const InkFFT = (() => {
   }
   return Object.freeze({ axis });
 })();
-if (typeof module === 'object' && module.exports) module.exports = InkFFT;
+if (typeof module === 'object' && module.exports) module.exports = InkFFT; else globalThis[Symbol.for('ink-studio.fft')] = InkFFT;

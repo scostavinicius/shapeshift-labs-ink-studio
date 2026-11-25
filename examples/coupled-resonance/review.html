@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Iron Joint · Ink Studio</title>
+<style>
+  :root{color-scheme:dark;--base:#1a1b19;--panel:#252724;--text:#f5f1e8;--muted:#c3c3b7;--line:#4e514b;--gate:#eeb983;--rail:#8ecdbe}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--base);color:var(--text);font:16px/1.55 system-ui,sans-serif}
+  main{max-width:1030px;margin:auto;padding:clamp(24px,5vw,52px) clamp(16px,5vw,54px)}
+  .brand,.state,.legend{font:600 .75rem/1.4 ui-monospace,monospace;letter-spacing:.08em}
+  .brand{color:var(--gate);text-transform:uppercase}
+  h1{font:normal clamp(3.6rem,8vw,6.5rem)/.96 Georgia,serif;letter-spacing:-.065em;margin:.10em 0 .13em}
+  h2{font-size:1rem;margin:0;font-weight:650}
+  header p{margin:0 0 21px;max-width:66ch;color:var(--muted)}
+  section{border:1px solid var(--line);border-radius:12px;background:var(--panel);padding:15px clamp(12px,3vw,21px);margin-bottom:12px}
+  .row,.controls,.legend{display:flex;align-items:center;flex-wrap:wrap;gap:8px}
+  .row{justify-content:space-between}
+  .controls{margin:11px 0}
+  button{font:650 .86rem system-ui,sans-serif;color:var(--text);background:#343630;border:1px solid #565951;border-radius:7px;cursor:pointer;padding:8px 11px}
+  button:hover:not(:disabled){background:#484b43}
+  button:disabled{opacity:.44;cursor:default}
+  button[aria-pressed=true],#gate{background:var(--gate);border-color:var(--gate);color:#292119}
+  #gate:hover,#link[aria-pressed=true]:hover{background:#fbd1a5}
+  #rail{background:var(--rail);border-color:var(--rail);color:#172a25}
+  #rail:hover{background:#afe1d4}
+  :focus-visible{outline:2px solid var(--gate);outline-offset:3px}
+  .state{color:var(--muted)}
+  .pair{display:grid;grid-template-columns:1fr auto 1fr;gap:11px;align-items:center;margin-top:9px}
+  .pair label{min-width:0;color:var(--muted);font-size:.78rem}
+  meter{height:12px;width:100%;display:block;margin-top:3px}
+  #joint{color:var(--gate);font:650 .72rem ui-monospace,monospace;white-space:nowrap}
+  .legend{gap:14px;color:var(--muted)}
+  .legend span::before{content:"";display:inline-block;width:8px;height:8px;background:var(--gate);margin-right:6px}
+  .legend span:last-child::before{background:var(--rail)}
+  audio{height:38px;width:100%}
+  canvas{display:block;width:100%;height:150px;margin-top:7px}
+  @media(max-width:590px){.state{font-size:.69rem}.pair{gap:7px}}
+</style>
+<main>
+  <header>
+    <div class="brand">Ink Studio / Coupled resonance</div>
+    <h1>Iron Joint</h1>
+    <p>Strike the gate while it touches the railing. Listen for the railing on the right. Break contact to hear both bodies ring on their own.</p>
+  </header>
+  <section aria-label="Live gate and railing">
+    <div class="row"><h2>Live contact</h2><span id="status" class="state">Ready</span></div>
+    <div class="controls">
+      <button id="gate" type="button">Strike gate</button>
+      <button id="rail" type="button">Strike railing</button>
+      <button id="link" type="button" aria-pressed="true">Break contact</button>
+      <button id="stop" type="button" disabled>Stop</button>
+    </div>
+    <div class="pair">
+      <label>Gate energy<meter id="gate-energy" min="0" max="1" value="0"></meter></label>
+      <span id="joint">In contact</span>
+      <label>Railing energy<meter id="rail-energy" min="0" max="1" value="0"></meter></label>
+    </div>
+  </section>
+  <section aria-label="Recorded contact comparisons">
+    <div class="row">
+      <h2>Recorded comparisons</h2>
+      <div class="legend"><span>Gate · L</span><span>Railing · R</span></div>
+    </div>
+    <div class="controls" role="group" aria-label="Select a recording">
+      <button type="button" data-take="release" aria-pressed="true">Contact breaks</button>
+      <button type="button" data-take="held" aria-pressed="false">Contact holds</button>
+      <button type="button" data-take="open" aria-pressed="false">Apart throughout</button>
+    </div>
+    <audio controls preload="metadata" aria-label="Selected gate and railing recording"></audio>
+    <canvas id="trace" role="img" aria-label="Gate and railing pickup levels over time"></canvas>
+  </section>
+</main>
+<script>
+const demo=/*INK_PAIR_DATA*/;
+const compressed=/*INK_PAIR_ENGINE*/;
+/*INK_PAIR_SCRIPT*/
+</script>
+</html>

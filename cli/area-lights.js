@@ -39,27 +39,38 @@ function rasterize(lights, { w, h, rayAt, near, capture, clip }) {
 
 const {staticSources,occludes}=AreaLights;
 
-function createLighting(lights, world, data, alpha, { spots = [], shadow, cutoutShadow, shot } = {}) {
+function createLighting(lights, world, data, alpha, { spots = [], shadow, cutoutShadow, shot, art, spill = [], derived = [] } = {}) {
   const active = lights.filter(light=>light.intensity>0).map(light=>({
     ...light, extent:Math.hypot(...light.half), tint:linear(light.rgb)
   }));
   const projectors = spots.map(light => ({ ...light, tint:linear(light.rgb) }));
-  const rig = ShotLighting.bind(shot, world, data, alpha);
-  if (!active.length && !projectors.length && !rig) return null;
-  const sources = active.some(light=>light.shadows) || (!shadow && spots.some(light=>light.castsShadow))
-    ? staticSources(world,data,alpha) : [];
+  const spillLights=spill.filter(light=>light.intensity>0);
+  const rig = ShotLighting.bind(shot, world, data, alpha, art);
+  if (!active.length && !spillLights.length && !projectors.length && !rig) return null;
+  const sources = active.some(light=>light.shadows) || spillLights.some(light=>light.shadows) || (!shadow && spots.some(light=>light.castsShadow))
+    ? staticSources(world,data,alpha,derived) : [];
   const areaShadow = sources.length || cutoutShadow ? (origin, direction, stop) =>
     cutoutShadow?.(origin, direction, stop) || occludes(sources, origin, direction, stop) : null;
   const cache = [];
+  const inkControls = world.renderMetadata?.inkControls;
 
-  function evaluate(point, normal, row, biasNormal) {
+  function evaluate(point, normal, row, biasNormal, specular, spillSuppression) {
     const rgb=[0,0,0];
-    AreaLights.evaluate(active,point,normal,rgb,{shadow:areaShadow,biasNormal});
+    const shadeNormal=art?.normal?.(row,normal) ?? normal, bias=biasNormal??normal;
+    AreaLights.evaluate(active,point,shadeNormal,rgb,{shadow:areaShadow,biasNormal:bias,specular});
+    const spillWeight=1-(spillSuppression ?? (Number.isInteger(row) ? inkControls?.[row*4+3] : undefined) ?? 0);
+    if(spillLights.length&&spillWeight){
+      const emitted=[0,0,0];
+      AreaLights.evaluate(spillLights,point,shadeNormal,emitted,{shadow:areaShadow,biasNormal:bias,
+        contribution:art?.spill && ((light,at)=>art.spill(light,row,at))});
+      const graded=art?.curves.emission?.(emitted) ?? emitted;
+      for(let c=0;c<3;c++)rgb[c]+=graded[c]*spillWeight;
+    }
     for (const light of projectors) {
       const offset = light.at.map((value,k) => value-point[k]), distance = Math.hypot(...offset);
       if (distance <= spotBias || distance >= light.radius) continue;
       const direction = offset.map(value => value/distance);
-      const receive = dot(normal,direction);
+      const receive = dot(shadeNormal,direction);
       if (receive <= 0) continue;
       const weight = spotWeight(light,direction);
       if (!weight) continue;
@@ -78,32 +89,37 @@ function createLighting(lights, world, data, alpha, { spots = [], shadow, cutout
     }
     if (!rig) return rgb.map(n => 1 + n);
     const additional = [0, 0, 0];
-    const retention = rig.sample(row, point, normal, additional);
+    const retention = rig.sample(row, point, normal, additional, bias);
     return rgb.map((n, c) => (n + additional[c] + retention) * rig.exposure);
   }
 
-  function shade(pixel, point, normal, rgb, fog, fogMix = 0, row, biasNormal) {
+  function shade(pixel, point, normal, rgb, fog, fogMix = 0, row, biasNormal, spillSuppression) {
     const previous = cache[pixel];
     let light;
-    if (previous && previous.row === row && point.every((n,k)=>Math.abs(n-previous.point[k])<1e-6) &&
+    if (previous && previous.row === row && previous.spillSuppression === spillSuppression && point.every((n,k)=>Math.abs(n-previous.point[k])<1e-6) &&
         normal.every((n,k)=>Math.abs(n-previous.normal[k])<1e-6) &&
         (biasNormal===previous.biasNormal || biasNormal&&previous.biasNormal&&
           biasNormal.every((n,k)=>Math.abs(n-previous.biasNormal[k])<1e-6))) light=previous.light;
     else {
-      light=evaluate(point,normal,row,biasNormal);
-      cache[pixel]={point,normal,biasNormal,light,row};
+      light=evaluate(point,normal,row,biasNormal,undefined,spillSuppression);
+      cache[pixel]={point,normal,biasNormal,light,row,spillSuppression};
     }
     if (light.every(n => n === 1) || fogMix>=1) return rgb;
     const surface = fogMix ? rgb.map((n,k)=>clamp((n-fog[k]*fogMix)/(1-fogMix))) : rgb;
     const shaded = ShotLighting.shade(surface, light);
     return fogMix ? shaded.map((n,k)=>n+(fog[k]-n)*fogMix) : shaded;
   }
-  shade.receives = row => active.length > 0 || projectors.length > 0 || rig.receives(row);
+  shade.scanSurface = (point,normal,row,biasNormal,view,roughness,strength) => {
+    const highlight=[0,0,0];
+    const gain=evaluate(point,normal,row,biasNormal,{view,roughness,strength,out:highlight});
+    return {irradiance:gain.map(n=>n-1),highlight};
+  };
+  shade.receives = row => active.length > 0 || spillLights.length > 0 || projectors.length > 0 || rig?.receives(row);
   return shade;
 }
 
-function sceneOccluder(world, data, alpha) {
-  const sources = staticSources(world, data, alpha);
+function sceneOccluder(world, data, alpha, derived) {
+  const sources = staticSources(world, data, alpha, derived);
   return sources.length ? (origin, direction, distance) => occludes(sources, origin, direction, distance) : null;
 }
 

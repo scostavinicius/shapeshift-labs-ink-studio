@@ -1,7 +1,9 @@
 /* Keep stable labels alongside native splats when copying or assembling buffers. */
 const SplatProvenance = (() => {
   const tables = [['objectIds', 'objects'], ['materialIds', 'materials'], ['targetIds', 'targets']];
-  const channels = [['normals', 3, Float32Array], ['muteEmission', 1, Uint8Array]];
+  const channels = [['normals', 3, Float32Array], ['shadingNormals',3,Float32Array], ['paintedEmission',3,Float32Array],
+    ['inkControls',4,Float32Array], ['muteEmission', 1, Uint8Array]];
+  const identityCache = new WeakMap();
   const curveLod = (records, indexAt) => records?.length ?
     (typeof CurveLod === 'undefined' ? require('./curve-lod.js') : CurveLod).remap(records, indexAt) : [];
   const perSplat = [['data', 16, Float32Array], ['attr', 4, Float32Array], ['fine', 12, Float32Array],
@@ -9,12 +11,46 @@ const SplatProvenance = (() => {
     ['opticalSplats', 12, Float32Array], ['curveClips', 12, Float32Array], ['curveMaterials', 4, Float32Array],
     ['curveLighting', 7, Float32Array], ['curveTiming', 8, Float64Array], ['curvePattern', 16, Float64Array], ['curveShadows', 1, Uint8Array],
     ['curveStations', 7, Float64Array], ['curveRest',16,Float32Array], ['curveShadowOptics', 1, Float32Array], ['materialPixelStyles', 4, Float32Array],
-    ['shadowLod', 6, Float32Array]];
+    ['shadowLod', 6, Float32Array], ['splatLodProtected', 1, Uint8Array]];
   function targetKey(target) {
     const labels = [target.entity, target.surface, target.prefabs, target.tags, target.medium, target.mediumKind];
     if (target.mark !== undefined || target.markLayer !== undefined || target.part !== undefined) labels.push(target.mark, target.markLayer);
     if (target.part !== undefined) labels.push(target.part);
     return JSON.stringify(labels);
+  }
+
+  const validId = value => typeof value === 'string' && value.trim().length > 0 && value.length <= 4096;
+  function restData(world) {
+    const base = world.anim?.base;
+    return world.rest ?? (base instanceof Float32Array && base.length>=world.count*16 ? base : world.data);
+  }
+
+  function identities(world, { fresh = false } = {}) {
+    const rest = restData(world);
+    const authored = world.splatIds, metadata = world.renderMetadata, count = world.count;
+    const prior = identityCache.get(rest);
+    if (!fresh && prior && prior.authored === authored && prior.metadata === metadata && prior.count === count) return prior.index;
+    const selectors = typeof TargetSelectors === 'undefined' ? require('./target-selectors.js') : TargetSelectors;
+    const { row } = selectors.index(world);
+    const ids = new Array(count), rows = new Map();
+    for (let i = 0; i < count; i++) {
+      const target = row(i), owner = target.entity ?? target.object;
+      const offset = i*16;
+      const x = rest[offset], y = rest[offset+1], z = rest[offset+2];
+      const id = validId(authored?.[i]) ? authored[i] :
+        owner != null && Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(z)
+          ? 'rest:' + JSON.stringify([owner,target.part ?? null,x,y,z]) : undefined;
+      if (!validId(id)) continue;
+      ids[i] = id;
+      rows.set(id,rows.has(id) ? -1 : i);
+    }
+    const index = Object.freeze({
+      idAt: i => rows.get(ids[i]) === i ? ids[i] : undefined,
+      ambiguous: i => rows.get(ids[i]) === -1,
+      rowOf: id => rows.get(id) ?? -1
+    });
+    identityCache.set(rest,{ authored, metadata, count, index });
+    return index;
   }
 
   function dictionary(key = value => value) {
@@ -170,6 +206,13 @@ const SplatProvenance = (() => {
       moving: Int32Array.from(moving), back: Int32Array.from(back) });
   }
 
+  function harmonicRows(input,count,transfer) {
+    const {degree,dc,sh,linear,normals,available}=input, terms=(degree+1)**2-1;
+    return {...input,count,dc:transfer(dc,3,Float32Array),sh:transfer(sh,terms*3,Float32Array),
+      ...(available&&{available:transfer(available,1,Uint8Array)}),
+      ...(linear&&{linear:transfer(linear,1,Uint8Array)}),...(normals&&{normals:transfer(normals,3,Int8Array)})};
+  }
+
   function subset(world, selection) {
     const indices = Array.from(selection);
     if (indices.some(i => !Number.isSafeInteger(i) || i < 0 || i >= world.count) || new Set(indices).size !== indices.length)
@@ -186,12 +229,19 @@ const SplatProvenance = (() => {
     }
     const remap = new Map(indices.map((source, i) => [source, i]));
     if (world.curveLod) result.curveLod = curveLod(world.curveLod, i => remap.get(i));
+    if (world.splatBakedEmission) {
+      result.splatBakedEmission = new Map();
+      for (const [source, linear] of world.splatBakedEmission)
+        if (remap.has(source)) result.splatBakedEmission.set(remap.get(source), linear);
+    }
     function take(source, stride, Type) {
       const out = new Type(indices.length * stride);
       for (let i = 0; i < indices.length; i++) out.set(source.subarray(indices[i] * stride, (indices[i] + 1) * stride), i * stride);
       return out;
     }
     for (const [key, stride, Type] of perSplat) if (world[key]) result[key] = take(world[key], stride, Type);
+    if (world.rest instanceof Float32Array) result.rest = take(world.rest,16,Float32Array);
+    if (world.gaussianHarmonics) result.gaussianHarmonics=harmonicRows(world.gaussianHarmonics,indices.length,take);
     if (world.renderMetadata) {
       const source = world.renderMetadata, meta = result.renderMetadata = { ...source };
       for (const [key, stride, Type] of channels) if (source[key]) meta[key] = take(source[key], stride, Type);
@@ -209,11 +259,94 @@ const SplatProvenance = (() => {
     return result;
   }
 
+  // Append static rows without changing existing row addresses or slot numbers.
+  // Each clone refers to an earlier row, including rows added in the same batch.
+  function appendStatic(world, additions) {
+    if (!(world?.data instanceof Float32Array) || !Number.isSafeInteger(world.count) || world.count<0 ||
+        world.data.length<world.count*16 || !Array.isArray(additions) || world.count+additions.length>0xffffff)
+      throw new RangeError('Appending splats needs a packed world and an array of additions');
+    const count=world.count+additions.length;
+    for (const [i,row] of additions.entries()) {
+      if (!validId(row?.id) || !Array.isArray(row.position) || row.position.length!==3 ||
+          !Array.from(row.position).every(Number.isFinite) ||
+          (row.from===undefined ? !(row.data instanceof Float32Array) || row.data.length!==16 :
+            !Number.isSafeInteger(row.from) || row.from<0 || row.from>=world.count+i))
+        throw new RangeError('A splat addition needs an ID, position, and packed row or earlier source index');
+    }
+    function extend(source,stride,Type) {
+      const out=new Type(count*stride);
+      if (source) out.set(source.subarray(0,world.count*stride));
+      for (const [i,{from}] of additions.entries()) if (from!==undefined)
+        out.copyWithin((world.count+i)*stride,from*stride,(from+1)*stride);
+      return out;
+    }
+    const patch={count};
+    for (const [key,stride,Type] of perSplat) if (world[key]) patch[key]=extend(world[key],stride,Type);
+    patch.rest=extend(restData(world),16,Float32Array);
+    patch.splatIds=Object.freeze([...Array.from({length:world.count},(_,i)=>world.splatIds?.[i]??null),
+      ...additions.map(row=>row.id)]);
+    const renderMetadata=patch.renderMetadata={...world.renderMetadata};
+    for (const [key,stride,Type] of channels) if (renderMetadata[key])
+      renderMetadata[key]=extend(renderMetadata[key],stride,Type);
+    for (const [key,table] of tables) {
+      const label = table==='objects' ? 'object' : table==='materials' ? 'material' : 'target';
+      if (!renderMetadata[key] && !additions.some(row=>row[label]!==undefined)) continue;
+      const names=[...(renderMetadata[table]??[null])];
+      const keyOf=label==='target' ? targetKey : value=>value;
+      const slots=new Map(names.flatMap((name,i)=>i && name!=null ? [[keyOf(name),i]] : []));
+      const indices=extend(renderMetadata[key],1,Uint32Array);
+      for (const [i,row] of additions.entries()) {
+        if (row.from!==undefined) indices[world.count+i]=indices[row.from];
+        else if (row[label]!==undefined) {
+          const key=keyOf(row[label]);
+          if (!slots.has(key)) slots.set(key,names.push(row[label])-1);
+          indices[world.count+i]=slots.get(key);
+        }
+      }
+      renderMetadata[key]=indices;
+      renderMetadata[table]=names;
+    }
+    for (const [i,row] of additions.entries()) for (const data of [patch.data,patch.rest]) {
+      const offset=(world.count+i)*16;
+      if (row.data) data.set(row.data,offset);
+      else data.copyWithin(offset,row.from*16,(row.from+1)*16);
+      data.set(row.position,offset);
+    }
+    if (patch.materialAlbedo) for (const [i,{pigment}] of additions.entries())
+      if (pigment!==undefined) patch.materialAlbedo[world.count+i]=pigment+1;
+    if (world.gaussianHarmonics) {
+      const input=world.gaussianHarmonics;
+      const harm=patch.gaussianHarmonics=harmonicRows({...input,available:input.available??new Uint8Array(world.count).fill(1)},
+        count,extend);
+      for (const [i,{from,scan}] of additions.entries()) {
+        const row=world.count+i;
+        if (scan) {
+          harm.dc.set(scan.dc,row*3);
+          harm.sh.set(scan.sh,row*scan.sh.length);
+          if (harm.linear) harm.linear[row]=Number(scan.linear);
+          if (scan.normal) harm.normals.set(scan.normal,row*3);
+        } else if (from===undefined) {
+          const color=patch.data[row*16+7];
+          for (let k=0;k<3;k++) harm.dc[row*3+k]=((color>>(k*8)&255)/255-.5)/.28209479177387814;
+        }
+      }
+    }
+    const F=typeof SplatFootprints==='undefined' ? require('./splat-footprints.js') : SplatFootprints;
+    const footprint=F.validate(world);
+    if (footprint) patch.splatFootprints=F.layout(count,footprint.styles,extend(footprint.indices,1,Uint16Array),
+      footprint.frames && extend(footprint.frames,6,Float32Array));
+    const E=typeof Engraving==='undefined' ? require('./engraving.js') : Engraving;
+    const engraving=E.validate(world);
+    if (engraving) patch.engraving=E.layout(count,engraving.styles,extend(engraving.indices,1,Uint16Array),
+      extend(engraving.anchors,3,Float32Array),extend(engraving.restFrames,6,Float32Array));
+    return patch;
+  }
+
   function bindPaint(rows) {
     const api = typeof PaintCorrections === 'undefined' ? require('./paint-corrections.js') : PaintCorrections;
     return api.bind(rows);
   }
 
-  return Object.freeze({ join, subset, fromRecords, targetKey });
+  return Object.freeze({ join, subset, appendStatic, fromRecords, targetKey, validId, identities, restData });
 })();
 if (typeof module !== 'undefined') module.exports = SplatProvenance;

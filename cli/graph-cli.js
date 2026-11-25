@@ -4,6 +4,15 @@ const { once } = require('node:events');
 const { createInterface } = require('node:readline');
 const { save, graphOutputs } = require('./graph-outputs.js');
 const { readGraphProject } = require('./graph-project.js');
+const { openMaterialGraph, readMaterialGraph, writeMaterialGraph } = require('./material-graph.js');
+const { describeMaterialMetadata } = require('./material-metadata.js');
+const { inspectMaterialVisibility } = require('./material-visibility.js');
+const { editMaterialParameters, inspectMaterialParameters } = require('./material-parameters.js');
+const { editMaterialPresets, inspectMaterialPresets, exportMaterialPresets } = require('./material-presets.js');
+const MaterialPresets = require('../src/material-presets.js');
+const { publishJson } = require('./asset-files.js');
+const { searchMaterialLibrary, publishMaterialLibrary } = require('./material-library.js');
+const { describeMaterialSubgraph, editMaterialSubgraph, publishMaterialSubgraph } = require('./material-subgraphs.js');
 const { findGraphGroupUsers } = require('./graph-groups.js');
 const { snapshotFormat, diffGraphs } = require('./graph-diff.js');
 const { openGraphArtifactCache, engineFingerprint, fingerprint } = require('./graph-artifact-cache.js');
@@ -16,12 +25,20 @@ const cacheFlags=['cache','cache-bytes','cache-entries'];
 const executionFlags=['workers',...cacheFlags];
 const flags = {
   validate:['inputs','json'], plan:['inputs','json','memory'], dependencies:['json'], snapshot:['inputs','at','seed','json'],
-  inspect:['inputs','at','seed','out','output','node','port','json',...executionFlags],
+  inspect:['inputs','at','seed','out','output','node','port','map','component','json',...executionFlags],
   run:['inputs','at','seed','out','json',...executionFlags],
   batch:['inputs','at','seed','out','json','resume','progress',...executionFlags],
   session:['protocol','out','workers'],
   clip:['inputs','seed','out','output','from','to','fps','warmup','cuts','clock','format','render-options','capture-options','json',...executionFlags]
 };
+for (const options of Object.values(flags)) options.push('instance','base-context');
+const discoveryFlags = { nodes: ['json'], describe: ['json', 'example'] };
+const analysisFlags = { impact: ['root', 'json'], diff: ['adapters', 'json'], material: ['id', 'out', 'base', 'output-usages', 'metadata'],
+  subgraph: ['out', 'adapters'], 'publish-subgraph': ['out', 'revision', 'adapters'],
+  'material-presets': ['out', 'instance', 'export', 'presets'],
+  'material-parameters': ['out', 'instance', 'inputs', 'adapters'],
+  'material-visibility': ['inputs', 'instance', 'scope'], 'material-info': ['audience'], 'material-library': ['audience', 'query', 'tag', 'offset', 'limit', 'out'] };
+const commandOptions = { ...flags, ...discoveryFlags, ...analysisFlags, ...host.commands };
 
 async function sendText(text) {
   if (!process.stdout.write(text+'\n')) await once(process.stdout,'drain');
@@ -55,8 +72,8 @@ async function session(project, directory, inputs) {
         }
         let result;
         if (op==='inspect') {
-          const {output,node,port,...settings}=options;
-          result=project.inspect({output,node,port},settings);
+          const {output,node,port,map,component,...settings}=options;
+          result=project.inspect({output,node,port,map,component},settings);
         } else if (op==='run') result=project.run(options);
         else throw new TypeError('Unknown graph session operation '+op);
         const folder=directory && 'request-'+sequence;
@@ -106,10 +123,10 @@ function clipOptions(opt, sources, defaultClock) {
 
 async function graphCommand(pos,opt,settings) {
   const [mode,file,caseFile]=pos;
-  if (mode==='nodes' || mode==='describe') {
+  if (Object.hasOwn(discoveryFlags, mode)) {
     const listing=mode==='nodes';
     if (pos.length!==(listing ? 1 : 2) || opt.json && opt.example ||
-        Object.entries(opt).some(([key,value])=>value!==true || key!=='json' && (listing || key!=='example')))
+        Object.entries(opt).some(([key,value])=>value!==true || !discoveryFlags[mode].includes(key)))
       throw new TypeError('Use graph nodes [--json] or graph describe <op> [--json | --example]');
     const result=listing ? catalog.listGraphNodes(settings) : catalog.describeGraphNode(file,settings);
     if (opt.json) return send(result);
@@ -119,15 +136,123 @@ async function graphCommand(pos,opt,settings) {
     }
     return sendText(listing ? catalog.listText(result) : catalog.nodeText(result));
   }
+  if (mode==='material') {
+    if (pos.length!==2 || Object.entries(opt).some(([key,value])=>
+      !analysisFlags.material.includes(key) || typeof value!=='string' || !value.trim()))
+      throw new TypeError('Use graph material <project-or-material.json> [--id ID] [--base settings.json] [--output-usages maps.json] [--metadata metadata.json] [--out material.json]');
+    let document=readMaterialGraph(file,{id:opt.id});
+    for (const [flag,key] of [['base','base'],['output-usages','outputUsages'],['metadata','metadata']]) {
+      if (opt[flag]===undefined) continue;
+      if (opt.out!==undefined && path.resolve(opt[flag])===path.resolve(opt.out))
+        throw new TypeError('Choose a material output separate from the '+flag+' settings file');
+      const value=JSON.parse(fs.readFileSync(path.resolve(opt[flag]),'utf8'));
+      document=openMaterialGraph(key==='metadata' ? {...document,metadata:value} :
+        {...document,settings:{...document.settings,[key]:value}});
+    }
+    if (opt.out===undefined) return send(document);
+    const result=writeMaterialGraph(opt.out,document,{baseDir:path.dirname(path.resolve(file))});
+    return send({file:path.resolve(opt.out),format:result.format,version:result.version,id:result.id});
+  }
+  if (mode==='material-presets') {
+    const exporting=opt.export!==undefined;
+    if (![2,3].includes(pos.length) || Object.entries(opt).some(([key,value])=>
+      !analysisFlags[mode].includes(key) || typeof value!=='string' || !value.trim()) ||
+      caseFile && (opt.instance!==undefined || exporting) ||
+      !caseFile && opt.out!==undefined || !exporting && opt.presets!==undefined ||
+      exporting && opt.instance!==undefined)
+      throw new TypeError('Use graph material-presets <material.json> [--instance ID], <material.json> <request-or-package.json> [--out material.json], or <material.json> --export presets.json [--presets ID,ID]');
+    const sourceFile=path.resolve(file), document=readMaterialGraph(sourceFile), options={kit:settings.kit};
+    if (exporting) {
+      const ids=opt.presets?.split(',').map(id=>id.trim());
+      const bundle=exportMaterialPresets(document,{...options,ids}), target=path.resolve(opt.export);
+      publishJson(target,bundle,'Choose a separate destination for the preset package');
+      return send({file:target,...bundle});
+    }
+    if (!caseFile) return send(inspectMaterialPresets(document,{...options,instance:opt.instance}));
+    const requestFile=path.resolve(caseFile);
+    if (opt.out && path.resolve(opt.out)===requestFile)
+      throw new TypeError('Choose a material output separate from the preset request or package');
+    const input=JSON.parse(fs.readFileSync(requestFile,'utf8'));
+    const request=input?.format===MaterialPresets.format ? {kind:'import',bundle:input} : input;
+    const result=editMaterialPresets(document,request,options);
+    if (!opt.out) return send(result);
+    const saved=writeMaterialGraph(opt.out,result.document,{baseDir:path.dirname(sourceFile)});
+    return send({file:path.resolve(opt.out),id:saved.id,inspector:result.inspector});
+  }
+  if (mode==='material-parameters') {
+    if (![2,3].includes(pos.length) || Object.entries(opt).some(([key,value])=>
+      !analysisFlags[mode].includes(key) || typeof value!=='string' || !value.trim()) ||
+      caseFile && (opt.instance!==undefined || opt.inputs!==undefined) ||
+      !caseFile && (opt.out!==undefined || opt.adapters!==undefined))
+      throw new TypeError('Use graph material-parameters <material.json> [--instance ID] [--inputs values.json] or <material.json> <request.json> [--out material.json]');
+    const sourceFile=path.resolve(file), baseDir=path.dirname(sourceFile), document=readMaterialGraph(sourceFile);
+    if (!caseFile) {
+      const inputs=opt.inputs===undefined ? undefined : JSON.parse(fs.readFileSync(path.resolve(opt.inputs),'utf8'));
+      return send(inspectMaterialParameters(document,{kit:settings.kit,instance:opt.instance,inputs}));
+    }
+    const requestFile=path.resolve(caseFile);
+    if (opt.out && path.resolve(opt.out)===requestFile)
+      throw new TypeError('Choose a material output separate from the parameter request');
+    settings=await host.adapters(opt.adapters,settings);
+    const result=editMaterialParameters(document,JSON.parse(fs.readFileSync(requestFile,'utf8')),
+      {...settings,baseDir,sourceFile});
+    if (!opt.out) return send(result);
+    const saved=writeMaterialGraph(opt.out,result.document,{baseDir});
+    return send({file:path.resolve(opt.out),id:saved.id,inspector:result.inspector});
+  }
+  if (mode==='material-visibility') {
+    if (pos.length!==2 || Object.entries(opt).some(([key,value])=>
+      !analysisFlags[mode].includes(key) || typeof value!=='string' || !value.trim()))
+      throw new TypeError('Use graph material-visibility <material.json> [--inputs values.json] [--instance ID] [--scope GROUP/PATH]');
+    const inputs=opt.inputs===undefined ? undefined : JSON.parse(fs.readFileSync(path.resolve(opt.inputs),'utf8'));
+    return send(inspectMaterialVisibility(readMaterialGraph(file),{kit:settings.kit,inputs,
+      instance:opt.instance,scope:opt.scope?.split('/')}));
+  }
+  if (mode==='material-info' || mode==='material-library') {
+    if (pos.length!==2 || Object.entries(opt).some(([key,value])=>
+      !analysisFlags[mode].includes(key) || typeof value!=='string' || !value.trim()))
+      throw new TypeError('Use graph material-info <material.json> [--audience workspace|publication] or graph material-library <registry.json> [--audience NAME] [--query TEXT] [--tag TAG] [--out directory]');
+    if (mode==='material-info') return send(describeMaterialMetadata(file,{audience:opt.audience}));
+    const {audience,query,tag,out}=opt;
+    const options={kit:settings.kit,audience,query,tag,
+      offset:opt.offset===undefined ? undefined : Number(opt.offset), limit:opt.limit===undefined ? undefined : Number(opt.limit)};
+    return send(out===undefined ? searchMaterialLibrary(file,options) : publishMaterialLibrary(file,{...options,out}));
+  }
+  if (mode==='subgraph' || mode==='publish-subgraph') {
+    const publish=mode==='publish-subgraph';
+    if (pos.length!==(publish ? 2 : 3) || publish && !opt.out || Object.entries(opt).some(([key,value])=>
+      !analysisFlags[mode].includes(key) || typeof value!=='string' || !value.trim()))
+      throw new TypeError('Use graph subgraph <material.json> <request.json> [--out material.json] or graph publish-subgraph <material.json> --out group.json [--revision N]');
+    settings=await host.adapters(opt.adapters,settings);
+    const sourceFile=path.resolve(file), baseDir=path.dirname(sourceFile);
+    const document=readMaterialGraph(sourceFile), options={...settings,baseDir,sourceFile};
+    if (publish) return send(publishMaterialSubgraph(opt.out,document,
+      {...options,revision:opt.revision===undefined ? undefined : Number(opt.revision)}));
+    const requestFile=path.resolve(caseFile), request=JSON.parse(fs.readFileSync(requestFile,'utf8'));
+    if (request?.kind==='inspect') {
+      if (opt.out) throw new TypeError('A subgraph inspection does not take --out');
+      const { kind, ...target }=request;
+      return send(describeMaterialSubgraph(document,target,options));
+    }
+    if (opt.out && path.resolve(opt.out)===requestFile)
+      throw new TypeError('Choose a material output separate from the subgraph request');
+    const edited=editMaterialSubgraph(document,request,options);
+    if (!opt.out) return send(edited);
+    const saved=writeMaterialGraph(opt.out,edited.document,{baseDir});
+    const materialFile=path.resolve(opt.out);
+    const source=edited.subgraph.source;
+    if (source.file===sourceFile && source.kind==='inline') source.file=materialFile;
+    return send({file:materialFile,id:saved.id,subgraph:edited.subgraph});
+  }
   if (mode==='impact') {
     if (pos.length!==2 || Object.entries(opt).some(([key,value])=>
-      key==='json' ? value!==true : key!=='root' || typeof value!=='string' || !value.trim()))
+      key==='json' ? value!==true : !analysisFlags.impact.includes(key) || typeof value!=='string' || !value.trim()))
       throw new TypeError('Use graph impact <group.json> [--root directory] [--json]');
     return send(findGraphGroupUsers(file,{root:opt.root}),opt.json);
   }
   if (mode==='diff') {
     if (pos.length!==3 || Object.entries(opt).some(([key,value])=>
-      key==='json' ? value!==true : key!=='adapters' || typeof value!=='string' || !value.trim()))
+      key==='json' ? value!==true : !analysisFlags.diff.includes(key) || typeof value!=='string' || !value.trim()))
       throw new TypeError('Use graph diff <before.json> <after.json> [--json]');
     settings=await host.adapters(opt.adapters,settings);
     const read = source => {
@@ -145,7 +270,7 @@ async function graphCommand(pos,opt,settings) {
       Object.entries(opt).some(([key,value])=>key!=='adapters' && !flags[mode].includes(key) ||
         (['json','resume','memory'].includes(key) ? value!==true : key==='progress' ? value!=='ndjson' :
           typeof value!=='string' || !value.trim())) ||
-      opt.port!==undefined && opt.node===undefined || opt.protocol!==undefined && opt.protocol!=='ndjson')
+      opt.port!==undefined && opt.node===undefined || opt.component!==undefined && opt.map===undefined || opt.protocol!==undefined && opt.protocol!=='ndjson')
     throw new TypeError('Use graph validate|plan|dependencies|snapshot|inspect|run|batch|session|clip <project.json> [cases-or-sweep.json]. See ink-studio help');
   if (opt.cache===undefined && cacheFlags.slice(1).some(flag=>opt[flag]!==undefined))
     throw new TypeError('Graph cache limits need --cache directory');
@@ -157,7 +282,11 @@ async function graphCommand(pos,opt,settings) {
 }
 
 async function projectCommand(mode,file,caseFile,opt,settings) {
-  const project=readGraphProject(file,{...settings,planAssets:opt.memory===true}), sources=project.sourceFiles();
+  const contextFile=opt['base-context']===undefined ? undefined : path.resolve(opt['base-context']);
+  const baseContext=contextFile===undefined ? undefined : JSON.parse(fs.readFileSync(contextFile,'utf8'));
+  const project=readGraphProject(file,{...settings,planAssets:opt.memory===true,instance:opt.instance,baseContext});
+  const sources=project.sourceFiles();
+  if (contextFile) sources.push(contextFile);
   if (settings.adapterFile) sources.push(settings.adapterFile);
   let inputs, result;
   if (opt.inputs!==undefined) {
@@ -184,7 +313,7 @@ async function projectCommand(mode,file,caseFile,opt,settings) {
     const options={...run,...clipOptions(opt,sources,project.takeClock)};
     result=execute(options,()=>project.clip(options));
   } else if (mode==='inspect') {
-    const target={output:opt.output,node:opt.node,port:opt.port ?? 'value'};
+    const target={output:opt.output,node:opt.node,port:opt.port,map:opt.map,component:opt.component};
     result=execute([target,run],()=>project.inspect(target,run));
   } else if (mode==='batch') {
     const cases=path.resolve(caseFile);
@@ -215,3 +344,4 @@ async function projectCommand(mode,file,caseFile,opt,settings) {
 }
 
 module.exports=graphCommand;
+module.exports.commandOptions=commandOptions;

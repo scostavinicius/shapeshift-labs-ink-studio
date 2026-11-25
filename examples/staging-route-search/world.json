@@ -1,0 +1,175 @@
+{
+  "format": "ink-studio/world",
+  "version": 1,
+  "id": "breakwater-watch",
+  "seed": 38,
+  "dt": 0.5,
+  "history": {
+    "enabled": false
+  },
+  "entities": {
+    "camera": {
+      "position": [
+        -4,
+        1.3,
+        0
+      ]
+    },
+    "keeper": {
+      "position": [
+        -1.15,
+        1,
+        1.5
+      ]
+    },
+    "watcher": {
+      "position": [
+        -3.4,
+        1,
+        -2
+      ]
+    },
+    "latch": {
+      "position": [
+        1.7,
+        0.95,
+        0
+      ],
+      "sockets": {
+        "contact": [
+          -0.2,
+          0.1,
+          0
+        ]
+      }
+    },
+    "beacon": {
+      "position": [
+        1.7,
+        1.2,
+        2.1
+      ]
+    },
+    "bell": {
+      "position": [
+        -1.2,
+        1.25,
+        0
+      ]
+    }
+  },
+  "systems": {
+    "walls": {
+      "kind": "mechanics",
+      "config": {
+        "ground": -5,
+        "gravity": [
+          0,
+          0,
+          0
+        ],
+        "bodies": {
+          "divider": {
+            "position": [
+              0.2,
+              1,
+              0
+            ],
+            "half": [
+              0.24,
+              1,
+              1.15
+            ],
+            "fixed": true
+          }
+        }
+      }
+    },
+    "shutter": {
+      "kind": "gameplay",
+      "config": {
+        "inputs": {
+          "pressed": "bool"
+        },
+        "initial": "ready",
+        "states": {
+          "ready": {
+            "transitions": [
+              {
+                "to": "revealed",
+                "when": {
+                  "input": "pressed"
+                }
+              }
+            ]
+          },
+          "revealed": {}
+        }
+      }
+    },
+    "latch-use": {
+      "kind": "gameplay",
+      "config": {
+        "inputs": {
+          "pressed": "bool"
+        },
+        "initial": "ready",
+        "states": {
+          "ready": {
+            "transitions": [
+              {
+                "to": "contact",
+                "when": {
+                  "input": "pressed"
+                }
+              }
+            ]
+          },
+          "contact": {}
+        }
+      }
+    },
+    "warning": {
+      "kind": "gameplay",
+      "config": {
+        "inputs": {
+          "pressed": "bool"
+        },
+        "initial": "ready",
+        "states": {
+          "ready": {
+            "transitions": [
+              {
+                "to": "queued",
+                "when": {
+                  "input": "pressed"
+                }
+              }
+            ]
+          },
+          "queued": {}
+        }
+      }
+    }
+  },
+  "commands": [
+    {
+      "tick": 2,
+      "action": "world/event",
+      "args": {
+        "kind": "dialogue-start",
+        "speaker": "keeper",
+        "line": "hold-the-beam"
+      }
+    },
+    {
+      "tick": 6,
+      "action": "world/event",
+      "args": {
+        "kind": "dialogue-end",
+        "speaker": "keeper",
+        "line": "hold-the-beam"
+      }
+    }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "format": "ink-studio/directional-captions",
+  "version": 1,
+  "mergeMs": 360,
+  "holdMs": 1250,
+  "rules": [
+    {"id":"steps","cues":["step-a","step-b"],"text":"Bootstep","burstText":"Bootsteps"},
+    {"id":"duct","cues":["duct"],"text":"Metal duct clatters"},
+    {"id":"bell","cues":["bell"],"text":"Pump bell rings","priority":20},
+    {"id":"cart","cues":["cart"],"text":"Cart rattles"},
+    {"id":"spanner","cues":["spanner"],"text":"Spanner drops"}
+  ]
+}

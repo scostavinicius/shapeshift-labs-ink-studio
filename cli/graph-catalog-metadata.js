@@ -17,6 +17,12 @@ const types = {
   linearRaster: { channels: [3, 4], finite: true, alpha: [0, 1] },
   cameraGrid: { layout: 'Art-grid dimensions, view matrix, vertical scale, projection and clipping planes' },
   raster: { layout: 'Interleaved samples on a positive integer grid', channels: [1, 4], finite: true },
+  scalarRaster: { layout: 'Single numeric channel with no color space tag' },
+  typedImage: { layout: 'Versioned raster and declared image contract' },
+  colorImage: { layout: 'Typed RGB or RGBA image' },
+  heightImage: { layout: 'Typed floating-point height with units' },
+  reliefHeight: { layout: 'Typed height in art pixels or a legacy numeric scalar raster' },
+  materialChannels: { layout: 'Versioned named raster channels with independent grids and metadata', minItems: 1, maxItems: 64 },
   image: { layout: 'Width, height and image data' },
   palette: { minItems: 1, maxItems: 256, entries: 'RGB integer, #rrggbb or normalized RGB triple' },
   path: { minItems: 2, dimensions: [2, 3], finite: true },
@@ -59,6 +65,8 @@ const dimension = { constraints: { integer: true, min: 1, max: 8192 } };
 const ports = {
   'array.broadcast': { mode: oneOf('zip', 'cycle', 'hold', 'cartesian', 'cartesianReverse'), limit: limit(1, 100000, true) },
   'array.sort': { direction: oneOf('asc', 'desc') },
+  'model.prefab': {revision: {constraints: {integer: true, min: 1}}, kind: oneOf('visual', 'world')},
+  'model.compare': {kind: oneOf('visual', 'world')},
   'raster.canvas': { width: dimension, height: dimension,
     color: { unit: 'byte levels', constraints: { lengths: [3, 4], min: 0, max: 255 } } },
   'raster.select': { index: { unit: 'zero-based index', constraints: { integer: true, min: 0 } } },
@@ -129,7 +137,11 @@ const ports = {
   'proc.path': { length: unit('source coordinate units') },
   'proc.cable': { length: unit('world units'), start: unit('world units'), end: unit('world units') },
   'geo.tube': { start: unit('world units'), end: unit('world units') },
-  attributeTransfer: { domain: oneOf('vertex', 'face', 'point', 'curve', 'instance', 'splat') },
+  attributeElements: { domain: oneOf('vertex', 'face', 'edge', 'corner', 'curve-control', 'splat') },
+  attributeTable: { domain: oneOf('vertex', 'face', 'edge', 'corner', 'point', 'curve', 'curve-control', 'instance', 'splat') },
+  attributeLineage: { domain: oneOf('edge', 'corner', 'curve-control', 'splat') },
+  attributeRemap: { domain: oneOf('vertex', 'face', 'edge', 'corner', 'point', 'curve', 'curve-control', 'instance', 'splat') },
+  attributeTransfer: { domain: oneOf('vertex', 'face', 'edge', 'corner', 'point', 'curve', 'curve-control', 'instance', 'splat') },
   time: { value: seconds },
   random: { value: { constraints: { min: 0, exclusiveMax: 1 } } }
 };
@@ -374,7 +386,11 @@ const simulationClock = { dt: property('number', { ...seconds, ...limit(.001, .1
   maxTicks: property('number', limit(1, 12000, true), 2400) };
 
 const specialization = {
+  'image.uniform': { field: 'descriptor', description: 'A literal image intent and layout select the value port and typed output.' },
+  'image.convert': { field: 'descriptor', description: 'A literal target intent selects the output type. Optional fields change how samples are represented.' },
+  'image.declare': { field: 'descriptor', description: 'A literal image intent selects the output type and the source raster contract.' },
   'array.map': { field: 'group', description: 'The group declares item, optional numeric index and value. Extra group inputs become ports.' },
+  'array.mapById': {field: 'group', description: 'The group takes a record item and optional numeric index. Each result carries the source ID and optional split ancestry.'},
   'array.filter': { field: 'group', description: 'The group returns a boolean value. Extra group inputs become ports.' },
   'array.reduce': { field: 'group', description: 'The group declares item and accumulator, and returns a compatible value. Initial uses the accumulator type.' },
   'array.sort': { field: 'group', optional: true, description: 'Optional group returns a numeric or string key. With no group the items are their own keys.' },

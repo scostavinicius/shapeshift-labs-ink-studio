@@ -4,6 +4,7 @@ import { inspectionDepth } from './inspection.mjs';
 
 export const graphCapture = Symbol('render graph raster capture');
 export const graphOwner = Symbol('render graph owner capture');
+export const graphEffectPixel = Symbol('render graph effect pixel');
 
 const tileScheduleGLSL = `
 bool tileDue(vec2 pixel, ivec3 tiles, ivec4 cycle) {
@@ -39,12 +40,18 @@ uniform vec2 u_size, u_passSize, u_offset, u_amplitude;
 uniform bool u_packedDepth, u_depthMask, u_depthInvert, u_background, u_displayMask, u_budgetLinear;
 uniform vec3 u_depthWindow;
 uniform int u_operation;
+uniform int u_effectProbe;
+uniform vec2 u_effectPoint;
 uniform bool u_hasMask, u_hasSelect, u_hasRect, u_invert, u_layer, u_linear, u_add, u_enabled;
 uniform float u_opacity, u_feather, u_line, u_frequency, u_phase, u_cubeSize;
 uniform bool u_reflectX;
 uniform vec4 u_rect, u_layerDest;
 uniform ivec4 u_layerRegion;
 uniform bool u_layerTopDown;
+uniform bool u_layerProjected;
+uniform vec3 u_chartOrigin, u_chartU, u_chartV, u_chartNormal;
+uniform vec4 u_chartBounds;
+uniform float u_chartReach;
 uniform vec3 u_volumeAt, u_extent, u_eye;
 uniform vec2 u_depthRange, u_projectionScale;
 uniform mat4 u_view;
@@ -73,6 +80,38 @@ float depthAt(vec2 pixel) {
   ivec2 site = min(ivec2(pixel / u_size * vec2(size)), size - 1);
   vec4 value=texelFetch(u_depth, ivec2(site.x, size.y - 1 - site.y), 0);
   return u_packedDepth ? (value.a<.5 ? 1.0 : dot(round(value.rgb*255.0),vec3(1.0,256.0,65536.0))/16777215.0) : value.r;
+}
+
+vec3 worldAt(vec2 pixel, float depth) {
+  ivec2 size = textureSize(u_depth, 0);
+  ivec2 site = min(ivec2(pixel / u_size * vec2(size)), size - 1);
+  vec2 uv = (vec2(site) + .5) / vec2(size);
+  vec2 plane = (uv * vec2(2.0, -2.0) + vec2(-1.0, 1.0)) * u_projectionScale;
+  vec3 local = vec3(plane * (u_ortho ? 1.0 : depth), -depth);
+  return u_eye + vec3(dot(u_view[0].xyz, local), dot(u_view[1].xyz, local), dot(u_view[2].xyz, local));
+}
+
+int projectedCellAt(vec2 pixel, out ivec2 cell) {
+  if (!u_hasDepth) return 0;
+  float normalized = depthAt(pixel);
+  if (normalized >= 1.0) return 0;
+  vec3 offset = worldAt(pixel, mix(u_depthRange.x, u_depthRange.y, normalized)) - u_chartOrigin;
+  if (abs(dot(offset, u_chartNormal)) > u_chartReach) return 1;
+  vec2 uv = (vec2(dot(offset, u_chartU), dot(offset, u_chartV)) - u_chartBounds.xy) /
+    (u_chartBounds.zw - u_chartBounds.xy);
+  if (any(lessThan(uv, vec2(0.0))) || any(greaterThanEqual(uv, vec2(1.0)))) return 2;
+  cell = min(ivec2(uv * vec2(u_layerRegion.zw)), u_layerRegion.zw - 1);
+  return 3;
+}
+
+vec4 projectedTexel(ivec2 cell) {
+  return layerTexel(u_source, u_layerRegion.xy + cell,
+    textureSize(u_source, 0), u_layerTopDown);
+}
+
+vec4 projectedLayerAt(vec2 pixel) {
+  ivec2 cell;
+  return projectedCellAt(pixel, cell) == 3 ? projectedTexel(cell) : vec4(0.0);
 }
 
 int addressAxis(int n, int size, int edge) {
@@ -140,6 +179,8 @@ vec4 windowPixel(vec2 pixel) {
 void main() {
   ivec2 pos = ivec2(gl_FragCoord.xy);
   vec2 pixel = vec2(gl_FragCoord.x, u_passSize.y - gl_FragCoord.y) * u_size / u_passSize;
+  if (u_effectProbe != 0) pixel = u_effectPoint;
+  if (u_effectProbe == 1) { color = layerAt(u_owner, pixel, u_size, false, false); return; }
   vec4 inputColor = layerAt(u_input, pixel, u_size, false, false);
   if (u_operation == 0) { color = inputColor; return; }
   if (u_isolated) inputColor = vec4(0.0);
@@ -160,19 +201,23 @@ void main() {
     float a = u_depthWindow.z > 0.0 ? clamp(edge / u_depthWindow.z, 0.0, 1.0) : step(0.0, edge);
     weight *= n >= 1.0 ? (u_background ? 1.0 : 0.0) : (u_depthInvert ? 1.0 - a : a);
   }
+  if (u_effectProbe == 2) {
+    ivec2 cell = ivec2(0);
+    int status = u_layerProjected ? projectedCellAt(pixel, cell) : 0;
+    float alpha = u_layerProjected ? (status == 3 ? projectedTexel(cell).a : 0.0) :
+      guidedLayerAt(u_source, pixel, u_size, u_layerDest, u_layerRegion, u_layerTopDown, u_linear).a;
+    if (!u_layerProjected) cell.x = int(round(weight * u_opacity * 255.0));
+    color = vec4(vec2(cell), float(status + (chosen > 0.0 ? 4 : 0)), alpha * weight * u_opacity * 255.0) / 255.0;
+    return;
+  }
   if (u_operation == 1) {
     if (u_layer) weight *= guidedLayerAt(u_source, pixel, u_size, u_layerDest, u_layerRegion, u_layerTopDown, u_linear).a;
     if (u_volume) {
-      ivec2 size = textureSize(u_depth, 0);
-      ivec2 site = min(ivec2(pixel / u_size * vec2(size)), size - 1);
       float norm = depthAt(pixel);
       if (norm >= 1.0) weight = 0.0;
       else {
         float depth = mix(u_depthRange.x, u_depthRange.y, norm);
-        vec2 uv = (vec2(site) + .5) / vec2(size);
-        vec2 plane = (uv * vec2(2.0, -2.0) + vec2(-1.0, 1.0)) * u_projectionScale;
-        vec3 local = vec3(plane * (u_ortho ? 1.0 : depth), -depth);
-        vec3 position = u_eye + vec3(dot(u_view[0].xyz, local), dot(u_view[1].xyz, local), dot(u_view[2].xyz, local));
+        vec3 position = worldAt(pixel, depth);
         float d = length((position - u_volumeAt) / u_extent);
         weight *= u_volumeFeather > 0.0 ? clamp((1.0 - d) / u_volumeFeather, 0.0, 1.0) : step(d, 1.0);
       }
@@ -341,7 +386,9 @@ void main() {
     vec3 lookup = (clamp(inputColor.rgb / inputColor.a, 0.0, 1.0) * (u_cubeSize - 1.0) + 0.5) / u_cubeSize;
     color.rgb = mix(inputColor.rgb, texture(u_cube, lookup).rgb * inputColor.a, weight);
   } else if (u_operation == 5) {
-    vec4 over = u_layer ? guidedLayerAt(u_source, pixel, u_size, u_layerDest, u_layerRegion, u_layerTopDown, u_linear) : layerAt(u_source, pixel, u_size, false, false);
+    vec4 over = u_layerProjected ? projectedLayerAt(pixel) :
+      u_layer ? guidedLayerAt(u_source, pixel, u_size, u_layerDest, u_layerRegion, u_layerTopDown, u_linear) :
+        layerAt(u_source, pixel, u_size, false, false);
     over *= weight;
     color.a = over.a + inputColor.a * (1.0 - over.a);
     color.rgb = min(vec3(color.a), over.rgb + inputColor.rgb * (u_add ? 1.0 : 1.0 - over.a));
@@ -414,7 +461,7 @@ void main() {
   color = floor(mix(old, fresh, weight) * 255.0 + .50001) / 255.0;
 }`;
 
-export function createRenderGraph(gl, { api, program, resources, target, textureUnit, fullscreen, maxSize }) {
+export function createRenderGraph(gl, { api, program, resources, target, textureUnit, fullscreen, maxSize, drawLighting }) {
   const shader = program(fragment),
     scene = target();
   const selected = resources.texture(),
@@ -428,7 +475,7 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
   const layerDepth = createCompositeDepth(gl, resources, textureUnit, 6, 11);
   const effects = createRenderEffects(gl, { program, target, textureUnit, fullscreen });
   const history = api.history({ release: buffer => historyFree.push(buffer), releaseAge: buffer => buffer.dispose() });
-  let lastCube, ageScratch, bankShader;
+  let lastCube, ageScratch, bankShader, probeTarget;
   gl.activeTexture(gl.TEXTURE4);
   gl.bindTexture(gl.TEXTURE_3D, cube);
   gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -487,6 +534,21 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
   function execute(world, frame, plan, w, h, destination, present) {
     if (plan.captures.size * w * h > 4194304) throw new RangeError('WebGL render graph capture exceeds its readback budget');
     const layout = api.resources?.(plan, w, h);
+    const time = frame.interfaceTime ?? frame.time ?? world.lookSnapshot?.time ?? 0;
+    const at = frame.effectPixel;
+    const probe = at && api.effectProbe(world, at, w, h, time, 'webgl');
+    const probeBytes = probe && new Uint8Array(4);
+    const effectPoint = probe && at.map(n => n + .5);
+    if (probe) {
+      probeTarget ??= target();
+      probeTarget.resize(1, 1);
+    }
+    function readPixel(buffer, x, y) {
+      gl.bindFramebuffer(gl.READ_FRAMEBUFFER, buffer);
+      gl.readBuffer(gl.COLOR_ATTACHMENT0);
+      gl.readPixels(x, y, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, probeBytes);
+      return Array.from(probeBytes);
+    }
     scene.resize(w, h);
     let ownership, camera, depth, depthRange;
     present(
@@ -532,7 +594,14 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
     const outputs = new Map([['scene', scene]]),
       free = pool.slice(),
       selections = new Map();
-    const time = frame.interfaceTime ?? frame.time ?? world.lookSnapshot?.time ?? 0;
+    if (probe && ownership) {
+      textureUnit(3, ownership.texture);
+      fullscreen(shader, probeTarget.framebuffer, 1, 1, {
+        u_effectProbe: 1, u_effectPoint: effectPoint, u_owner: 3, u_cube: 4, u_size: [w,h], u_passSize: [1,1]
+      });
+      const [r,g,b] = readPixel(probeTarget.framebuffer, 0, 0);
+      probe.setReceiver(ownership.world, r + 256 * g + 65536 * b);
+    }
     const openHistory = history.begin(plan, {
       source: frame.renderHistoryKey ?? world,
       w,
@@ -560,6 +629,8 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
     let lastSelect;
     for (const [index, node] of plan.passes.entries()) {
       const input = outputs.get(node.input) ?? scene;
+      const effect = probe?.effect(node);
+      if (effect && !node.enabled) probe.note(node, effect);
       if ((!node.enabled || (!ownership && (node.type === 'history' || (node.type === 'frameAge' || node.bank) && node.select))) && node.type !== 'mask')
         outputs.set(node.id, input);
       else {
@@ -574,7 +645,7 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
           table = node.type === 'grade' && api.cube(node);
         const layer =
           node.enabled && node.layer && (!feedback || memory.capture) &&
-          api.layer(node, w, h, world, time, camera, gl, frame.time, frame.renderGraphInputs);
+          api.layer(node, w, h, world, time, camera, gl, frame.time, frame.renderGraphInputs, drawLighting);
         const window = node.window && node.opacity && api.windowFrame(node.window, {
           world, time, sceneTime: frame.time, width: w, height: h, camera
         });
@@ -652,6 +723,7 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
           u_selected: 5,
           u_size: [w, h],
           u_passSize: [w, h],
+          u_effectProbe: 0,
           u_operation: node.window && !window ? 0 : node.operation,
           ...(window && {
             u_windowCrop: window.crop,
@@ -684,6 +756,7 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
           u_history: 7,
           u_blockHold: 0,
           u_volume: Boolean(node.volume && depth && camera),
+          u_layerProjected: Boolean(node.projection && layer),
           u_rows: 8,
           u_scanlines: Boolean(scanlines),
           u_isolated: node.isolated ?? false,
@@ -694,20 +767,22 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
           u_scheduleIndexed: Boolean(indexed),
           u_schedulePalette: indexed ? 10 : 0,
           u_rejectDepth: node.depthThreshold !== undefined,
-          u_hasDepth: Boolean(depth),
+          u_hasDepth: Boolean(depth && (!node.projection || camera)),
           u_depthThreshold: node.depthThreshold ?? 0,
           u_depthRange: depthRange ?? [0, 1],
-          ...(node.volume &&
+          ...((node.volume || node.projection) &&
             depth &&
             camera && {
-              u_volumeAt: node.volume.at,
-              u_extent: node.volume.extent,
-              u_volumeFeather: node.volume.feather,
               u_eye: camera.eye,
               u_view: camera.view,
               u_projectionScale: [camera.tangent * camera.aspect, camera.tangent],
               u_ortho: camera.ortho
             }),
+          ...(node.volume && { u_volumeAt: node.volume.at, u_extent: node.volume.extent, u_volumeFeather: node.volume.feather }),
+          ...(node.projection && {
+            u_chartOrigin: node.projection.origin, u_chartU: node.projection.u, u_chartV: node.projection.v,
+            u_chartNormal: node.projection.normal, u_chartBounds: node.projection.bounds, u_chartReach: node.projection.reach
+          }),
           u_layer: Boolean(layer),
           ...(layer && {
             u_layerDest: layer.dest,
@@ -725,6 +800,16 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
             u_phase: 2 * Math.PI * ((node.phase + time * node.rate) % 1)
           })
         };
+        if (effect && node.enabled) {
+          if (layer) {
+            fullscreen(shader, probeTarget.framebuffer, 1, 1, {
+              ...values, u_effectProbe: 2, u_effectPoint: effectPoint, u_passSize: [1,1]
+            });
+            const [x,y,code,alpha] = readPixel(probeTarget.framebuffer, 0, 0);
+            probe.note(node, effect, { selected: Boolean(code & 4), status: code & 3, cell: [x,y], alpha,
+              gate: effect.kind === 'particles' ? x / 255 : undefined, raster: layer, camera });
+          } else probe.note(node, effect);
+        }
         if (node.effect) {
           textureUnit(9, hasGroups ? groupsTexture : scene.textures[0]);
           effects(node, layout.passes[index], out, values, w, h, time, input.textures[0]);
@@ -854,8 +939,12 @@ export function createRenderGraph(gl, { api, program, resources, target, texture
         }
     }
     if (plan.captures.size) frame[graphCapture](capture(plan, outputs, w, h));
+    if (probe) frame[graphEffectPixel]?.(probe.finish(
+      readPixel(scene.framebuffer, at[0], h - 1 - at[1]),
+      readPixel(outputs.get(plan.output).framebuffer, at[0], h - 1 - at[1])
+    ));
     textureUnit(0, outputs.get(plan.output).textures[0]);
-    fullscreen(shader, destination, w, h, { u_operation: 0, u_cube: 4, u_size: [w, h], u_passSize: [w, h] });
+    fullscreen(shader, destination, w, h, { u_operation: 0, u_effectProbe: 0, u_cube: 4, u_size: [w, h], u_passSize: [w, h] });
   }
   return Object.assign(execute, { reset: history.clear });
 }

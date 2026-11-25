@@ -7,6 +7,7 @@ const read=file=>path.extname(file).toLowerCase()==='.wav'?require('./wav.js').d
 const nativeRunners={
   'ink-studio/wave-run':'./wave-network.js',
   'ink-studio/resonant-mode-run':'./modal-resonator.js',
+  'ink-studio/coupled-resonant-mode-run':'./modal-resonator.js',
   'ink-studio/contact-excitation-run':'./contact-exciter.js',
   'ink-studio/controller-run':'./controller-tools.js',
   'ink-studio/lumped-network-run':'./lumped-network.js',

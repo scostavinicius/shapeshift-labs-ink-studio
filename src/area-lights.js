@@ -172,26 +172,30 @@ const AreaLights = (() => {
     point,
     normal,
     out = [0, 0, 0],
-    { shadow, volume = false, direction = [0, 0, 1], anisotropy = 0, biasNormal = normal } = {}
+    { shadow, volume = false, direction = [0, 0, 1], anisotropy = 0, biasNormal = normal,
+      incidence, visibility:transferVisibility, contribution, specular } = {}
   ) {
     out.fill(0);
+    const gloss=specular && 1-specular.roughness;
+    const shiny=gloss>0 && specular.strength>0 && dot(normal,specular.view)>0;
+    if(specular)specular.out.fill(0);
     const transmissionRGB = [1, 1, 1];
     for (const light of lights) {
-      const intensity = volume ? light.volumeIntensity : light.intensity;
+      const intensity = (volume ? light.volumeIntensity : light.intensity) * (contribution?.(light,point) ?? 1);
       if (!intensity) continue;
       if (Math.hypot(...point.map((n, k) => n - light.at[k])) >= light.radius + Math.hypot(...light.half)) continue;
       transmission(light, point, transmissionRGB);
       if (!transmissionRGB.some(Boolean)) continue;
       const origin = point.map((n, k) => n + (volume ? 0 : biasNormal[k] * light.bias));
       let total = 0,
-        lit = 0;
+        lit = 0, shine=0;
       for (const sample of light.points) {
         const delta = sample.map((n, k) => n - point[k]),
           distance = Math.hypot(...delta);
         if (distance <= light.bias || distance >= light.radius) continue;
         const toLight = delta.map(n => n / distance),
           facing = -dot(toLight, light.normal),
-          receive = volume ? 1 : Math.max(0, dot(normal, toLight));
+          cosine=dot(normal,toLight), receive=volume ? 1 : Math.max(0,incidence?.(light,cosine) ?? cosine);
         const phase =
           volume && anisotropy
             ? (1 - anisotropy ** 2) / Math.pow(1 + anisotropy ** 2 - 2 * anisotropy * dot(direction, toLight), 1.5)
@@ -217,17 +221,26 @@ const AreaLights = (() => {
             continue;
         }
         lit += amount;
+        if(shiny){
+          const half=toLight.map((n,k)=>n+specular.view[k]);
+          const cosine=Math.max(0,dot(normal,half)/Math.max(1e-8,Math.hypot(...half)));
+          shine+=amount*specular.strength*gloss*cosine**(4+96*gloss**2);
+        }
       }
       if (!total) continue;
       const steps = light.shadowSteps && light.shadowSteps - 1,
-        visibility = steps ? Math.round((steps * lit) / total) / steps : lit / total,
+        measured = steps ? Math.round((steps * lit) / total) / steps : lit / total,
+        visibility = transferVisibility?.(measured) ?? measured,
         level = (total * visibility * intensity) / light.points.length;
+      if(shiny && lit>0)for(let k=0;k<3;k++)
+        specular.out[k]+=light.linearRGB[k]*transmissionRGB[k]*shine*level/lit;
       for (let k = 0; k < 3; k++) out[k] += (volume ? light.rgb[k] : light.linearRGB[k]) * level * transmissionRGB[k];
     }
     return out;
   }
-  function staticSources(world, data = world.data, alpha) {
-    const sources = [],
+  function staticSources(world, data = world.data, alpha, derived=[]) {
+    const retained=world.brickSnapshot?.assets?.shadow;
+    const sources = retained ? [retained,...derived] : derived.slice(),
       boned = new Set(world.anim?.boned ?? []),
       backdrop = new Set(world.back ?? []),
       owned = world.anim?.geometryOwned;

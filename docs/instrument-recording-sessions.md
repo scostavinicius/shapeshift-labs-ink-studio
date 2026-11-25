@@ -51,6 +51,10 @@ Use `audition-session-takes` with
 `{"takes":[{"take":"edge-55-soft-1"},{"take":"edge-55-soft-1","perspective":"room"}]}`
 to hear the same slice in two perspectives at a shared playback gain.
 
+Use [automatic multisample alignment](multisample-session-alignment.md) to
+estimate offsets and polarity from these take windows and build a patch
+that blends the synchronized recordings during playback.
+
 ## Review and build
 
 The analyzer proposes `onsetSample`, `attackEndSample`, a loop

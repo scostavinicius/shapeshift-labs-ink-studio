@@ -1,0 +1,34 @@
+{
+  "format": "ink-studio/blind-av-review",
+  "version": 1,
+  "id": "last-ferry-blind",
+  "title": "Last Ferry",
+  "seats": 9,
+  "questions": {
+    "action": {
+      "prompt": "What changed during the excerpt?",
+      "options": [
+        {"id": "swing", "label": "A hanging object began to swing"},
+        {"id": "light", "label": "A light went out"},
+        {"id": "gate", "label": "A gate swung shut"},
+        {"id": "unsure", "label": "I couldn’t tell"}
+      ],
+      "correct": "swing"
+    },
+    "cause": {
+      "prompt": "Where did the main event come from?",
+      "options": [
+        {"id": "bell", "label": "The bell on the dock"},
+        {"id": "chain", "label": "A chain dragging across the deck"},
+        {"id": "motor", "label": "A motor starting up"},
+        {"id": "unsure", "label": "I couldn’t tell"}
+      ],
+      "correct": "bell"
+    },
+    "impact": {
+      "prompt": "How strongly did the moment grab your attention?",
+      "low": "Barely registered",
+      "high": "Immediate and strong"
+    }
+  }
+}

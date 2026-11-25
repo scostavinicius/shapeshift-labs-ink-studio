@@ -5,6 +5,9 @@ ordinary Ink audio graph. The dry source bus, propagation bus and final mix use
 the same sample rate, channel layout and half-open sample range. Each named
 source and path also has its own stem.
 
+[Coupled resonators](coupled-resonance.md) can supply either body's
+displacement or velocity on that same clock.
+
 ## Run from the CLI
 
 ```sh

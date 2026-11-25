@@ -14,7 +14,7 @@ function load(context){
   return modules.get(context);
 }
 
-export function createCrowdAudio(context,{panning,asset,output,room}){
+export function createCrowdAudio(context,{panning,asset,output,room,captionOffers,onGrains}){
   let active;
   const sources=new WeakMap();
   function mono(buffer){
@@ -53,6 +53,11 @@ export function createCrowdAudio(context,{panning,asset,output,room}){
     const location=mix.point(state.listener.position,mix.direction(index,state.seats));
     const pinned=state.binaural?.open(state.listener,location,22000), spatial=pinned?.node??new PannerNode(context,{panningModel:panning,rolloffFactor:0,
       positionX:location[0],positionY:location[1],positionZ:location[2]});
+    if(onGrains)input.port.onmessage=({data})=>{
+      if(active!==state||!data.marks?.length)return;
+      const at=mix.point(state.listener.position,mix.direction(index,state.seats));
+      onGrains(data.marks.map(mark=>({...mark,at})),state.listener);
+    };
     const row={input,spatial,pinned};
     place(state,index,row);
     input.connect(spatial);spatial.connect(output(state.config.bus));
@@ -94,14 +99,18 @@ export function createCrowdAudio(context,{panning,asset,output,room}){
       const samples=new Float32Array(count);
       for(const {source,length,voice,start} of members)
         mix.addGrain(samples,start-origin,length,source,{...voice,gain:voice.gain*config.gain},rate);
-      return {index,origin,samples};
+      const marks=captionOffers&&members.flatMap(({voice,start,length})=>{
+        const {cue,selection,sourceEvent}=voice, family=selection?.family;
+        return length&&captionOffers({cue,family})?[{cue,family,eventId:sourceEvent,offset:start-origin,length}]:[];
+      });
+      return {index,origin,samples,marks};
     });
     return Promise.all([loaded,ready,...packets]).then(([, ,...readyPackets])=>{
       if(active!==state)return;
       const bySector=new Map();
-      for(const {index,origin:at,samples} of readyPackets)if(samples.length){
+      for(const {index,origin:at,samples,marks} of readyPackets)if(samples.length){
         if(!bySector.has(index))bySector.set(index,[]);
-        bySector.get(index).push({at,samples});
+        bySector.get(index).push({at,samples,...(marks?.length&&{marks})});
       }
       for(const [index,packets] of bySector){
         const row=state.nodes.get(index);

@@ -1,15 +1,21 @@
 // KIT: the lab's shared modules. Everything hangs off one name so nothing here can collide with the game's own code.
 // k0-math: vectors, 3x3 matrices, easing, keyed values, springs.
 const KIT = {};
+KIT.flowMap = FlowMap;
+KIT.pixelLighting = PixelLighting;
 KIT.material = MaterialControls;
+KIT.pbr = PbrMaterials;
 KIT.sceneMeshes = SceneMeshes;
+KIT.protectedLOD = ProtectedLOD;
 KIT.artStability = ArtStability;
 KIT.detailBudgets = DetailBudgets;
 KIT.passQuality = PassQuality;
+KIT.jointPriority = JointPriority;
 KIT.renderContract = RenderContract;
 KIT.colorClusters = ColorClusters;
 KIT.shotCorrections = ShotCorrections;
 KIT.boundaryCels = BoundaryCels;
+KIT.livePixelBoundaries = LivePixelBoundaries;
 KIT.shadowArt = ShadowArt;
 KIT.shotLighting = ShotLighting;
 KIT.splatFrames = SplatFrames;

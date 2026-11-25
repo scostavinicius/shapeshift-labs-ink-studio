@@ -1,0 +1,477 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pixel canvas · Ink Studio</title>
+<style>
+:root { color-scheme:dark; background:#10161b; color:#e6eeea; font:15px system-ui,sans-serif; }
+* { box-sizing:border-box; }
+body { margin:0; }
+main { max-width:1120px; margin:auto; padding:clamp(16px,4vw,48px); }
+header { display:flex; justify-content:space-between; align-items:baseline; flex-wrap:wrap; gap:12px; margin-bottom:16px; }
+h1 { margin:0; font:400 clamp(32px,5vw,52px)/1 Georgia,serif; }
+select { font:inherit; color:inherit; background:#253437; border:1px solid #476062; border-radius:5px; padding:6px 8px; }
+select:focus-visible { outline:2px solid #b3d6bb; outline-offset:2px; }
+#canvas { border:1px solid #354549; border-radius:8px; overflow:hidden; }
+.sampling { display:grid; grid-template-columns:minmax(0,1fr); gap:8px; margin-bottom:12px; }
+.sample-controls, .sample-readout { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; }
+.sample-readout { min-height:20px; flex-wrap:nowrap; }
+#sample-layer-control[hidden] { display:inline-block; visibility:hidden; }
+#scene-hit-controls[hidden] { display:none; }
+#sample-layer { max-width:min(200px,65vw); }
+.sampling button { font:inherit; color:inherit; background:#253437; border:1px solid #476062; border-radius:5px; padding:6px 9px; cursor:pointer; }
+.sampling button[aria-pressed="true"] { background:#b3d6bb; color:#17221e; }
+.sampling button:focus-visible { outline:2px solid #b3d6bb; outline-offset:2px; }
+.sampling output { color:#b8c8c4; font:13px ui-monospace,monospace; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+#sample-swatch { flex:0 0 16px; height:16px; border-radius:3px; border:1px solid #98aaa7; background:var(--picked-color); }
+#timeline { margin-block:12px; }
+#timeline-scroll { overflow:auto; max-height:320px; margin-top:8px; }
+#timeline table { border-collapse:separate; border-spacing:0; font-size:13px; }
+#timeline th, #timeline td { border:1px solid #354549; padding:4px 8px; white-space:nowrap; }
+#timeline th { background:#182328; text-align:left; }
+#timeline thead { position:sticky; top:0; z-index:2; }
+#timeline th:first-child { position:sticky; left:0; z-index:1; }
+#timeline small { display:block; color:#b8c8c4; font-variant-numeric:tabular-nums; }
+#timeline button { border:1px solid #476062; background:#253437; color:inherit; font:inherit; padding:3px 7px; border-radius:3px; cursor:pointer; }
+#timeline button[data-linked] { border-color:#a7c7bc; }
+#timeline button[aria-pressed="true"] { color:#17221e; background:#b3d6bb; }
+#timeline button:focus-visible { outline:2px solid #b3d6bb; outline-offset:2px; }
+#timeline output { display:block; margin-top:6px; font:13px ui-monospace,monospace; overflow-wrap:anywhere; }
+#timeline-links { margin:6px 0; overflow-wrap:anywhere; }
+#timeline-unlink, #batch-download { color:#b3d6bb; }
+#timeline-batch { margin-top:10px; }
+#batch-form { margin-top:6px; }
+#batch-form input { inline-size:75px; }
+#timeline [data-batch-cel] { display:none; margin-inline-start:6px; accent-color:#b3d6bb; }
+#timeline:has(#timeline-batch[open]) [data-batch-cel] { display:inline-block; }
+#batch-form [hidden] { display:none; }
+/*PIXEL_GRID_CSS*/
+</style>
+</head>
+<body>
+<main>
+  <header><h1>Pixel canvas</h1><label id="frame-control" hidden>Frame <select id="frames"></select></label></header>
+  <div class="sampling" aria-label="Eyedropper controls">
+    <div class="sample-controls">
+      <button type="button" id="eyedropper" aria-pressed="false">Eyedropper</button>
+      <label>Sample <select id="sample-mode">
+        <option value="composite">Visible composite</option>
+        <option value="layer">Active layer</option>
+        <option value="source" disabled>Source material channel</option>
+      </select></label>
+      <label id="sample-layer-control" hidden>Layer <select id="sample-layer"></select></label>
+    </div>
+    <div class="sample-readout"><span id="sample-swatch" aria-hidden="true" hidden></span><output id="sample-value"></output></div>
+  </div>
+  <div id="canvas"></div>
+  <div id="onion-skin"></div>
+  <details id="timeline" hidden open>
+    <summary>Cel timeline</summary>
+    <div id="timeline-scroll" tabindex="0" role="region" aria-label="Cel timeline">
+      <table aria-label="Layers by frame"></table>
+    </div>
+    <output aria-label="Selected cel" aria-live="polite"></output>
+    <p id="timeline-links" aria-live="polite" hidden></p>
+    <button id="timeline-source" type="button" hidden>Open source drawing</button>
+    <a id="timeline-unlink" hidden>Download unlink edit</a>
+    <details id="timeline-batch">
+      <summary>Batch edit cels</summary>
+      <p>Select cels in the timeline and download an edit to preview and apply with the CLI.</p>
+      <div id="batch-form" class="sample-controls">
+        <label>Edit <select id="batch-kind"><option value="palette-swap">Palette swap</option><option value="nudge">Nudge</option>
+          <option value="mask">Mask</option><option value="cleanup">Cleanup</option></select></label>
+        <span data-batch-fields="palette-swap">
+          <label>From <select id="batch-from"></select></label>
+          <label>To <select id="batch-to"></select></label>
+        </span>
+        <span data-batch-fields="nudge" hidden>
+          <label>X <input id="batch-x" type="number" min="-4096" max="4096" step="1" value="1"></label>
+          <label>Y <input id="batch-y" type="number" min="-4096" max="4096" step="1" value="0"></label>
+        </span>
+        <label data-batch-fields="mask" hidden>Mask mode <select id="batch-mask"><option value="keep">Keep inside</option>
+          <option value="erase">Erase inside</option></select></label>
+        <span data-batch-fields="cleanup" hidden>
+          <label>Repair <select id="batch-repair"><option value="stair">Staircase</option><option value="fragment">Fragment</option>
+            <option value="outline">Outline</option><option value="cluster">Cluster</option></select></label>
+          <label id="batch-cluster" hidden>Cluster mode <select id="batch-mode"><option value="grow">Grow</option>
+            <option value="shrink">Shrink</option></select></label>
+          <label>Limit per cel <input id="batch-budget" type="number" min="1" max="256" step="1" value="8"></label>
+        </span>
+        <label>Saved selection <select id="batch-mask-id"></select></label>
+        <output id="batch-count" aria-live="polite"></output>
+        <a id="batch-download" hidden>Download batch edit</a>
+      </div>
+    </details>
+  </details>
+  <div id="craft-diagnostics"></div>
+  <div class="sample-controls" id="scene-hit-controls" hidden>
+    <label>Highlight scene hits <select id="scene-hit-mode">
+      <option value="">Off</option>
+      <option value="blocker">Foreground blockers</option>
+      <option value="overlap">Overlapping sources</option>
+      <option value="unreliable">Unreliable bindings</option>
+    </select></label>
+    <output id="scene-hit-count"></output>
+  </div>
+  <div id="pixel-inspection"></div>
+  <p id="error" role="status" hidden></p>
+</main>
+<script type="module">
+/*PIXEL_GUIDES_MODULE*/
+/*PIXEL_GRID_MODULE*/
+/*PIXEL_ONION_MODULE*/
+/*PIXEL_PLAYBACK_MODULES*/
+/*PIXEL_INSPECT_MODULES*/
+const { frames,timeline,palette,materials,definitions,layerIds,rulesSource,sceneBindings,reviewBinding,batchSelections,scene:embeddedScene } = /*PIXEL_GRID_DATA*/;
+const view = mountPixelGridCanvas(document.querySelector('#canvas'),{ guideTool:PixelGuides });
+const onionSkin = mountPixelOnionSkin(document.querySelector('#onion-skin'),view);
+const nativePlayer = mountPixelRangePlayer(view.playbackHost,view,PixelPlaybackRanges);
+const select = document.querySelector('#frames'), status = document.querySelector('#error');
+const eyedropper = document.querySelector('#eyedropper'), mode = document.querySelector('#sample-mode');
+const layer = document.querySelector('#sample-layer'), swatch = document.querySelector('#sample-swatch');
+const result = document.querySelector('#sample-value');
+const scratch = document.createElement('canvas'), context = scratch.getContext('2d',{ willReadFrequently:true });
+const materialRows = materials.map(row=>({ ...row,
+  missing:row.missing ? atob(row.missing) : null,
+  data:new DataView(Uint8Array.from(atob(row.values),byte=>byte.charCodeAt(0)).buffer)
+}));
+const stack = PixelLayerStack.prepare(definitions), colors = palette.map(row=>Number.parseInt(row.color.slice(1),16));
+const scene = embeddedScene && PixelViewSource.unpack(embeddedScene);
+const boundView = sceneBindings.find(binding=>binding.id === reviewBinding);
+function sourceAt(at) {
+  if (!boundView) return at;
+  return PixelCanvasTransforms.sourcePoint([active.width,active.height],at,boundView.canvas)?.map(Math.floor);
+}
+function bindingsAt(at) {
+  return sceneBindings.filter(binding=>binding.frame === undefined || binding.frame === active.id).map(binding=>
+    PixelSourceBindings.resolve(scene,binding,at,{ grid:[active.width,active.height],frameId:active.id,
+      sceneMatches:true,sourcePoint:PixelCanvasTransforms.sourcePoint,ArtPasses }));
+}
+const hitMode = document.querySelector('#scene-hit-mode'), hitCount = document.querySelector('#scene-hit-count');
+document.querySelector('#scene-hit-controls').hidden = !scene;
+hitMode.querySelector('[value=blocker]').disabled = !scene?.bindingEvidence || !boundView;
+const hitColors = { blocker:'#ed675e99',overlap:'#6cd7e599',unreliable:'#dfb85f99' };
+function highlightHits() {
+  const kind = hitMode.value;
+  if (!active || !scene || !kind) {
+    view.setDiagnostic(null,'source-hits');
+    hitCount.value = '';
+    return;
+  }
+  const { width,height } = active, runs = [];
+  const scope = boundView && (!boundView.frame || boundView.frame === active.id) ? boundView : undefined;
+  let count = 0;
+  for (let y=0; y<height; y++) {
+    let start = -1;
+    for (let x=0; x<=width; x++) {
+      const at = x < width && sourceAt([x,y]);
+      const relevant = at && ((kind !== 'blocker' && PixelSourceBindings.issues(scene,at,ArtPasses).some(issue=>issue.kind === kind)) ||
+        (scope && kind !== 'overlap' && PixelSourceBindings.issues(scene,at,ArtPasses,{ binding:scope }).some(issue=>issue.kind === kind)));
+      if (relevant) {
+        count++;
+        if (start < 0) start = x;
+      } else if (start >= 0) {
+        runs.push([y,start,x-start]);
+        start = -1;
+      }
+    }
+  }
+  view.setDiagnostic(runs.length ? { bounds:[0,0,width,height],runs,color:hitColors[kind] } : null,'source-hits');
+  hitCount.value = count === 1 ? '1 pixel' : count+' pixels';
+}
+hitMode.addEventListener('change',highlightHits);
+const inspector = mountPixelInspector(document.querySelector('#pixel-inspection'),view,at=>{
+  if (!active || at[0] >= active.width || at[1] >= active.height) return;
+  const p = at[1]*active.width+at[0];
+  const trace = PixelLayerStack.inspect(stack,colors,id=>{
+    const row = active.sources.get(id), slot = row.slots.charCodeAt(p);
+    return { slot:row.knockouts?.charCodeAt(p) ? -2 : slot === 255 ? -1 : slot,alpha:row.alpha?.charCodeAt(p) };
+  },{ references:true });
+  const sampleAt = scene && sourceAt(at);
+  return { ...PixelInspection.document(trace,palette,id=>active.sources.get(id)?.cel ?? null),
+    protection:PixelProtection.at(active.protectedDetails,...at),
+    materials:materialRows.filter(row=>row.frame === undefined || row.frame === active.id).map(row=>{
+      const { data,values,missing,canvas,...meta } = row;
+      const uv = PixelCanvasTransforms.uv([active.width,active.height],at,canvas);
+      const offset = p*32, coverage = row.type === 'number' ? undefined : data.getFloat64(offset+24,true);
+      const value = !uv ? null : row.type === 'number' ? data.getFloat64(p*8,true) :
+        coverage < 0 ? null : { color:[0,8,16].map(i=>data.getFloat64(offset+i,true)),coverage };
+      return { ...meta,requestedDestination:row.name,uv,value };
+    }),...(scene && { scene:{
+      ...(sampleAt && PixelInspection.scene(scene,sampleAt,ArtPasses)),
+      bindings:bindingsAt(at)
+    } }) };
+});
+const craftPanel = mountPixelCraftPanel(document.querySelector('#craft-diagnostics'),view,rulesSource ? PixelArtRules.kinds : PixelCraft.kinds,{
+  inspect:at=>inspector.focus(at)
+});
+const rulePlan = rulesSource && PixelArtRules.prepare(rulesSource.definition,{ ...rulesSource,swatches:palette });
+function diagnose(frame,width,height) {
+  const source = frame.diagnosticSource, paint = source.slots ? source : { ...frame,slots:frame.composite };
+  const unpack = value=>Uint8Array.from(atob(value),byte=>byte.charCodeAt(0));
+  const slots = Int16Array.from(unpack(paint.slots),slot=>slot === 255 ? -1 : slot);
+  const rgb = paint.rgb && unpack(paint.rgb);
+  const raster = { width,height,slots,colors,swatches:palette.map(row=>row.id),
+    opacity:paint.alpha && unpack(paint.alpha),
+    mixedColors:rgb && Uint32Array.from(slots,(_,p)=>(rgb[3*p]<<16)|(rgb[3*p+1]<<8)|rgb[3*p+2]),
+    layerIds,owners:unpack(source.owners),locks:unpack(source.locks) };
+  return PixelArtRules.audit(raster,PixelCraft.analyze(raster),rulePlan,
+    { frame:frame.id,shot:rulesSource?.artShot }).diagnostics;
+}
+const hex = components => '#' + components.map(value => Math.round(value*255).toString(16).padStart(2,'0')).join('');
+let request = 0, active, sampling = false;
+
+function showSample(text = '',color) {
+  result.value = text;
+  result.title = text;
+  swatch.hidden = !color;
+  swatch.style.setProperty('--picked-color',color ?? '');
+}
+
+function updateSampling() {
+  document.querySelector('#sample-layer-control').hidden = mode.value !== 'layer';
+  showSample();
+}
+
+eyedropper.addEventListener('click',() => {
+  sampling = !sampling;
+  eyedropper.setAttribute('aria-pressed',sampling);
+  showSample(sampling ? 'Click a pixel to sample it' : '');
+});
+mode.addEventListener('change',updateSampling);
+layer.addEventListener('change',updateSampling);
+view.canvas.addEventListener('pointerdown',event => {
+  if (!active || !sampling || event.button !== 0) return;
+  const at = view.pixelAt(event.clientX,event.clientY,{ snap:false });
+  if (!at) return;
+  const p = at[1]*view.canvas.width+at[0], position = at.join(', ');
+  if (mode.value === 'source') {
+    const material = active.material;
+    if (!material) return;
+    const values = material.data;
+    const name = material.object + '/' + material.chart + '/' + material.channel;
+    if (material.missing?.charCodeAt(p)) { showSample(position+' · '+name+' · Outside source'); return; }
+    if (material.type === 'number') {
+      showSample(position+' · '+name+' · '+values.getFloat64(p*8,true)+(material.units ? ' '+material.units : ''));
+    } else {
+      const offset = p*32, coverage = values.getFloat64(offset+24,true);
+      const color = coverage > 0 ? hex([0,8,16].map(i=>values.getFloat64(offset+i,true))) : null;
+      showSample(position+' · '+name+' · '+(color ? color+' · '+Math.round(coverage*100)+'% coverage' : 'Transparent'),color);
+    }
+    return;
+  }
+  const entry = mode.value === 'layer' ? active.layers[layer.selectedIndex] : null;
+  const ink = palette[(entry?.slots ?? active.composite).charCodeAt(p)];
+  const alpha = (entry ? entry.alpha : active.alpha)?.charCodeAt(p);
+  const color = ink && (!entry && active.rgb ?
+    hex([0,1,2].map(i=>active.rgb.charCodeAt(3*p+i)/255)) : ink.color);
+  const value = ink ? ink.id+' · '+color+(alpha === undefined ? '' : ' · alpha '+alpha) : 'Transparent';
+  showSample(position+' · '+(entry ? entry.id+' · ' : '')+value,color);
+});
+
+let selectedCelLayer;
+const timelineButtons = [], buttonsByCel = new Map(), groupByCel = new Map();
+const celReadout = document.querySelector('#timeline output');
+const linkReadout = document.querySelector('#timeline-links');
+const openSource = document.querySelector('#timeline-source');
+const unlinkEdit = document.querySelector('#timeline-unlink');
+let sourceButton;
+openSource.addEventListener('click',()=>{
+  sourceButton?.focus();
+  sourceButton?.click();
+});
+
+function mountTimeline() {
+  if (!timeline) return;
+  for (const group of timeline.linkGroups) {
+    for (const row of [group.source,...group.holds]) groupByCel.set(row.cel,group);
+  }
+  const panel = document.querySelector('#timeline'), table = panel.querySelector('table');
+  const frameIndex = new Map(frames.map((frame,i)=>[frame.id,i]));
+  const columns = timeline.frames.filter(frame=>frameIndex.has(frame.id));
+  const header = table.createTHead().insertRow(), body = table.createTBody();
+  function heading(row,title,scope) {
+    const th = document.createElement('th');
+    th.scope = scope;
+    th.textContent = title;
+    row.append(th);
+    return th;
+  }
+  heading(header,'Layer','col');
+  for (const { label,durationMs,startMs } of columns) {
+    const th = heading(header,label,'col'), timing = document.createElement('small');
+    timing.textContent = durationMs+' ms · '+startMs+' ms start';
+    th.append(timing);
+  }
+  for (const row of timeline.layers) {
+    const tr = body.insertRow(), th = heading(tr,row.label,'row');
+    if (row.locked) th.title = 'Locked layer';
+    for (const cell of row.cells.filter(cell=>frameIndex.has(cell.frame))) {
+      const button = document.createElement('button'), index = frameIndex.get(cell.frame);
+      button.type = 'button';
+      const group = groupByCel.get(cell.cel);
+      button.textContent = group?.source.cel === cell.cel ? 'Source' :
+        { cel:'Cel',hold:'Hold',blank:'Blank',empty:'Empty' }[cell.state];
+      button.setAttribute('aria-pressed','false');
+      button.title = [cell.cel,cell.hold && 'holds '+cell.hold,cell.effectiveOffset && 'offset '+cell.effectiveOffset.join(', ')].filter(Boolean).join(' · ');
+      button.addEventListener('click',()=>{
+        selectedCelLayer = row.id;
+        select.selectedIndex = index;
+        mode.value = 'layer';
+        draw();
+      });
+      const td = tr.insertCell();
+      td.append(button);
+      if (cell.cel && !row.locked) {
+        const pick = document.createElement('input');
+        pick.type = 'checkbox';
+        pick.dataset.batchCel = cell.cel;
+        pick.dataset.frame = cell.frame;
+        pick.setAttribute('aria-label','Select '+cell.cel+' for batch edit');
+        td.append(pick);
+      }
+      timelineButtons.push({ button,index,layer:row,cell,group });
+      if (cell.cel) buttonsByCel.set(cell.cel,button);
+    }
+  }
+  panel.hidden = timeline.layers.length === 0;
+}
+
+function syncTimeline() {
+  const selected = timelineButtons.find(({ index,layer })=>index === select.selectedIndex && layer.id === selectedCelLayer);
+  const group = selected?.group;
+  for (const row of timelineButtons) {
+    row.button.setAttribute('aria-pressed',String(row === selected));
+    row.button.toggleAttribute('data-linked',!!group && row.group === group);
+  }
+  celReadout.value = selected ? selected.cell.cel ? selected.button.title : 'Empty cell' : '';
+  linkReadout.hidden = !group;
+  const held = selected?.cell.state === 'hold';
+  sourceButton = held && buttonsByCel.get(group.source.cel);
+  openSource.hidden = !sourceButton;
+  unlinkEdit.hidden = !held || selected.layer.locked;
+  if (group) {
+    const { source,holds } = group;
+    const members = [source,...holds];
+    const frameCount = new Set(members.map(row=>row.frame)).size;
+    const addresses = members.map(row=>row.frame+' / '+row.layer).join(', ');
+    linkReadout.textContent = 'Editing the source drawing updates '+members.length+' cels across '+frameCount+
+      (frameCount === 1 ? ' frame (' : ' frames (')+addresses+').';
+  }
+  if (!unlinkEdit.hidden) {
+    const { cell,layer } = selected;
+    const patch = { id:'unlink-cel',revision:timeline.revision,destination:'timeline',
+      operation:{ type:'unlink',frame:cell.frame,layer:layer.id } };
+    unlinkEdit.href = 'data:application/json;charset=utf-8,'+encodeURIComponent(JSON.stringify(patch,null,2)+'\n');
+    unlinkEdit.download = 'unlink-'+cell.frame+'-'+layer.id+'.json';
+  } else {
+    unlinkEdit.removeAttribute('href');
+  }
+}
+
+function mountBatchEdits() {
+  if (!timeline) return;
+  const form = document.querySelector('#batch-form'), find = id=>form.querySelector('#batch-'+id);
+  const timelineTable = document.querySelector('#timeline table');
+  const from = find('from'), to = find('to');
+  for (const menu of [from,to]) menu.replaceChildren(...palette.map(row=>new Option(row.label ?? row.id,row.id)));
+  to.selectedIndex = Math.min(1,palette.length-1);
+  const saved = find('mask-id'), count = find('count'), download = find('download'), kind = find('kind');
+  const checks = [...timelineTable.querySelectorAll('[data-batch-cel]')];
+
+  function update() {
+    const checked = checks.filter(input=>input.checked);
+    const cels = checked.map(input=>input.dataset.batchCel), frames = new Set(checked.map(input=>input.dataset.frame));
+    const old = saved.value, options = batchSelections.filter(row=>!row.frame || frames.size === 1 && frames.has(row.frame));
+    saved.replaceChildren(new Option('Whole cel',''),...options.map(row=>new Option(row.id,row.id)));
+    if (options.some(row=>row.id === old)) saved.value = old;
+    count.value = cels.length+' '+(cels.length === 1 ? 'cel' : 'cels');
+    for (const section of form.querySelectorAll('[data-batch-fields]')) section.hidden = section.dataset.batchFields !== kind.value;
+    const type = kind.value, edit = { type };
+    let valid = cels.length > 0;
+    if (type === 'palette-swap') {
+      edit.map = { [from.value]:to.value };
+      valid &&= from.value !== to.value;
+    } else if (type === 'nudge') {
+      edit.offset = ['x','y'].map(id=>find(id).valueAsNumber);
+      valid &&= ['x','y'].every(id=>find(id).value !== '' && find(id).validity.valid);
+    } else if (type === 'mask') {
+      edit.mode = find('mask').value;
+      valid &&= !!saved.value;
+    } else {
+      edit.kind = find('repair').value;
+      edit.maxChanges = find('budget').valueAsNumber;
+      find('cluster').hidden = edit.kind !== 'cluster';
+      if (edit.kind === 'cluster') edit.mode = find('mode').value;
+      valid &&= !!saved.value && find('budget').value !== '' && find('budget').validity.valid;
+    }
+    download.hidden = !valid;
+    if (!valid) { download.removeAttribute('href'); return; }
+    const scope = { cels,...(saved.value && { selection:saved.value }) };
+    const patch = { id:'edit-selected-cels',revision:timeline.revision,destination:'timeline',
+      operation:{ type:'edit-cels',scope,edit } };
+    download.href = 'data:application/json;charset=utf-8,'+encodeURIComponent(JSON.stringify(patch,null,2)+'\n');
+    download.download = 'edit-selected-cels.json';
+  }
+  timelineTable.addEventListener('change',update);
+  form.addEventListener('input',update);
+  update();
+}
+
+async function decodeFrame(frame) {
+  const image = new Image();
+  image.src = 'data:image/png;base64,' + frame.png;
+  await image.decode();
+  const width = scratch.width = image.naturalWidth, height = scratch.height = image.naturalHeight;
+  context.drawImage(image,0,0);
+  return { width,height,rgba:context.getImageData(0,0,width,height).data };
+}
+
+async function draw() {
+  const serial = ++request, index = select.selectedIndex, frame = frames[index];
+  onionSkin.setSource(null);
+  try {
+    const image = await decodeFrame(frame);
+    if (serial !== request) return;
+    const { width,height,rgba } = image;
+    view.setFrame(image);
+    onionSkin.setSource({ key:frames,index,count:frames.length,rgba,readFrame:async i=>(await decodeFrame(frames[i])).rgba });
+    view.setGuides(frame.guides);
+    view.setSlices(frame.slices);
+    const layers = frame.layers.map(row=>({ ...row,slots:atob(row.slots),alpha:row.alpha && atob(row.alpha),
+      knockouts:row.knockouts && atob(row.knockouts) }));
+    active = { id:frame.id,protectedDetails:frame.protectedDetails,width,height,composite:atob(frame.composite),
+      alpha:frame.alpha && atob(frame.alpha),rgb:frame.rgb && atob(frame.rgb),layers,
+      sources:new Map(layers.map(row=>[row.id,row])),
+      material:materialRows.find(row=>row.frame === undefined || row.frame === frame.id) };
+    inspector.refresh();
+    highlightHits();
+    craftPanel.setSource(frame,()=>diagnose(frame,active.width,active.height));
+    const selected = selectedCelLayer ?? layer.value;
+    layer.replaceChildren(...active.layers.map(({ id })=>new Option(id,id)));
+    if (active.layers.some(({ id })=>id === selected)) layer.value = selected;
+    const hasMaterial = !!active.material;
+    mode.options[2].disabled = !hasMaterial;
+    if (!hasMaterial && mode.value === 'source') mode.value = 'composite';
+    updateSampling();
+    syncTimeline();
+    status.hidden = true;
+  } catch (error) {
+    if (serial !== request) return;
+    status.textContent = 'Could not display the native frame. ' + error.message;
+    status.hidden = false;
+  }
+}
+select.replaceChildren(...frames.map(({ label },index) => new Option(label,index)));
+document.querySelector('#frame-control').hidden = frames.length < 2;
+select.addEventListener('change',draw);
+layer.addEventListener('change',()=>{ selectedCelLayer = layer.value; syncTimeline(); });
+mountTimeline();
+mountBatchEdits();
+nativePlayer.setSource({ key:frames,timingKey:frames,frames,loop:true,readFrame:i=>decodeFrame(frames[i]),
+  tags:timeline && timeline.frames.length === frames.length ? timeline.tags : [] });
+draw();
+</script>
+</body>
+</html>

@@ -20,6 +20,9 @@ Both project files reference the original WAVs by relative path.
 Use [Foley spotting](foley-perspective.md) to derive a session with paired
 close and distant takes from committed world events.
 
+Use the [attention handoff audition](attention-handoff.md) to compare a few
+timings for the same clip against one fixed picture excerpt.
+
 ## Session
 
 A CLI recipe contains a `session` object and an `assets` table mapping
@@ -95,6 +98,11 @@ the corresponding committed event ID. The address comes from
 A mapped cue keeps its original address in the placement report. The clock map needs the session's picture and output sample rates. Pass a revised `clockMap` to `reconform` to move those spots after an edit.
 
 ## Take edits
+
+Use [harmonic and percussive separation](harmonic-percussive-separation.md)
+to build a session with separately editable tonal and transient clips.
+Use `transpose` with a signed `semitones` value to change a take’s pitch
+while retaining its duration and sync point.
 
 A take source is a mono or stereo WAV. Take trims and handles are zero-based,
 half-open ranges on that WAV's native PCM grid. The sync point must sit inside

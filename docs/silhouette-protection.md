@@ -68,3 +68,6 @@ Each pair shows the baseline on the left and the protected render on the right. 
 The companion JSON reports visible subject pixels, border contact, and mean edge luminance contrast before and after protection for each view. Contrast is the mean absolute change in luminance across the subject’s boundary on the native grid, in 0–1. Fully occluded targets have zero pixels and no score.
 
 From code, `silhouetteReview(world, options)` returns the sheet and report using the world’s current pose. Renderers can also request `captureSilhouetteProtection: true` to get a top-down `silhouetteMask`. Zero represents unprotected pixels. Other values are one-based indices into the authored target list.
+
+To animate subject contrast and mixer perspective with the same beats, use a
+[shared focus track](shared-focus-track.md) alongside static protection.

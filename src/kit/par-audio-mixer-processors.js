@@ -17,6 +17,7 @@
     const type=raw?.type, wet=time.lane(raw?.wet,1,0,1,type+' wet');
     if (type==='limiter') return S.mixerPeak.limiter(raw,rate,time,wet);
     if (type==='external') return S.externalMixerInsert(raw,rate,time,wet,host);
+    if (type==='spectral-sidechain') return S.spectralSidechain(raw,rate,wet);
     const design=S.soundDesign(raw,rate,time,asset);
     if (design) {
       if (wet.max===0) return {type,latency:design.latency ?? 0,wet,tail:0,cost:1,block() {}};

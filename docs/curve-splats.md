@@ -36,6 +36,8 @@ world position, arc distance, and textile UV when present.
 | --- | --- |
 | Path | An array of 3D points, a compiled `K.curve.path`, or a `{ kind: 'path', points, closed }` record. |
 | Spline | `{ kind: 'spline', points, samples }` samples a Catmull–Rom spline through editable control points. `samples` is per pair of controls. |
+| [Retained spline](curve-families.md#edit-retained-splines) | `{ kind: 'retained-spline', document, spline }` or a compiled retained path. Radius and tilted frames come from the control points. |
+| [Socket cable](procedural.md#socket-cable-routes) | `{ kind: 'socket-cable', document, graph }` plans through live socket references and pins. It can also serve as a bundle guide. |
 | Curve family | `{ kind: 'family', definition }` uses an existing `K.curve.create` definition. |
 | Strand bundle | `{ kind: 'bundle', style, guide, count, separation, lengthVariation, seed }` generates member paths from one guide. A version 1 `bundle-plan` can be drawn directly. |
 | Surface stroke | `{ kind: 'surface', chart, points, lift, inset }` follows an editable UV path on a chart. |
@@ -779,6 +781,10 @@ card for the comparison. Read group and span counts from
 ```sh
 node cli/ink-studio.js strand-lod-review --hardware --motion --out out/strand-lod
 ```
+
+Use the [named-detail LOD review](render-suite.md#guard-named-details-during-lod-switches)
+to keep a specific gap or contour on individual strands or native geometry
+when a group or card fails its approved 1× views.
 
 ### Simplify by chord error or pitch
 
