@@ -42,6 +42,74 @@ the checks completed so far. Large previews sample faces and edges.
 The JSON retains all face metrics and records up to 4,096 example pairs
 per diagnostic.
 
+## Register a tileset image
+
+Import a PNG into an editable scene and give it a stable ID.
+
+```sh
+ink-studio tileset import masonry.png --scene gatehouse.json --id masonry --out gatehouse-tiles.json
+```
+
+The output scene includes the image in its `tilesets` library. Several mesh
+materials can refer to it. On an existing `topologyMeshes` material, set
+`texture` to a tileset reference and keep the face's existing UVs.
+
+```json
+{"id":"painted-stone","texture":{"tileset":"masonry"}}
+```
+
+The reference uses the same top-down UV coordinates and alpha cutoff as an
+inline mesh texture. PNGs up to 2048 texels on each side are accepted.
+Indexed PNGs retain their palette order, texel indices, and transparency.
+Other PNGs are stored as RGBA8. A version 1 entry contains its dimensions,
+an encoding, and base64 data in top-down order. An indexed entry also
+stores an RGB24 palette and any per-slot alpha bytes. Each mesh's existing
+atlas budget applies.
+
+In Node, call `ink.readTilesetImage(file)` and pass the result to
+`editor.registerTileset("masonry", image)`. The reader also accepts PNG
+bytes. Registration can be undone in the scene editor. Registering the same
+image under the same ID is idempotent. A different image under that ID
+requires a new ID.
+
+### Create a blank tileset
+
+```sh
+ink-studio tileset create --width 48 --height 32 --background '#31728580' \
+  --scene gatehouse.json --id window-glass --out gatehouse-tiles.json
+```
+
+Set each edge from 1 to 2048 texels. Use `transparent` (the default),
+`#rrggbb` for an opaque color, or `#rrggbbaa` for exact RGBA bytes.
+The same color covers the whole image. The resulting RGBA8 entry can
+serve as a mesh material's texture just like an imported image.
+
+In Node, pass `ink.createBlankTileset({ width:48, height:32, background:'#31728580' })`
+to `editor.registerTileset(id, image)` as the image argument.
+
+### Pick an exact texel rectangle
+
+Use zero-based `x` and `y` from the top-left corner and positive integer
+dimensions. The entire rectangle must fit in the selected tileset.
+
+```sh
+ink-studio tileset pick --scene gatehouse-tiles.json --id masonry \
+  --x 48 --y 0 --width 48 --height 16 --out sign-selection.json
+ink-studio tileset pick --scene gatehouse-tiles.json --id masonry --out pick-masonry.html
+```
+
+Open the HTML file offline. Drag from either corner on the art grid or
+enter X, Y, Width, and Height in the fields. A click selects one texel.
+The selected bounds are shown on the grid and can be downloaded as the
+same version 1 JSON returned by the numeric command. Supply all four
+values with HTML output to set the initial selection.
+
+In Node, call `ink.pickTilesetRectangle(scene, "masonry", { x:48, y:0, width:48, height:16 })`.
+A selection addresses the source image's texels.
+
+Run `node examples/tileset-pick/demo.cjs tileset-pick-demo` for a
+painted gatehouse, a blank tileset, and both ways of selecting the sign crop.
+
 ## Edit an authored layout
 
 A [polygon topology document](mesh-topology.md) keeps stable face, edge and

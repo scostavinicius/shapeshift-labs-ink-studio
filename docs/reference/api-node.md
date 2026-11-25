@@ -25,6 +25,7 @@ Members and callable signatures come from the public entry point. Guide links po
 | `node.compareModelingBenchmarks` | function | `(...args)` | [source](../../index.js) |
 | `node.comparePaletteDistributions` | function | `(reference, studio, options)` | [guide](../palette-recipes.md#compare-colour-distributions-with-a-reference), [source](../../cli/palette-distributions.js) |
 | `node.compareShotPalettes` | function | `(world,{palettes,threshold,heatmapMax,regionLimit,columns=3,...view} = {})` | [guide](../palette-recipes.md#compare-candidate-palettes-on-one-shot), [source](../../cli/palette-compare.js) |
+| `node.createBlankTileset` | function | `(options)` | [guide](../mesh-uv.md#create-a-blank-tileset), [source](../../index.js) |
 | `node.createBounceProbeSampler` | function | `(world, { bounceProbes, sky, sun, shotLighting, time=0 } = {})` | [guide](../bounce-probes.md#use-bounce-in-a-palette-or-shot), [guide](../bounce-probes.md), [source](../../cli/bounce-probes.js) |
 | `node.createCameraAtlas` | function | `(options)` | [guide](../camera-atlas.md#capture-and-schedule-feeds), [guide](../render-outputs.md#schedule-a-miniature-renderer-as-a-camera-feed), [source](../../index.js) |
 | `node.createEffectClip` | function | `(source, {kit=require('..').load(),baseDir=process.cwd(),sourceFile,operations,adapters} = {})` | [guide](../effect-clips.md#run-headlessly-and-reuse-a-group), [source](../../cli/effect-clip.js) |
@@ -93,6 +94,7 @@ Members and callable signatures come from the public entry point. Guide links po
 | `node.packProject` | function | `(scene, { out, root, revision, assetPack, paint, attachments } = {})` | [source](../../cli/project-bundle.js) |
 | `node.paletteUsage` | function | `(world,{select,rarePixels=3,rareShare=.001,...view}={})` | [guide](../palette-recipes.md#measure-palette-usage-at-export-size), [source](../../cli/palette-usage.js) |
 | `node.pickSurface` | function | `(passes,x,y)` | [guide](../art-passes.md#shared-opaque-surfaces), [guide](../textured-surfaces.md#inspecting-a-mesh), [guide](../art-passes.md), [source](../../src/art-passes.js) |
+| `node.pickTilesetRectangle` | function | `(scene, id, rectangle, toolkit = require('..').load())` | [guide](../mesh-uv.md#pick-an-exact-texel-rectangle), [source](../../cli/tileset-image.js) |
 | `node.pixelCommandSchema` | function | `()` | [source](../../index.js) |
 | `node.pixelDocumentFromAseprite` | function | `(source, options)` | [source](../../index.js) |
 | `node.pixelDocumentFromAsepriteTiles` | function | `(document, options)` | [source](../../index.js) |
@@ -126,6 +128,7 @@ Members and callable signatures come from the public entry point. Guide links po
 | `node.readSpriteAtlas` | function | `(file, { cels } = {})` | [guide](../curve-bake.md#use-the-ribbon-as-native-geometry), [guide](../impostor-atlases.md), [guide](../impostor-atlases.md#bake-a-set-of-moves-from-one-rig), [guide](../sprite-reconstruction.md#bind-a-reusable-asset), [source](../../cli/sprite-atlas.js) |
 | `node.readStoryDocument` | function | `(file)` | [source](../../cli/story-document.js) |
 | `node.readTake` | function | `(file, { kit = require('../index.js').load(), checkpoint, ...options } = {})` | [guide](../take-clock.md#library-and-shared-domains), [source](../../cli/take.js) |
+| `node.readTilesetImage` | function | `(source, toolkit = require('..').load())` | [guide](../mesh-uv.md#register-a-tileset-image), [source](../../cli/tileset-image.js) |
 | `node.readWav` | function | `(file, options)` | [guide](../graph-media.md#wav-and-frame-analysis), [source](../../cli/wav.js) |
 | `node.rebindPixelFeature` | function | `(design,request,{render,graph,decals,replacementScene}={})` | [source](../../cli/feature-rebind.js) |
 | `node.recordInputEvents` | function | `(source, { initial, signal, kit = require('../index.js').load() } = {})` | [guide](../graph-media.md#recorded-control-events), [source](../../cli/graph-host.js) |
