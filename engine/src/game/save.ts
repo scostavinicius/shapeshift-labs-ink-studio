@@ -9,6 +9,7 @@ import type { Vec3 } from '../../types/ink-studio';
 import type { RunningGame } from './game';
 import type { Actor, Brain, Entity } from './types';
 import type { TailMotion } from './tails';
+import type { FootState } from './legs';
 
 export const SAVE_FORMAT = 'ink-engine-save';
 export const SAVE_VERSION = 1;
@@ -29,6 +30,8 @@ export interface SavedEntity {
   dead?: boolean;
   /** the trailing body's joints, as they were (stage 32) */
   tail?: TailMotion;
+  /** where its feet stand (stage 34) */
+  legs?: FootState[];
 }
 
 export interface SaveData {
@@ -73,6 +76,8 @@ export function saveGame(game: RunningGame<any>): SaveData {
           out.dead = e.deadFor >= 0;
           const m = game.tailOf(e)?.motion();
           if (m) out.tail = m;
+          const f = game.legsOf(e)?.state();
+          if (f) out.legs = f;
         }
         return out;
       })
@@ -120,6 +125,7 @@ export function loadSave(game: RunningGame<any>, s: SaveData): void {
         placeActor(e, saved);
         // its body lies as it lay, not stretched out behind it (stage 32)
         if (saved.tail && !saved.dead) game.tailOf(e)?.restore(saved.tail, game.world);
+        if (saved.legs && !saved.dead) game.legsOf(e)?.restore(saved.legs, game.world, e.pos, e.ch.st.face);
       }
       else e.pos = [saved.pos[0], saved.pos[1], saved.pos[2]];
     }

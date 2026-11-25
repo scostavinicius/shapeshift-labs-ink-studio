@@ -10,6 +10,7 @@ import { createGame, type RunningGame } from './game';
 import type { SceneFn } from './level';
 import type { GameDef } from './types';
 import { bodyChains } from './tails';
+import { legsOptions } from './legs';
 import { SOUND_NAMES } from '../ui/audio';
 import { ENGINE_EVENTS, STORY_ACTIONS, STORY_FIELDS, STORY_TYPES, storyRules } from './story';
 
@@ -143,6 +144,15 @@ export function checkDefinition(def: GameDef<any>): Problem[] {
             out.push(warn('actor-body', `${w}.${a.body ? 'body.chains.' + c.name : 'tail'}.width`, `at most ${+Math.max(...c.width).toFixed(3)} wide`, 'under an art pixel (about 0.15) a chain vanishes on screen: width 0.3 or more, or a list of widths'));
       } catch (e) {
         out.push(err('actor-body', w + '.body', (e as Error).message, "from: 'actor', or 'chain.joint' of a chain declared in body.chains"));
+      }
+    if (a.legs)
+      try {
+        const l = legsOptions(a.legs);
+        if (l.groups.length !== l.feet.length) out.push(err('actor-legs', w + '.legs.groups', `${l.groups.length} groups for ${l.feet.length} feet`, 'one group a foot, or leave groups out'));
+        if (l.feet.some(f => !isVec(f, 2))) out.push(err('actor-legs', w + '.legs.feet', 'a foot is not [ahead, left]', 'feet: [[0.8, 1.2], [0.8, -1.2], ...]: where each foot stands under the actor'));
+        if (l.matching && new Set(l.feet.map(f => f.join())).size !== l.feet.length) out.push(err('actor-legs', w + '.legs.feet', 'two feet at the same home', 'each foot its own place'));
+      } catch (e) {
+        out.push(err('actor-legs', w + '.legs', (e as Error).message, 'feet: 2 to 8 homes [ahead, left]'));
       }
     if (s.height !== undefined && !(s.height > 0.2 && s.height < 10)) out.push(warn('actor-height', w + '.spec.height', `height ${s.height}`, 'height is in world units: the walker is 1.2'));
   }

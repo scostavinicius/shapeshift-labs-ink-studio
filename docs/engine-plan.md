@@ -609,7 +609,7 @@ Ficaram três jogos em `engine/examples/`: **farol-walk** (andar pela ilha do fa
 | 31 | **Missões declarativas**: um executor da engine para o formato de história do kit | ✅ |
 | 32 | **A pose do corpo no save**: a serpente volta exatamente como estava | ✅ |
 | 33 | **Corpos com galhos**: mais de uma cadeia por ator (barbatanas, tentáculos, asas) | ✅ |
-| 34 | **Criaturas com pernas**: pés por `K.gait` com `motionMatching`, pernas desenhadas como curvas | ⏳ |
+| 34 | **Criaturas com pernas**: pés por `K.gait` (com `motionMatching` como opção), pernas desenhadas como curvas | ✅ |
 | 35 | **Fios finos que apareçam**: grama, cabelo e capas que funcionem na escala de pixel dos jogos | ⏳ (pesquisa) |
 
 A ordem vai do que mais ajuda quem escreve jogos ao que tem mais risco. A 35 começa medindo e pode terminar descartada, como a 28 com as marcas do kit.
@@ -721,6 +721,35 @@ O `K.gait` do kit com `motionMatching` ([docs/motion-matching.md](motion-matchin
 **Feito quando:** uma aranha ou caranguejo de 6 a 8 pernas anda, vira e luta num exemplo, com os pés presos ao chão enquanto apoiados e o mesmo `hash` em duas partidas.
 
 **A medir:** quanto custa o índice do `motionMatching` por ator e se é determinístico na matemática da engine.
+
+**Feito (2026-11-25):**
+- **`actors.<nome>.legs`** ([`legs.ts`](../engine/src/game/legs.ts)):
+  - `feet`: de 2 a 8 casas `[frente, esquerda]` sob o ator;
+  - `hip` (altura dos quadris, 0,6), `spread` (quanto os quadris saem para fora, 0,35), `stretch` (coxa mais canela sobre a distância do quadril à casa, 1,5);
+  - `width`, `color`, `pigment`;
+  - os parâmetros do passo: `reach`, `time`, `lift`, `lead`, e `groups`.
+- **Como funciona:** o ator continua um `K.character` (move, colide, luta), e o `sculpt` dele é o tronco. A cada passo, o `K.gait` recebe a posição, o rumo (`yaw = π/2 − face`, porque a frente do gait é +z) e a velocidade do ator, e diz onde cada pé está. Cada perna é uma curva de três pontos (quadril, joelho e pé), com o joelho do `K.ik2` dobrando para cima e para fora. O pé pousa no chão do mapa de colisão. As pernas não colidem e não mexem na partida: só o desenho muda.
+- **Os grupos do kit.** Dois pés de um mesmo grupo nunca estão no ar juntos, e um passo novo só começa com todos os pés no chão. O padrão junta vizinhos de cada lado em pares, então até metade dos pés pisa de uma vez, como um tripé. A primeira tentativa (lados alternados) deixava só dois pés no ar.
+- **Gait básico ou `motionMatching`?** Medido no guardião de oito pernas da arena (os 10 s finais do `win.json`):
+  - com grupos: 88 passos, e a perna fica no máximo 0,97 aquém do pé;
+  - com `motionMatching`: 38 passos (um pé de cada vez) e 2,3 aquém. Com muitos pés na velocidade de um `walker`, ele fica para trás.
+  - Por isso o padrão é o gait básico, e `matching: true` liga o `motionMatching` (o teste confere que ele também funciona e repete a partida).
+  - **O índice** custa de 10 a 20 ms por ator ao nascer (de 3 456 poses com 2 pés a 13 824 com 8). Ele é determinístico: roda com a matemática da engine, e duas partidas dão o mesmo `hash`.
+- **Um pé que fica mais de 2,2 `reach` para trás pisa mesmo fora da vez.** Isso é do próprio `K.gait` e acontece numa virada brusca: o guardião virou 125° num passo uma vez, e os pés alcançaram em 8 passos (0,13 s).
+- **Save:** onde cada pé está, inclusive o passo no ar. Com `motionMatching`, o passo no ar fica preso dentro do kit, então o pé volta pousado no destino dele.
+- **O `check`:** acusa pernas fora de 2 a 8 pés, um número de grupos diferente do de pés e, com `matching`, duas casas no mesmo lugar.
+- **O exemplo:** o guardião da arena ganhou oito pernas roxas, quatro de cada lado. Como as pernas não mudam a partida, o `win.json` da arena continua vencendo igual.
+- **Paridade da arena: de 99,7% para 83,1%.** O instante conferido (40 s) já tem o guardião, e as pernas são curvas de splats. A diferença é o mesmo deslocamento de cerca de 1 px na imagem inteira que o renderizador de terminal do kit faz em cenas com curvas, já visto no ninho (82,8%): o vermelho está em todas as bordas, não nas pernas. As duas imagens são iguais a olho e passam do mínimo de 75%.
+
+**Testes** ([`legs.test.mjs`](../engine/test/legs.test.mjs)). Um caranguejo de seis pernas anda em linha reta e dá meia-volta:
+- um pé pousado não se move e fica no chão;
+- coxa e canela mantêm o comprimento, e o joelho fica acima do pé pousado;
+- a perna alcança o pé em mais de 97% do tempo;
+- andando reto, dois pés de um grupo nunca ficam no ar juntos, e três sobem de uma vez;
+- nenhum pé fica para trás, nem andando reto nem no último segundo depois da meia-volta;
+- todos os splats são desenhados, e a mesma partida dá o mesmo `hash`.
+
+Também testados: o save no meio de um passo volta igual (pés e pernas), o `motionMatching` com um pé de cada vez e o mesmo `hash`, e o `check`.
 
 ### Etapa 35 — Fios finos que apareçam (pesquisa)
 

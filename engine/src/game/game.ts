@@ -11,6 +11,7 @@ import { Breakables } from './breakables';
 import { effectOptions, GameEffects } from './effects';
 import { StoryRunner } from './story';
 import type { Tail } from './tails';
+import type { Legs } from './legs';
 import type { Actor, Brain, Collision, Entity, Game, GameDef, GameEvent, Prop, Snapshot, Trigger } from './types';
 
 /** A game definition, typed. (Nothing more: it is there so an editor knows what goes where.) */
@@ -44,6 +45,8 @@ export interface RunningGame<State = unknown> extends Game<State> {
   withDice<T>(fn: () => T): T;
   /** the body trailing an actor (ActorDef.tail), if it has one */
   tailOf(e: Entity): Tail | undefined;
+  /** an actor's legs (ActorDef.legs), if it has them */
+  legsOf(e: Entity): Legs | undefined;
   /** the id the next entity gets; given a number, the next one gets that (loading a save: an entity keeps its id) */
   nextId(set?: number): number;
 }
@@ -178,6 +181,10 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
         slot.tail.spawn(actor.pos, ch.st.face);
         slot.tail.pose(world);
       }
+      if (slot.legs) {
+        slot.legs.spawn(actor.pos, ch.st.face);
+        slot.legs.pose(world);
+      }
       slotOf.set(actor.id, slot);
       markSlot(world.anim && world.anim.rows, slot);
       entities.push(actor);
@@ -278,6 +285,7 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
     diceState: () => dice.state(),
     withDice: fn => dice.during(K, fn),
     tailOf: e => slotOf.get(e.id)?.tail,
+    legsOf: e => slotOf.get(e.id)?.legs,
     nextId: set => (set === undefined ? nextId : (nextId = set))
   };
 
@@ -361,6 +369,11 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
           b.ch.st.x = b.pos[0] = to[0];
           b.ch.st.z = b.pos[2] = to[1];
         }
+      }
+      // 3a'. legs (stage 34): the feet step where the actors went
+      for (const a of actors) {
+        const legs = slotOf.get(a.id)!.legs;
+        if (legs && legs.live) legs.step(dt, a.pos, a.ch.st.face, [a.ch.st.vx, a.ch.st.vz], world);
       }
       // 3b. blows land, the dead fall, the player comes back
       combat?.step(game, actors, dt, effects);

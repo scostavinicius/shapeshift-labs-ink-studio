@@ -8,6 +8,7 @@ import type { Box, Collision, GameDef } from './types';
 import { effectOptions, GameEffects, reservePools, type EffectPools } from './effects';
 import { setAssetKit } from './assets';
 import { Tail } from './tails';
+import { Legs } from './legs';
 
 /** One character of an actor pool, made at build time. */
 export interface Slot {
@@ -19,6 +20,8 @@ export interface Slot {
   used: boolean;
   /** the body that trails it (ActorDef.tail), its splats right after the character's */
   tail?: Tail;
+  /** its legs (ActorDef.legs), their splats after the tail's */
+  legs?: Legs;
 }
 
 export interface Level {
@@ -50,6 +53,7 @@ export function hideSlot(world: World, s: Slot): void {
   for (let i = s.at; i < s.at + s.total; i++) D[i * 16 + 1] = -99;
   markSlot(rows, s);
   s.tail?.hide(world);
+  s.legs?.hide(world);
 }
 
 /** Mark the rows of a character's splats as changed (K.character writes them without saying so). */
@@ -99,7 +103,8 @@ export function buildLevel(def: GameDef<any>, ink: Ink, sceneFn: SceneFn, seed: 
             const total = b.count() - at;
             if (total !== ch.total) throw new Error(`${def.id}: actor ${name} made ${total} splats but says ${ch.total}`);
             const tail = a.tail || a.body ? new Tail(K, b, a, () => collision!) : undefined;
-            slots.push({ actor: name, ch, at, total, used: false, ...(tail && { tail }) });
+            const legs = a.legs ? new Legs(K, b, a.legs, () => collision!) : undefined;
+            slots.push({ actor: name, ch, at, total, used: false, ...(tail && { tail }), ...(legs && { legs }) });
           }
         }
         const eo = effectOptions(def.effects);

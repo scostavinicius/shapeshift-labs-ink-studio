@@ -71,7 +71,7 @@ Os exemplos, do menor ao maior:
 | Exemplo | Mostra |
 |---|---|
 | `engine/examples/farol-walk/` | uma cena pronta, um personagem, colisão (não atravessa o farol nem cai da ilha) |
-| `engine/examples/arena/` | **o jogo completo de demonstração**: arena circular, três ondas, dois tipos de inimigo, um chefe que chama reforços, cura entre ondas, vitória e derrota, mira assistida, e um **robô** (`bot.ts`) que vence e gravou o `win.json` |
+| `engine/examples/arena/` | **o jogo completo de demonstração**: arena circular, três ondas, dois tipos de inimigo, um chefe de oito pernas (`actors.<nome>.legs`) que chama reforços, cura entre ondas, vitória e derrota, mira assistida, e um **robô** (`bot.ts`) que vence e gravou o `win.json` |
 | `engine/examples/ninho/` | uma serpente: a cabeça é um ator comum e o corpo é uma cadeia física que se arrasta atrás, com dois pares de barbatanas que balançam (`actors.<nome>.body`; as serpentes pequenas usam `tail`), e o cérebro `slither`. **A campanha é toda em dados** (`mission.json` e `story.actions`, sem `step()`), e um robô (`bot.ts`) a vence |
 
 **Copie de um deles** em vez de começar de uma folha em branco.
@@ -83,7 +83,7 @@ Os exemplos, do menor ao maior:
 | `id`, `name` | nome curto (obrigatório) e título |
 | `scene` | caminho de uma cena do repositório ou a função da cena (obrigatório) |
 | `seed` | a semente; por padrão, a da cena |
-| `actors` | `{ nome: { spec, max?, hp?, radius?, damage?, tail?, body? } }`: personagens (`K.character`), reservados antes de o mundo ficar pronto. `tail`: um corpo que se arrasta atrás (serpente, verme, cauda); `body`: várias cadeias, com galhos (barbatanas, tentáculos). Veja a seção 4 |
+| `actors` | `{ nome: { spec, max?, hp?, radius?, damage?, tail?, body?, legs? } }`: personagens (`K.character`), reservados antes de o mundo ficar pronto. `tail`: um corpo que se arrasta atrás (serpente, verme, cauda); `body`: várias cadeias, com galhos (barbatanas, tentáculos); `legs`: de 2 a 8 pernas que pisam sozinhas (aranha, caranguejo). Veja a seção 4 |
 | `spawns` | pontos com nome: `[x, y \| null, z]` |
 | `init(game)` | põe o elenco em cena; devolve `game.state` (obrigatório) |
 | `step(game, dt)` | as regras, a cada passo |
@@ -266,6 +266,18 @@ type Brain = (self: Actor, game: Game, dt: number) => Partial<StepInput>;
   - Cada cadeia tem as opções de um `tail` e mais: `from` (`'actor'`, o padrão, ou `'cadeia.junta'`: 0 é a raiz, um negativo conta da ponta, e o nome sozinho é a ponta), `dir` (graus, para que lado ela se deita a partir de para onde a raiz olha: 0 à frente, 180 atrás, 90 à esquerda e -90 à direita; o padrão é 180 saindo do ator e 90 saindo de uma junta), `offset` (de onde sai no ator: `[frente, cima, esquerda]`, girando com ele) e `sway: { swing: 30, rate: 1, phase: 0, stiffness: 0.004 }` (a ponta balança: `swing` em graus, `rate` balanços por segundo).
   - Um galho divide a junta de onde sai e fica preso no ângulo dela: puxa o corpo, e o corpo o leva. Para um polvo, ponha várias cadeias saindo do ator com `dir` diferentes.
   - O `check` aponta `from` errado, junta fora da cadeia e cadeias saindo umas das outras em anel.
+- **Pernas (`actors.<nome>.legs`)**: de 2 a 8 pés que decidem sozinhos quando pisar (o `K.gait` do kit). O `sculpt` do ator é o tronco, e cada perna é uma curva grossa do quadril ao pé, com o joelho dobrando para cima e para fora:
+  ```ts
+  warden: { spec: tronco, hp: 8, legs: {
+    feet: [[1, 1.4], [0.35, 1.6], [-0.35, 1.6], [-1, 1.4], [1, -1.4], [0.35, -1.6], [-0.35, -1.6], [-1, -1.4]],
+    hip: 0.95, width: [0.26, 0.2, 0.1], color: '#4a3d5c', reach: 0.45, time: 0.24, lift: 0.35
+  } }
+  ```
+  - `feet`: a casa de cada pé, `[frente, esquerda]` sob o ator. `hip` (0,6) é a altura dos quadris, `spread` (0,35) o quanto eles saem para fora, e `stretch` (1,5) o tamanho da perna em relação à distância do quadril à casa (mais dobra o joelho mais alto e alcança mais longe).
+  - **O passo:** um pé pisa quando a casa dele se afasta mais que `reach` (0,4). O passo leva `time` segundos (0,2), sobe `lift` (0,3) e pousa `lead` passos à frente (0,5). **Para um ator rápido**, aumente `reach` e diminua `time`: um caranguejo com a velocidade do `walker` vai bem com `reach: 0.55, time: 0.15`.
+  - `groups`: dois pés do mesmo grupo nunca estão no ar juntos. O padrão junta vizinhos de cada lado em pares, então até metade dos pés pisa de uma vez.
+  - `matching: true` usa o `motionMatching` do kit: um pé de cada vez, pousando onde um índice de poses escolhe. Fica para trás com muitos pés num ator rápido.
+  - As pernas não colidem nem mudam a partida, só o desenho. O save guarda onde cada pé está. `game.legsOf(ator)` dá as pernas (`feet`, `legs`, `steps`).
 - `findPath(navGridFor(game.collision, raio, altura), de, para)` dá uma rota para o seu próprio cérebro: cantos `[x, z]` sobre o chão, sem cortar quinas.
 - Para escrever o seu, olhe `engine/src/game/brains.ts`. **A memória do cérebro fica em `self.data`** (dados simples), nunca em variáveis de fora: o save e o `hash` dependem disso.
 - **Sorte só com `game.rng()`.**
@@ -505,7 +517,7 @@ Quando o `check` não explicar, rode `shot`/`sheet` e **olhe o PNG**.
 |---|---|
 | `engine/src/game/types.ts` | o contrato inteiro (toda definição, todo campo, comentado) |
 | `engine/src/game/game.ts` | o jogo rodando: entidades, ordem do passo |
-| `engine/src/game/combat.ts`, `brains.ts`, `effects.ts`, `tails.ts` | combate, cérebros, efeitos, corpos que se arrastam |
+| `engine/src/game/combat.ts`, `brains.ts`, `effects.ts`, `tails.ts`, `legs.ts` | combate, cérebros, efeitos, corpos que se arrastam, pernas |
 | `engine/src/game/story.ts` | o executor das missões em dados: consultas, tipos de objetivo e ações que a engine conhece |
 | `engine/src/game/collision.ts` | o mapa de chão e paredes |
 | `engine/src/game/validate.ts` | o `check`: cada código de problema e sua dica |

@@ -112,6 +112,36 @@ export interface ActorDef {
    * the actor or from a joint of another chain; all of them are one solver. Give tail or body, not both.
    */
   body?: BodyOptions;
+  /**
+   * legs (stage 34): 2 to 8 feet that step for themselves (the kit's K.gait), each leg a thick curve from a hip on the
+   * actor to its foot on the ground, its knee from K.ik2. The actor's own sculpt is the trunk.
+   */
+  legs?: LegsOptions;
+}
+
+/** Legs (ActorDef.legs). */
+export interface LegsOptions {
+  /** each foot's home under the actor, [ahead, left] as it faces (2 to 8 of them) */
+  feet: [number, number][];
+  /** how high the hips are (default 0.6) */
+  hip?: number;
+  /** how far out the hips are, as a part of the way to the feet (default 0.35) */
+  spread?: number;
+  /** thigh and shin together, as a part of hip to home: more bends the knee higher and reaches further (default 1.5) */
+  stretch?: number;
+  /** K.gait's groups, one a foot: two feet of one group never lift together (default: neighbours along a side, in pairs) */
+  groups?: number[];
+  /** a leg's width, a number (hip, tapering) or [hip, knee, foot] (default 0.2) */
+  width?: number | number[];
+  color?: string;
+  pigment?: [number, string][];
+  /** how far a home may get from its foot before it steps (default 0.4), how long a step takes (0.2 s), how high (0.3), how far ahead of the home it lands, in step times (0.5) */
+  reach?: number;
+  time?: number;
+  lift?: number;
+  lead?: number;
+  /** the kit's motion matching: one foot at a time, landings from an index of poses (default false) */
+  matching?: boolean;
 }
 
 /** A body of chains (ActorDef.body). */

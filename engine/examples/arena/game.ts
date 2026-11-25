@@ -2,7 +2,7 @@
 // Three waves come at the player from the four gates in the ring:
 //   1. three grunts (slow, heavy blows)
 //   2. two grunts and three darters (quick, frail, in and out)
-//   3. the warden: big, slow, a spinning blow that takes 2; at half health it calls two darters
+//   3. the warden: big, slow, on eight legs (stage 34), a spinning blow that takes 2; at half health it calls two darters
 // Victory: the warden falls. Defeat: the player falls three times. Between waves, a breath of 2.5 seconds, and the
 // player gets 3 health back.
 // The player's swing turns to the nearest foe (combat.assist), so a fight can be won with the keys alone, or by a script.
@@ -171,7 +171,29 @@ export default defineGame<ArenaState>({
     hero: { spec: walker, hp: HERO_HP },
     grunt: { spec: grunt, max: 3, hp: 3, radius: 0.36 },
     darter: { spec: darter, max: 5, hp: 1, radius: 0.28 },
-    warden: { spec: warden, max: 1, hp: WARDEN_HP, radius: 0.7, damage: 2 }
+    warden: {
+      spec: warden,
+      max: 1,
+      hp: WARDEN_HP,
+      radius: 0.7,
+      damage: 2,
+      // eight legs (stage 34): four on a side, stepping in two groups that take turns
+      legs: {
+        feet: [
+          [1.0, 1.4], [0.35, 1.6], [-0.35, 1.6], [-1.0, 1.4],
+          [1.0, -1.4], [0.35, -1.6], [-0.35, -1.6], [-1.0, -1.4]
+        ],
+        hip: 0.95,
+        spread: 0.4,
+        stretch: 1.4,
+        width: [0.26, 0.2, 0.1],
+        color: '#4a3d5c',
+        pigment: [[0, '#5b4b70'], [0.55, '#3a3048'], [1, '#2a2236']],
+        reach: 0.45,
+        time: 0.24,
+        lift: 0.35
+      }
+    }
   },
   spawns: {
     start: [0, null, 3],
