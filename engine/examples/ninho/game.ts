@@ -1,6 +1,7 @@
 // The nest: a serpent in the arena (stages 29-30). Its head is an ordinary actor (a K.character: it chases, bites, has
-// health); its length is a trailing body (actors.<name>.tail): a chain of the kit's procedural body lying on the sand,
-// drawn as one thick curve, that the player cannot walk through.
+// health); its length is a trailing body: a chain of joints lying on the sand, drawn as one thick curve, that the player
+// cannot walk through. The serpent's body has branches (stage 33, actors.<name>.body): two pairs of fins growing from its
+// spine, swaying as it goes. The hatchlings have a plain tail (actors.<name>.tail).
 //
 // The campaign is data (stage 31): mission.json, in the kit's story format, says what is to be done (kill the serpent,
 // then the brood that hatches where it fell, then stand in the nest) and what loses (falling three times); the actions
@@ -9,6 +10,24 @@ import { chaser, defineGame, slither } from '../../src/game/index';
 import { makeArenaScene } from '../arena/game';
 import { walker } from '../farol-walk/game';
 import mission from './mission.json';
+import type { ChainOptions } from '../../src/game/types';
+
+/** a fin of the serpent's: a short chain from a joint of its spine, its tip swaying, not in anyone's way */
+function fin(name: string, from: string, dir: number, phase: number, size = 1): Record<string, ChainOptions> {
+  return {
+    [name]: {
+      from,
+      dir,
+      joints: 4,
+      length: 1.1 * size,
+      width: [0.4, 0.34, 0.24, 0.16].map(w => w * size),
+      color: '#e2a46b',
+      pigment: [[0, '#b8734a'], [1, '#f0c27a']],
+      solid: false,
+      sway: { swing: 28, rate: 1.1, phase }
+    }
+  };
+}
 
 const serpent = {
   id: 'serpent',
@@ -55,7 +74,16 @@ export default defineGame<NestState>({
       spec: serpent,
       hp: 6,
       radius: 0.32,
-      tail: { joints: 12, length: 4.2, width: 0.62, color: '#2f7a5a', pigment: [[0, '#2f7a5a'], [0.6, '#1d4a3a'], [1, '#5fc08a']] }
+      body: {
+        chains: {
+          spine: { joints: 12, length: 4.2, width: 0.62, color: '#2f7a5a', pigment: [[0, '#2f7a5a'], [0.6, '#1d4a3a'], [1, '#5fc08a']] },
+          // fins: from the spine, sideways and a little back, the two of a pair swinging opposite, the back pair later
+          ...fin('fore-left', 'spine.3', 115, 0, 1.4),
+          ...fin('fore-right', 'spine.3', -115, 0.5, 1.4),
+          ...fin('hind-left', 'spine.7', 120, 0.25, 1.1),
+          ...fin('hind-right', 'spine.7', -120, 0.75, 1.1)
+        }
+      }
     },
     hatchling: {
       spec: hatchling,

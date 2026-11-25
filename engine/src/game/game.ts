@@ -353,7 +353,7 @@ export function createGame<State>(def: GameDef<State>, ink: Ink, o: CreateOption
       for (const a of actors) {
         const tail = slotOf.get(a.id)!.tail;
         if (!tail || !tail.live) continue;
-        tail.step(dt, a.pos, world);
+        tail.step(dt, a.pos, world, a.ch.st.face);
         for (const b of standing) {
           if (b === a) continue;
           const to = tail.pushOut(b.pos, b.radius);

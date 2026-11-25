@@ -608,7 +608,7 @@ Ficaram três jogos em `engine/examples/`: **farol-walk** (andar pela ilha do fa
 |---|---|---|
 | 31 | **Missões declarativas**: um executor da engine para o formato de história do kit | ✅ |
 | 32 | **A pose do corpo no save**: a serpente volta exatamente como estava | ✅ |
-| 33 | **Corpos com galhos**: mais de uma cadeia por ator (barbatanas, tentáculos, asas) | ⏳ |
+| 33 | **Corpos com galhos**: mais de uma cadeia por ator (barbatanas, tentáculos, asas) | ✅ |
 | 34 | **Criaturas com pernas**: pés por `K.gait` com `motionMatching`, pernas desenhadas como curvas | ⏳ |
 | 35 | **Fios finos que apareçam**: grama, cabelo e capas que funcionem na escala de pixel dos jogos | ⏳ (pesquisa) |
 
@@ -655,7 +655,7 @@ A ordem vai do que mais ajuda quem escreve jogos ao que tem mais risco. A 35 com
   - matar a ninhada;
   - ficar no ninho para vencer;
   - cair três vezes perde (gatilho com `count`).
-- **Robô:** [`bot.ts`](../engine/examples/ninho/bot.ts) lê a campanha (`game.story.of('hunt')`) e vence em 20 s. O roteiro gravado (`win.json`) reproduz a mesma partida.
+- **Robô:** [`bot.ts`](../engine/examples/ninho/bot.ts) lê a campanha (`game.story.of('hunt')`) e vence em 20 s (23,4 s depois das barbatanas da etapa 33). O roteiro gravado (`win.json`) reproduz a mesma partida.
 
 **Testes** ([`story.test.mjs`](../engine/test/story.test.mjs)). Todo documento de teste passa antes pelo validador do kit.
 - Gatilhos: contagem na janela, cruzamento e estado sustentado.
@@ -693,6 +693,22 @@ O save passa a guardar, para cada ator com `tail`, as posições e velocidades d
 - Galhos podem ser sólidos ou não (`solid`), como o corpo.
 
 **Feito quando:** um exemplo mostra um corpo com pelo menos três galhos se mexendo, com a mesma determinação de hash das etapas 29-30.
+
+**Feito (2026-11-25):**
+- **`actors.<nome>.body: { chains: { nome: cadeia } }`.** Cada cadeia tem as opções de um `tail` e mais:
+  - `from`: `'actor'` (padrão), ou a junta de outra cadeia (`'spine.3'`; um número negativo conta da ponta; `'spine'` sozinho é a ponta);
+  - `dir`: graus, para que lado ela se deita, girando a partir de para onde a raiz olha. 0 é à frente, 180 atrás (padrão do ator) e 90 e -90 são os lados (90 é o padrão de um galho);
+  - `offset`: de onde ela sai no ator, `[frente, cima, esquerda]`, girando com o `face`;
+  - `sway: { swing, rate, phase, stiffness }`: a ponta é puxada de leve para um ponto que balança, como as barbatanas do exemplo do kit.
+- **Todas as cadeias de um ator são um solver só.** Um galho divide a junta de onde sai (é o primeiro ponto da curva dele) e fica preso no ângulo por ligações com as juntas vizinhas, então ele puxa o corpo e o corpo o leva. Cada cadeia é uma curva com largura, cor, `pigment` e `solid` próprios.
+- **`tail` é um `body` de uma cadeia só.** Os números saem idênticos aos de antes: o ninho sem barbatanas dava o mesmo `hash` bit a bit. Para isso, os giros de quartos de volta são exatos (atrás é `-cos`, `-sin` da frente, como antes).
+- **O `check`** aponta um `from` para uma cadeia que não existe, uma junta fora da cadeia, cadeias saindo umas das outras em anel e `tail` junto com `body` (erros), e uma cadeia toda mais fina que um pixel de arte (aviso).
+- **O save** leva todas as cadeias (é o `motion()` do solver inteiro), como na etapa 32.
+- **O ninho:** a serpente ganhou dois pares de barbatanas (`spine.3` e `spine.7`, laranja, `solid: false`) balançando em fases trocadas. O robô gravou um `win.json` novo: vence em 23,4 s, e o roteiro sozinho dá o mesmo `hash`.
+
+**Testes** ([`tails.test.mjs`](../engine/test/tails.test.mjs)):
+- uma minhoca com espinha e três galhos (dois no meio, um na ponta). A raiz de cada galho é a junta do pai, o esquerdo fica à esquerda e o direito à direita, e o galho com `sway` vai e volta mais de 30 graus. As juntas mantêm o comprimento e ficam no chão, todos os splats são desenhados, e só as cadeias sólidas empurram. A mesma partida dá o mesmo `hash`, e o save tem um ponto por junta;
+- o `check` com cada erro e o aviso.
 
 ### Etapa 34 — Criaturas com pernas
 

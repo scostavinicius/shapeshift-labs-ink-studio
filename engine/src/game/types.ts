@@ -107,6 +107,29 @@ export interface ActorDef {
    * lying on the ground, drawn as one thick curve; the actor's own sculpt is the head. Other actors cannot walk through it.
    */
   tail?: TailOptions;
+  /**
+   * a body of several chains (stage 33): fins along a serpent, an octopus's arms, a bird's wings. Each chain grows from
+   * the actor or from a joint of another chain; all of them are one solver. Give tail or body, not both.
+   */
+  body?: BodyOptions;
+}
+
+/** A body of chains (ActorDef.body). */
+export interface BodyOptions {
+  /** by name; a branch names the chain it grows from in `from` */
+  chains: Record<string, ChainOptions>;
+}
+
+/** One chain of a body: a tail's options, and where it grows and how it lies. */
+export interface ChainOptions extends TailOptions {
+  /** 'actor' (default), or another chain and one of its joints: 'spine.4' (0 is its root; a negative counts from the tip; 'spine' alone is its tip) */
+  from?: string;
+  /** degrees: which way it lies, turned from the way its root faces (0 ahead, 180 behind, 90 and -90 to the sides). Default 180 from the actor, 90 from a joint */
+  dir?: number;
+  /** from the actor: where on it the chain is pulled from, [ahead, up, left] as it faces (default [0, lift, 0]) */
+  offset?: Vec3;
+  /** its tip sways about the way it lies: swing (degrees, 30), rate (swings a second, 1), phase (0..1, 0), stiffness (0.004: smaller is firmer) */
+  sway?: { swing?: number; rate?: number; phase?: number; stiffness?: number };
 }
 
 /** A trailing body (ActorDef.tail). */

@@ -72,7 +72,7 @@ Os exemplos, do menor ao maior:
 |---|---|
 | `engine/examples/farol-walk/` | uma cena pronta, um personagem, colisão (não atravessa o farol nem cai da ilha) |
 | `engine/examples/arena/` | **o jogo completo de demonstração**: arena circular, três ondas, dois tipos de inimigo, um chefe que chama reforços, cura entre ondas, vitória e derrota, mira assistida, e um **robô** (`bot.ts`) que vence e gravou o `win.json` |
-| `engine/examples/ninho/` | uma serpente: a cabeça é um ator comum e o corpo é uma cadeia física que se arrasta atrás (`actors.<nome>.tail`), com o cérebro `slither`. **A campanha é toda em dados** (`mission.json` e `story.actions`, sem `step()`), e um robô (`bot.ts`) a vence |
+| `engine/examples/ninho/` | uma serpente: a cabeça é um ator comum e o corpo é uma cadeia física que se arrasta atrás, com dois pares de barbatanas que balançam (`actors.<nome>.body`; as serpentes pequenas usam `tail`), e o cérebro `slither`. **A campanha é toda em dados** (`mission.json` e `story.actions`, sem `step()`), e um robô (`bot.ts`) a vence |
 
 **Copie de um deles** em vez de começar de uma folha em branco.
 
@@ -83,7 +83,7 @@ Os exemplos, do menor ao maior:
 | `id`, `name` | nome curto (obrigatório) e título |
 | `scene` | caminho de uma cena do repositório ou a função da cena (obrigatório) |
 | `seed` | a semente; por padrão, a da cena |
-| `actors` | `{ nome: { spec, max?, hp?, radius?, damage?, tail? } }`: personagens (`K.character`), reservados antes de o mundo ficar pronto. `tail`: um corpo que se arrasta atrás (serpente, verme, cauda), veja a seção 4 |
+| `actors` | `{ nome: { spec, max?, hp?, radius?, damage?, tail?, body? } }`: personagens (`K.character`), reservados antes de o mundo ficar pronto. `tail`: um corpo que se arrasta atrás (serpente, verme, cauda); `body`: várias cadeias, com galhos (barbatanas, tentáculos). Veja a seção 4 |
 | `spawns` | pontos com nome: `[x, y \| null, z]` |
 | `init(game)` | põe o elenco em cena; devolve `game.state` (obrigatório) |
 | `step(game, dt)` | as regras, a cada passo |
@@ -254,7 +254,18 @@ type Brain = (self: Actor, game: Game, dt: number) => Partial<StepInput>;
   - **É sólido**: outros atores são empurrados para fora dele, então o jogador precisa contornar a serpente. `solid: false` desliga isso.
   - **Largura mínima**: abaixo de um pixel de arte (cerca de 0,15 unidade) o corpo some na tela. Use `width` de 0,3 ou mais.
   - Some com o ator quando ele morre e volta inteiro, esticado atrás dele, quando o ator nasce de novo.
-  - **Vai no save:** a posição e a velocidade de cada junta. Ao carregar, o corpo volta curvado como estava, splat por splat. `game.tailOf(ator)` dá o corpo (`motion()`, `points`).
+  - **Vai no save:** a posição e a velocidade de cada junta. Ao carregar, o corpo volta curvado como estava, splat por splat. `game.tailOf(ator)` dá o corpo (`motion()`, `points`, `chainPoints(nome)`).
+- **Corpo com galhos (`actors.<nome>.body`)**: várias cadeias por ator, todas no mesmo solver. `tail` é o caso de uma cadeia só (não use os dois):
+  ```ts
+  serpent: { spec: cabeca, hp: 6, body: { chains: {
+    spine: { joints: 12, length: 4.2, width: 0.62 },
+    'fin-l': { from: 'spine.3', dir: 115, joints: 4, length: 1.5, width: [0.5, 0.3, 0.2], solid: false, sway: { swing: 28, rate: 1.1 } },
+    'fin-r': { from: 'spine.3', dir: -115, joints: 4, length: 1.5, width: [0.5, 0.3, 0.2], solid: false, sway: { swing: 28, rate: 1.1, phase: 0.5 } }
+  } } }
+  ```
+  - Cada cadeia tem as opções de um `tail` e mais: `from` (`'actor'`, o padrão, ou `'cadeia.junta'`: 0 é a raiz, um negativo conta da ponta, e o nome sozinho é a ponta), `dir` (graus, para que lado ela se deita a partir de para onde a raiz olha: 0 à frente, 180 atrás, 90 à esquerda e -90 à direita; o padrão é 180 saindo do ator e 90 saindo de uma junta), `offset` (de onde sai no ator: `[frente, cima, esquerda]`, girando com ele) e `sway: { swing: 30, rate: 1, phase: 0, stiffness: 0.004 }` (a ponta balança: `swing` em graus, `rate` balanços por segundo).
+  - Um galho divide a junta de onde sai e fica preso no ângulo dela: puxa o corpo, e o corpo o leva. Para um polvo, ponha várias cadeias saindo do ator com `dir` diferentes.
+  - O `check` aponta `from` errado, junta fora da cadeia e cadeias saindo umas das outras em anel.
 - `findPath(navGridFor(game.collision, raio, altura), de, para)` dá uma rota para o seu próprio cérebro: cantos `[x, z]` sobre o chão, sem cortar quinas.
 - Para escrever o seu, olhe `engine/src/game/brains.ts`. **A memória do cérebro fica em `self.data`** (dados simples), nunca em variáveis de fora: o save e o `hash` dependem disso.
 - **Sorte só com `game.rng()`.**

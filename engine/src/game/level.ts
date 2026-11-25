@@ -98,7 +98,7 @@ export function buildLevel(def: GameDef<any>, ink: Ink, sceneFn: SceneFn, seed: 
             const ch = K.character(b, spec, 0);
             const total = b.count() - at;
             if (total !== ch.total) throw new Error(`${def.id}: actor ${name} made ${total} splats but says ${ch.total}`);
-            const tail = a.tail ? new Tail(K, b, a.tail, () => collision!) : undefined;
+            const tail = a.tail || a.body ? new Tail(K, b, a, () => collision!) : undefined;
             slots.push({ actor: name, ch, at, total, used: false, ...(tail && { tail }) });
           }
         }

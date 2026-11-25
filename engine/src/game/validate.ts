@@ -9,6 +9,7 @@ import type { Ink, Vec3 } from '../../types/ink-studio';
 import { createGame, type RunningGame } from './game';
 import type { SceneFn } from './level';
 import type { GameDef } from './types';
+import { bodyChains } from './tails';
 import { SOUND_NAMES } from '../ui/audio';
 import { ENGINE_EVENTS, STORY_ACTIONS, STORY_FIELDS, STORY_TYPES, storyRules } from './story';
 
@@ -134,6 +135,15 @@ export function checkDefinition(def: GameDef<any>): Problem[] {
     if (a.max !== undefined && !(Number.isInteger(a.max) && a.max >= 1)) out.push(err('actor-max', w + '.max', `max ${a.max} is not a whole number from 1`, 'max is how many of these can be on stage at once'));
     if (a.hp !== undefined && !(a.hp >= 1)) out.push(err('actor-hp', w + '.hp', `hp ${a.hp}`, 'hp is whole points of health, 1 or more'));
     if (a.radius !== undefined && !(a.radius >= 0.05 && a.radius <= 3)) out.push(warn('actor-radius', w + '.radius', `radius ${a.radius}`, 'a body radius is in world units: a walker is 0.3'));
+    if (a.tail && a.body) out.push(err('actor-body', w, 'both tail and body', 'a tail is a body of one chain: put it in body.chains as tail: { ... }'));
+    else if (a.tail || a.body)
+      try {
+        for (const c of bodyChains(a))
+          if (Math.max(...c.width) < 0.15)
+            out.push(warn('actor-body', `${w}.${a.body ? 'body.chains.' + c.name : 'tail'}.width`, `at most ${+Math.max(...c.width).toFixed(3)} wide`, 'under an art pixel (about 0.15) a chain vanishes on screen: width 0.3 or more, or a list of widths'));
+      } catch (e) {
+        out.push(err('actor-body', w + '.body', (e as Error).message, "from: 'actor', or 'chain.joint' of a chain declared in body.chains"));
+      }
     if (s.height !== undefined && !(s.height > 0.2 && s.height < 10)) out.push(warn('actor-height', w + '.spec.height', `height ${s.height}`, 'height is in world units: the walker is 1.2'));
   }
   for (const [name, p] of Object.entries(def.spawns || {})) {

@@ -156,3 +156,103 @@ test('stage 32: a save keeps the body as it lay: every joint, how it moved, its 
   c.runSteps(120, () => hc.push(c.hash()));
   assert.deepEqual(hc, hb);
 });
+
+/** a game whose worm has a body of chains: a spine, and three branches (one at its tip) */
+function branched(extra = {}) {
+  const def = G.defineGame({
+    id: 'branches',
+    name: 'branches',
+    scene: flatScene(),
+    combat: false,
+    actors: {
+      hero: { spec: walker },
+      worm: {
+        spec: worm,
+        body: {
+          chains: {
+            spine: { joints: 9, length: 3, width: 0.45 },
+            left: { from: 'spine.3', dir: 100, joints: 4, length: 1, width: [0.35, 0.2], sway: { swing: 35, rate: 1.5 } },
+            right: { from: 'spine.3', dir: -100, joints: 4, length: 1, width: [0.35, 0.2], sway: { swing: 35, rate: 1.5, phase: 0.5 } },
+            fluke: { from: 'spine', dir: 180, joints: 3, length: 0.7, width: 0.3, solid: false },
+            ...extra
+          }
+        }
+      }
+    },
+    init: () => ({})
+  });
+  return G.createGame(def, loadInk(), { scene: def.scene, bones: 'cpu' });
+}
+
+test('stage 33: a body of chains: branches grow from the spine\'s joints, lie as they say, sway, and are drawn', () => {
+  const run = () => {
+    const game = branched();
+    const w = game.spawnActor({ actor: 'worm', at: [-3, 0, -2], face: 0, brain: go(0.6, 0.2) });
+    // the angle of the left branch about its root, against the spine, every tenth of a second
+    const swing = [];
+    for (let k = 0; k < 30; k++) {
+      game.run(0.1);
+      const t = game.tailOf(w),
+        sp = t.chainPoints('spine'),
+        l = t.chainPoints('left'),
+        ahead = Math.atan2(sp[2][2] - sp[3][2], sp[2][0] - sp[3][0]),
+        way = Math.atan2(l.at(-1)[2] - l[0][2], l.at(-1)[0] - l[0][0]);
+      swing.push(Math.atan2(Math.sin(way - ahead), Math.cos(way - ahead)) / (Math.PI / 180));
+    }
+    return { game, w, body: game.tailOf(w), swing };
+  };
+  const { game, w, body, swing } = run();
+  const sp = body.chainPoints('spine');
+  assert.equal(body.chains.length, 4);
+  assert.deepEqual(body.points, sp, 'points is the first chain');
+  // a branch's root is its parent's joint, the same point
+  assert.deepEqual(body.chainPoints('left')[0], sp[3]);
+  assert.deepEqual(body.chainPoints('right')[0], sp[3]);
+  assert.deepEqual(body.chainPoints('fluke')[0], sp[8], "'spine' alone is its tip");
+  // the left one lies to the left of the spine and the right one to the right (left is the way face turns: +90)
+  const side = name => {
+    const p = body.chainPoints(name).at(-1),
+      a = sp[2],
+      b = sp[3];
+    return Math.sign((a[0] - b[0]) * (p[2] - b[2]) - (a[2] - b[2]) * (p[0] - b[0]));
+  };
+  assert.equal(side('left'), 1);
+  assert.equal(side('right'), -1);
+  // it sways: the left branch's angle goes back and forth about 100 degrees, by more than 30 in all
+  const lo = Math.min(...swing.slice(10)),
+    hi = Math.max(...swing.slice(10));
+  assert.ok(hi - lo > 30 && lo > 30 && hi < 170, `the branch swings between ${lo.toFixed(0)} and ${hi.toFixed(0)} degrees`);
+  // every chain keeps its joints' lengths and lies near the ground
+  for (const c of body.chains) {
+    const P = body.chainPoints(c.name),
+      gap = c.length / (c.joints - 1);
+    for (let i = 1; i < P.length; i++) {
+      const d = Math.hypot(P[i][0] - P[i - 1][0], P[i][1] - P[i - 1][1], P[i][2] - P[i - 1][2]);
+      assert.ok(Math.abs(d - gap) < gap * 0.35, `${c.name} ${i - 1}-${i}: ${d.toFixed(3)} for ${gap.toFixed(3)}`);
+      assert.ok(P[i][1] > 0 && P[i][1] < 0.5, `${c.name} ${i} on the ground`);
+    }
+  }
+  // all its splats are drawn (none left hidden at y -99)
+  const D = game.world.data;
+  for (let i = body.at; i < body.at + body.total; i++) assert.ok(D[i * 16 + 1] > -1, `splat ${i} drawn`);
+  // solid chains push, the one that says solid: false does not
+  const tip = body.chainPoints('fluke').at(-1);
+  assert.equal(body.pushOut([tip[0], 0, tip[2]], 0.05), null, 'the fluke is not solid');
+  const lp = body.chainPoints('left')[2];
+  assert.ok(body.pushOut([lp[0], 0, lp[2]], 0.1), 'a fin is');
+  // the same game, the same body; and a save brings every chain back
+  assert.equal(run().game.hash(), game.hash());
+  const save = JSON.parse(JSON.stringify(G.saveGame(game)));
+  assert.equal(save.entities.find(e => e.id === w.id).tail.positions.length, (9 + 3 + 3 + 2) * 3, 'one point per joint, a branch sharing its root');
+});
+
+test('stage 33: the check: a body that cannot be built says why', () => {
+  const def = chains => ({ id: 'b', name: 'b', scene: 'x', init: () => ({}), actors: { worm: { spec: worm, ...chains } } });
+  const codes = d => G.checkDefinition(def(d)).filter(p => p.code === 'actor-body').map(p => p.level + ': ' + p.problem);
+  assert.deepEqual(codes({ body: { chains: { a: { joints: 5 }, b: { from: 'a.2' } } } }), []);
+  assert.match(codes({ body: { chains: { a: { from: 'nope.1' } } } })[0], /error: .*no chain "nope"/);
+  assert.match(codes({ body: { chains: { a: { joints: 5 }, b: { from: 'a.9' } } } })[0], /error: .*joint 9 of a, which has 5/);
+  assert.match(codes({ body: { chains: { a: { from: 'b.1' }, b: { from: 'a.1' } } } })[0], /error: .*ring: a, b/);
+  assert.match(codes({ tail: {}, body: { chains: { a: {} } } })[0], /error: both tail and body/);
+  assert.match(codes({ body: { chains: { a: { width: 0.1 } } } })[0], /warning: at most 0.1 wide/);
+});
