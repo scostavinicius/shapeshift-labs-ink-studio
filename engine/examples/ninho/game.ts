@@ -1,12 +1,13 @@
 // The nest: a serpent in the arena (stages 29-30). Its head is an ordinary actor (a K.character: it chases, bites, has
 // health); its length is a trailing body: a chain of joints lying on the sand, drawn as one thick curve, that the player
 // cannot walk through. The serpent's body has branches (stage 33, actors.<name>.body): two pairs of fins growing from its
-// spine, swaying as it goes. The hatchlings have a plain tail (actors.<name>.tail).
+// spine, swaying as it goes. The hatchlings have a plain tail (actors.<name>.tail). Tufts of grass grow on the sand
+// (stage 35), but not in the nest.
 //
 // The campaign is data (stage 31): mission.json, in the kit's story format, says what is to be done (kill the serpent,
 // then the brood that hatches where it fell, then stand in the nest) and what loses (falling three times); the actions
 // below say what its events do. There is no step(): no rule of this game is code.
-import { chaser, defineGame, slither } from '../../src/game/index';
+import { chaser, defineGame, slither, tufts } from '../../src/game/index';
 import { makeArenaScene } from '../arena/game';
 import { walker } from '../farol-walk/game';
 import mission from './mission.json';
@@ -68,6 +69,7 @@ export default defineGame<NestState>({
   id: 'ninho',
   name: 'The Nest',
   scene: makeArenaScene(1),
+  build: ctx => tufts(ctx, { count: 130, area: { center: [0, 0], radius: 8.4, inner: 1 }, skip: (x, z) => Math.hypot(x + 6, z) < 1.6 }),
   actors: {
     hero: { spec: walker, hp: 6 },
     serpent: {

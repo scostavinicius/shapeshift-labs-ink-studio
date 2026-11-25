@@ -129,6 +129,7 @@ export function buildLevel(def: GameDef<any>, ink: Ink, sceneFn: SceneFn, seed: 
             S: S!,
             K,
             seed: seed ?? 0,
+            collision: collision!,
             reserve(make) {
               const at = b.count();
               const thing = make();

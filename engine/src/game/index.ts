@@ -16,3 +16,4 @@ export { makeDungeonScene, layDungeon, dungeonOf, DUNGEON_PALETTE, type DungeonL
 export { Breakables, type BreakableDef, type BreakableData } from './breakables';
 export { placeAsset, placePart, type PlaceAssetOptions } from './assets';
 export { StoryRunner, holds, STORY_FIELDS, STORY_TYPES, STORY_ACTIONS, STORY_EVENTS, ENGINE_EVENTS, storyRules, type StoryDef, type StoryProgress, type StoryRun, type EventAction, type Condition } from './story';
+export { tufts, type TuftOptions } from './strands';

@@ -98,7 +98,7 @@ Os exemplos, do menor ao maior:
 | `coverage` | `'continuous'` (padrão), `'legacy'` ou `'soft'`: como os splats cobrem o pixel de arte |
 | `weather` | `{ kind: 'rain' \| 'snow' \| 'leaf', box: [x0, x1, z0, z1] \| rad, n: 400, cols: [índices], top, wind: [vx, vz] }` (ou uma lista): chuva, neve ou folhas caindo. Quem move é a placa de vídeo, então não custa CPU e não entra no jogo |
 | `story` | `{ document, actions }`: a campanha em dados, no formato de história do kit (seção 5, "Missões em dados") |
-| `build(ctx)` | reserva mais splats antes do `B.finish` (`ctx.reserve(() => K.play.fx(ctx.B, 200))`); o que devolve vira `game.built` |
+| `build(ctx)` | reserva mais splats antes do `B.finish` (`ctx.reserve(() => K.play.fx(ctx.B, 200))`) ou põe enfeites, como grama (`tufts(ctx, ...)`, seção 4). `ctx` tem `B`, `S`, `K`, `seed` e `collision`; o que devolve vira `game.built` |
 
 ---
 
@@ -255,6 +255,10 @@ type Brain = (self: Actor, game: Game, dt: number) => Partial<StepInput>;
   - **Largura mínima**: abaixo de um pixel de arte (cerca de 0,15 unidade) o corpo some na tela. Use `width` de 0,3 ou mais.
   - Some com o ator quando ele morre e volta inteiro, esticado atrás dele, quando o ator nasce de novo.
   - **Vai no save:** a posição e a velocidade de cada junta. Ao carregar, o corpo volta curvado como estava, splat por splat. `game.tailOf(ator)` dá o corpo (`motion()`, `points`, `chainPoints(nome)`).
+- **Grama, capas e cabelo** (fios que aparecem no pixel de arte):
+  - **Grama:** `build: ctx => tufts(ctx, { count: 130, area: { center: [0, 0], radius: 8, inner: 1 }, skip: (x, z) => ... })`. Põe tufos de folhas curtas e grossas no chão (também `area: { min: [x, z], max: [x, z] }`, `blades`, `height`, `width`, `lean`, `colors`, `seed`). Cada folha custa cerca de 25 splats. A grama não muda a partida: rola os próprios dados.
+  - **Capa e cabelo:** cadeias de `body` saindo do ator, com `offset` atrás dos ombros ou da cabeça e `solid: false`, como `cape: { offset: [-0.22, 0.85, 0], joints: 5, length: 0.9, width: [0.46, 0.5, 0.44, 0.36], solid: false }`. Use fitas largas (0,2 ou mais): mechas finas viram uma mancha.
+  - **Não use** fios finos (menos de 0,15) nem `curveMode: 'curves'` (curvas analíticas). Na escala dos jogos eles somem, ou derrubam o quadro (ver a etapa 35 em [engine-plan.md](../docs/engine-plan.md)).
 - **Corpo com galhos (`actors.<nome>.body`)**: várias cadeias por ator, todas no mesmo solver. `tail` é o caso de uma cadeia só (não use os dois):
   ```ts
   serpent: { spec: cabeca, hp: 6, body: { chains: {
@@ -517,7 +521,7 @@ Quando o `check` não explicar, rode `shot`/`sheet` e **olhe o PNG**.
 |---|---|
 | `engine/src/game/types.ts` | o contrato inteiro (toda definição, todo campo, comentado) |
 | `engine/src/game/game.ts` | o jogo rodando: entidades, ordem do passo |
-| `engine/src/game/combat.ts`, `brains.ts`, `effects.ts`, `tails.ts`, `legs.ts` | combate, cérebros, efeitos, corpos que se arrastam, pernas |
+| `engine/src/game/combat.ts`, `brains.ts`, `effects.ts`, `tails.ts`, `legs.ts`, `strands.ts` | combate, cérebros, efeitos, corpos que se arrastam, pernas, grama |
 | `engine/src/game/story.ts` | o executor das missões em dados: consultas, tipos de objetivo e ações que a engine conhece |
 | `engine/src/game/collision.ts` | o mapa de chão e paredes |
 | `engine/src/game/validate.ts` | o `check`: cada código de problema e sua dica |

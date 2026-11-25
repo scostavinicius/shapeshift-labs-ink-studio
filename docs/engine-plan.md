@@ -610,7 +610,7 @@ Ficaram três jogos em `engine/examples/`: **farol-walk** (andar pela ilha do fa
 | 32 | **A pose do corpo no save**: a serpente volta exatamente como estava | ✅ |
 | 33 | **Corpos com galhos**: mais de uma cadeia por ator (barbatanas, tentáculos, asas) | ✅ |
 | 34 | **Criaturas com pernas**: pés por `K.gait` (com `motionMatching` como opção), pernas desenhadas como curvas | ✅ |
-| 35 | **Fios finos que apareçam**: grama, cabelo e capas que funcionem na escala de pixel dos jogos | ⏳ (pesquisa) |
+| 35 | **Fios finos que apareçam**: grama, cabelo e capas que funcionem na escala de pixel dos jogos | ✅ (tufos e fitas ficam; curvas analíticas descartadas) |
 
 A ordem vai do que mais ajuda quem escreve jogos ao que tem mais risco. A 35 começa medindo e pode terminar descartada, como a 28 com as marcas do kit.
 
@@ -759,6 +759,28 @@ Na etapa 29, folhas e cordas mais finas que um pixel de arte sumiram ou viraram 
 3. **Curvas analíticas em poucas quantidades:** o passe de curvas do renderizador desenha fio fino com borda limpa, mas estourou o orçamento por tile com a grama toda. Para algumas dezenas de fios (o cabelo de um personagem) pode caber.
 
 **Feito quando:** pelo menos uma das três aparece bem num jogo, a 60 fps no navegador, ou as três ficam registradas como medidas e descartadas, com o motivo.
+
+**Feito (2026-11-25).** Medido com um jogo de sondagem (apagado depois): o chão da arena com 140 tufos (560 folhas), e o herói com uma capa e duas mechas. A sondagem foi aberta no Edge headless, como no `npm run live`, 1280 × 720, com o herói andando.
+
+| Variante | fps | ms de página por quadro | Como fica |
+|---|---|---|---|
+| arena pura (referência) | 60 | 2,8 | |
+| tufos + capa e mechas, `curveMode: 'splats'` | 60 | 4,9 | tufos verdes distintos, não um tapete; capa roxa atrás do herói |
+| os mesmos, `curveMode: 'curves'` (analítico) | **13** | 80 | igual |
+| só capa e mechas, analítico | 60 | 7,6 | igual ao de splats |
+| 24 mechas finas (0,08) | 60 | 7,2 | uma mancha laranja atrás da cabeça |
+| 24 mechas finas, analítico | 55 | 10,5 | **"exceeded the tile budget"** a cada quadro |
+
+1. **Tufos: ficam.** Uma folha curta (0,3 a 0,6 de altura) e grossa (0,2 na base, afinando) aparece como um tufo, em quatro verdes. O que pesava era o custo: uma curva de splats do kit tem `profileSamples` 96 por padrão, cerca de 96 splats qualquer que seja o tamanho. Com 12, uma folha custa cerca de 25 splats e fica igual a olho.
+   - **`tufts(ctx, { count, area, blades, height, width, lean, colors, samples, skip, seed })`** ([`strands.ts`](../engine/src/game/strands.ts)), chamado no `def.build`. Os tufos ficam no chão do mapa de colisão (`ctx.collision`, novo no `BuildContext`) e deixam vazio o que `skip` pedir.
+   - **Achado:** desenhar curvas rola os dados do kit (`K.rnd`). Na primeira versão, pôr grama no ninho **mudava a partida**: o `win.json` deixava de vencer, porque o que nasce depois rolava outros números. Agora os tufos rolam dados próprios, da `seed` deles, e devolvem os do kit. Grama nunca muda como um jogo joga (testado: o ninho com e sem grama tem as mesmas entidades, estado e campanha).
+   - **No ninho:** 130 tufos na areia, menos no ninho. A paridade dele foi de 82,8% a 81,7%: é o mesmo deslocamento de cerca de 1 px que o renderizador de terminal do kit faz em cenas com curvas (etapa 34), agora com mais curvas. No navegador, continua a 60 fps.
+2. **Fitas: ficam, sem código novo.** Capa e cabelo são cadeias de `actors.<nome>.body` saindo do ator (`from: 'actor'`, `offset` atrás dos ombros ou da cabeça) no mesmo XPBD do corpo da serpente. Com 0,4 a 0,5 de largura, a capa aparece. Mechas de 0,2 aparecem como um toque de cor, e de 0,08 viram uma mancha. Vale a regra da etapa 29: pelo menos um pixel de arte de largura.
+3. **Curvas analíticas: descartadas.** Na escala dos jogos, não desenham nada que os splats não desenhem. Com a grama, o quadro vai a 13 fps. E não servem nem para o cabelo de um personagem: 24 mechas juntas na cabeça já estouram o orçamento de 1 024 trechos por tile de 8 × 8 px. O `curveMode: 'splats'` da etapa 29 continua o padrão.
+
+**Testes** ([`strands.test.mjs`](../engine/test/strands.test.mjs)):
+- os tufos ficam no chão e dentro da área, cerca de 25 splats por folha, saem iguais a cada vez e deixam vazio o que `skip` pede;
+- o ninho com e sem grama joga igual com o `win.json`.
 
 ## Resumo de quando usar o Fable
 

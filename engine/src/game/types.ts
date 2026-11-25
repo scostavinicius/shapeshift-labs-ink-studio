@@ -316,6 +316,8 @@ export interface BuildContext {
   S: Sculpt;
   K: Kit;
   seed: number;
+  /** the level's ground and walls, complete: every bake is done (stage 35: tufts stand on it) */
+  collision: Collision;
   /**
    * Make something of the kit that sets splats aside and is bound to the world afterwards (K.play.fx(B, n),
    * K.play.debris(B, n) ...): its splats are noted, bind(world, at) is called once the world is finished, and its rows are
